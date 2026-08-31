@@ -1,0 +1,61 @@
+image_width: 1920
+image_height: 1080
+camera_name: go2w_front_camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data:
+  - 1484.5991747470935
+  - 0.0
+  - 893.5881370562394
+  - 0.0
+  - 1490.9512101113664
+  - 417.10734746647086
+  - 0.0
+  - 0.0
+  - 1.0
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data:
+  - -0.3837429470745685
+  - 0.13916049471081807
+  - -0.0006118747528905797
+  - -0.0008213085744261858
+  - 0.0
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data:
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+projection_matrix:
+  rows: 3
+  cols: 4
+  data:
+  - 1202.11181640625
+  - 0.0
+  - 859.0797219112574
+  - 0.0
+  - 0.0
+  - 1393.226806640625
+  - 402.38420731412043
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+calibration_status: calibrated
+calibration_source: ros2_camera_calibration_operator_measurement
+operator: brov
+calibrated_at: '2026-08-06T08:34:41.443355+00:00'
+board_inner_corners: 9x6
+square_size_m: 0.015

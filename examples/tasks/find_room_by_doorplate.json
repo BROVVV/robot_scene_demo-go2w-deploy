@@ -1,0 +1,11 @@
+{
+  "task_text": "找到 503 房间",
+  "expected_task_type": "find_room",
+  "scene_fixture": "data/scene_kb/floor_layout.json",
+  "expected_capabilities": [
+    "extract_room_number",
+    "use_floor_layout",
+    "verify_doorplate"
+  ],
+  "success_criteria_zh": "应提取 503 作为目标房间，并结合楼层布局或可见门牌生成验证动作。"
+}

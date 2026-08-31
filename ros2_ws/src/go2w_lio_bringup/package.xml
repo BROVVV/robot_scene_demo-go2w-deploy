@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>go2w_lio_bringup</name>
+  <version>0.1.0</version>
+  <description>Fail-closed LIO bringup, isolated Point-LIO bridge, and standardized Go2-W outputs.</description>
+  <maintainer email="maintainer@example.invalid">robot_scene_demo maintainers</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rko_lio</exec_depend>
+  <exec_depend>go2w_description</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>unitree_go</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <test_depend>ament_pytest</test_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

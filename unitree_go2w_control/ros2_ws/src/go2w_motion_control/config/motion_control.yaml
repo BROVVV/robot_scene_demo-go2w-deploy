@@ -1,0 +1,90 @@
+go2w_motion_action_server:
+  ros__parameters:
+    robot_ip: "192.168.123.18"
+    expected_motion_name: "ai-w"
+
+    sport_request_topic: "/api/sport/request"
+    sport_response_topic: "/api/sport/response"
+    sport_state_topic: "/lf/sportmodestate"
+    low_state_topic: "/lf/lowstate"
+    lease_id_topic: "/go2w/sport_lease/id"
+    lease_alive_topic: "/go2w/sport_lease/alive"
+    motion_name_topic: "/go2w/motion_mode/name"
+    # Local IPC to the Python SDK client that owns and renews the Sport lease.
+    # Robot motion is never republished to /api/sport/request.
+    sdk_command_socket: "/tmp/go2w_sdk_motion.sock"
+
+    action_name: "/go2w/motion"
+    arm_service: "/go2w/arm"
+    emergency_stop_service: "/go2w/emergency_stop"
+
+    require_arm: true
+    arm_timeout_sec: 60.0
+    dry_run: false
+
+    # Only mode 1 (balanceStand) has been physically proven as a safe start
+    # state on this robot. Undocumented modes such as 14 are fail-closed.
+    allowed_initial_modes: [1]
+
+    state_timeout_sec: 0.5
+    lease_status_timeout_sec: 1.0
+    response_timeout_sec: 2.0
+
+    pre_stop_count: 3
+    final_stop_count: 3
+    stop_interval_sec: 0.1
+    final_stationary_timeout_sec: 5.0
+
+    reject_concurrent_goals: true
+
+    max_abs_vx: 0.20
+    max_abs_vy: 0.10
+    max_abs_yaw_rate_timed: 0.20
+    max_duration_sec: 30.0
+
+    max_abs_relative_yaw_deg: 180.0
+    max_abs_yaw_rate_turn: 0.25
+    min_abs_yaw_rate_turn: 0.05
+
+    stationary_max_abs_vx: 0.02
+    stationary_max_abs_vy: 0.02
+    stationary_max_abs_yaw_rate: 0.03
+    stationary_stable_samples: 5
+
+    timed_refresh_hz: 2.0
+    turn_control_hz: 20.0
+    turn_publish_max_hz: 5.0
+    command_change_threshold: 0.01
+
+    turn_kp: 0.8
+    turn_tolerance_deg: 1.0
+    turn_slow_zone_deg: 20.0
+    turn_stable_samples: 5
+    maximum_overshoot_deg: 8.0
+    final_yaw_acceptance_deg: 5.0
+    allow_reverse_correction: false
+
+    # Positive vx counters the observed backward translation during ai-w turns.
+    # It tapers to zero near the yaw target and is independently hard-limited.
+    turn_longitudinal_compensation_vx: 0.05
+    turn_compensation_max_abs_vx: 0.06
+    turn_compensation_taper_deg: 5.0
+
+    # Keep the high-level velocity controller at zero before final StopMove.
+    # This targets the observed ~5 cm rollback at the end of a clean turn.
+    post_turn_zero_velocity_hold_sec: 1.0
+
+    # Active rollback braking after a turn: the robot rolls backward for ~2-4 cm
+    # after StopMove releases the wheels. Before the final STOP, command a small
+    # forward vx proportional to the measured backward wheel speed until the
+    # wheels are truly at rest, then keep the zero-velocity hold.
+    post_turn_rollback_control_sec: 3.0
+    post_turn_rollback_deadband_radps: 0.03
+    post_turn_rollback_gain: 0.8
+    post_turn_rollback_max_vx: 0.10
+    post_turn_rollback_stable_samples: 8
+    wheel_radius_m: 0.089
+
+    yaw_command_sign: 1
+
+    log_root: "logs"

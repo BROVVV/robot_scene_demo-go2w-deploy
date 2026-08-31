@@ -1,0 +1,44 @@
+# Current physical geometry of the Go2-W with the externally mounted
+# Hesai PandarXT-16 and its fixed protective frame.
+#
+# This file records operator-confirmed dimensions ONLY. It deliberately does
+# not authorize motion: rotation_clearance_valid, Pandar formal extrinsics,
+# four-direction evidence and a pose-bound rotation lease must still be
+# produced by the sensor/evidence chain before any motion may be commanded.
+#
+# Do NOT modify configs/go2w/official_reference.yaml; it stays the pinned
+# manufacturer reference. This file describes the current installed rig.
+schema_version: 1
+
+hardware_profile: go2w_with_pandarxt16_protective_frame
+
+dimensions_m:
+  length: 0.70
+  width: 0.43
+  height: 0.70
+
+dimension_source:
+  type: operator_confirmed
+  date: 2026-08-13
+  note: >
+    Confirmed once on 2026-08-13 after the PandarXT-16 protective frame was
+    installed. Remeasurement of the full-machine length/width/height is NOT
+    scheduled again; the highest point is the fixed Pandar protective frame,
+    not a loose cable.
+
+highest_point:
+  type: pandarxt16_protective_frame
+  fixed_structure: true
+  is_loose_cable: false
+
+horizontal_footprint:
+  source: go2w_standard_external_dimensions
+  length_m: 0.70
+  width_m: 0.43
+
+remeasurement_required:
+  length: false
+  width: false
+  height: false
+
+authorizes_motion: false

@@ -1,0 +1,109 @@
+schema_version: 1
+robot_model: Unitree Go2-W
+sensor_model: Hesai PandarXT-16
+calibration_status: image_and_stationary_lidar_candidate
+confirmed: false
+authorizes_tf_publication: false
+authorizes_preprocessor_integration: false
+authorizes_safety_integration: false
+authorizes_motion: false
+
+coordinate_convention:
+  parent_frame: base_link
+  child_frame: pandarxt16_link_unvalidated
+  x: forward
+  y: left
+  z: up
+  rotation: fixed-axis roll_pitch_yaw_radians
+
+# Candidate inferred on 2026-08-13 from the operator photograph, the pinned
+# Go2-W geometry, a Pandar floor-plane fit, and a low-confidence static
+# cross-registration against the built-in LiDAR. Do not copy these values into
+# a static TF or the safety chain without a multi-scene calibration.
+transform_candidate:
+  translation_m:
+    x: 0.130
+    y: 0.015
+    z: 0.014
+  translation_uncertainty_m:
+    x: 0.060
+    y: 0.035
+    z: 0.040
+  rotation_rpy_rad:
+    roll: 0.00672
+    pitch: 0.01580
+    yaw: 0.19822
+  rotation_rpy_deg:
+    roll: 0.385
+    pitch: 0.905
+    yaw: 11.357
+  rotation_uncertainty_deg:
+    roll: 1.0
+    pitch: 1.0
+    yaw: 15.0
+
+evidence:
+  operator_photo:
+    received_at: 2026-08-13
+    interpretation: >
+      Robot forward is toward the right side of the photograph. The sensor
+      mounting foot is close to the longitudinal centerline and behind the
+      front shoulder pair, approximately 65--75 percent of the way from the
+      rear shoulder axis to the front shoulder axis. Perspective and sensor
+      height were considered from the mounting foot, not the display
+    confidence: medium_for_x_y_low_for_yaw
+  go2w_geometry:
+    sources:
+      - configs/go2w/official_reference.yaml
+      - configs/go2w/lidar_preprocess.yaml
+    standing_envelope_m: null
+    base_collision_box_m: [0.3762, 0.0935, 0.114]
+    nominal_base_link_ground_height_m: 0.528
+  pandar_floor_plane:
+    topic: /hesai/pandarxt16/points_raw
+    fitted_equation_sensor_frame: "z = 0.01579893*x - 0.00672136*y - 0.54194777"
+    sensor_height_above_floor_m: 0.541868
+    inlier_count: 2578
+    fit_rmse_m: 0.005402
+    horizontal_range_quantiles_m: [1.8548, 1.9128, 2.1830, 3.8666, 5.4037]
+    occupied_10deg_azimuth_bins: 22
+    inferred_level_tilt_deg: 0.984
+    note: >
+      This strongly constrains height and roll/pitch for the current stationary
+      posture, but it cannot determine x, y, or yaw.
+  static_cross_registration:
+    reference_topic: /go2w/lidar/cloud_filtered
+    candidate_topic: /hesai/pandarxt16/points_raw
+    frames_each: 8
+    optimized_translation_m: [0.06181, 0.01443, 0.04003]
+    optimized_yaw_deg: 11.357
+    median_nearest_neighbor_error_m: 0.3516
+    fraction_within_0_10_m: 0.1354
+    assessment: low_confidence_not_accepted_as_metric_calibration
+    use: yaw_hint_and_y_sign_only
+
+envelope_candidate:
+  sensor_center_ground_height_m: 0.5419
+  highest_visible_part: loose_cable_loop_above_sensor
+  conservative_full_height_m: 0.65
+  full_height_uncertainty_m: 0.05
+  sensor_center_horizontal_radius_from_base_m: 0.131
+  original_rectangular_corner_radius_m: 0.411
+  existing_candidate_rotation_envelope_radius_m: 0.511
+  horizontal_assessment: >
+    The sensor body and visible cable loop appear inside the original 0.70 by
+    0.43 metre standing projection, so the existing 0.511 metre swept radius
+    remains the conservative candidate. A photograph cannot prove cable and
+    bracket containment through motion, so the value is not revalidated.
+  vertical_assessment: >
+    The external sensor and cable visibly exceed the manufacturer 0.50 metre
+    standing height. Use 0.65 metre only as a conservative planning candidate
+    until the highest fixed point is measured
+
+promotion_requirements:
+  - Secure the cable loop so its envelope cannot change during motion.
+  - Measure the sensor mounting-foot centre relative to the body centre.
+  - Collect at least three static scenes with non-parallel walls for LiDAR-to-LiDAR calibration.
+  - Obtain translation residual below 0.05 m and yaw agreement within 3 degrees.
+  - Re-run empty baseline and front/right/rear/left physical target checks.
+  - Keep /go2w/safety/rotation_clearance_valid false until all checks pass.

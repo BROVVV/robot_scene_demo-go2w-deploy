@@ -1,0 +1,16 @@
+{"observation_id": "obs_seed_001", "timestamp": "2026-06-16T10:00:00+08:00", "location_hint": "floor_5 corridor", "summary_zh": "初始化示例观察：五层走廊存在 501、502、503 门牌。", "confidence": 0.7}
+{"observation_id": "obs_2026-06-17T014836981203+0000", "timestamp": "2026-06-17T01:48:36.981203+00:00", "location_hint": "current_scene", "summary_zh": "走廊通向客厅，地面铺瓷砖，左侧有柜子和纸箱，右侧有蓝色脚垫和小凳子。", "confidence": 0.9}
+{"observation_id": "obs_2026-06-17T015302002494+0000", "timestamp": "2026-06-17T01:53:02.002494+00:00", "location_hint": "current_room", "summary_zh": "办公室场景，有工作人员、多把椅子和办公设备", "confidence": 0.85}
+{"observation_id": "obs_2026-06-17T015341395874+0000", "timestamp": "2026-06-17T01:53:41.395874+00:00", "location_hint": "current_room", "summary_zh": "本地 Grounding DINO/SAM2 检测到 30 个物体，补全 40 条空间关系。", "confidence": 0.5104899406433105}
+{"observation_id": "obs_2026-06-17T020001155378+0000", "timestamp": "2026-06-17T02:00:01.155378+00:00", "location_hint": "current_room", "summary_zh": "办公室场景，有工作人员、多把椅子和办公设备", "confidence": 0.85}
+{"observation_id": "obs_2026-06-17T065717298785+0000", "timestamp": "2026-06-17T06:57:17.298785+00:00", "location_hint": "current_scene", "summary_zh": "走廊视角，可见通往卧室的门和部分家具", "confidence": 0.9}
+{"observation_id": "obs_2026-06-17T112243678553+0000", "timestamp": "2026-06-17T11:22:43.678553+00:00", "location_hint": "current_scene", "summary_zh": "本地 Grounding DINO/SAM2 检测到 24 个物体，补全 35 条空间关系。", "confidence": 0.34150105714797974}
+{"observation_id": "obs_2026-06-22T021144245605+0000", "timestamp": "2026-06-22T02:11:44.245605+00:00", "location_hint": "current_scene", "summary_zh": "空旷办公室大厅，左侧有门通向厕所区域", "confidence": 0.9}
+{"observation_id": "obs_2026-06-22T021910720557+0000", "timestamp": "2026-06-22T02:19:10.720557+00:00", "location_hint": "current_scene", "summary_zh": "本地 Grounding DINO/SAM2 检测到 11 个物体，补全 15 条空间关系。", "confidence": 0.35}
+{"observation_id": "obs_2026-06-22T021949931498+0000", "timestamp": "2026-06-22T02:19:49.931498+00:00", "location_hint": "current_scene", "summary_zh": "空旷办公室大厅，左侧有门通向其他区域，远处有玻璃窗。", "confidence": 0.9}
+{"observation_id": "obs_2026-06-22T022240212623+0000", "timestamp": "2026-06-22T02:22:40.212623+00:00", "location_hint": "current_scene", "summary_zh": "办公室环境，有工作人员和多张办公椅及设备。", "confidence": 0.8}
+{"observation_id": "obs_2026-06-24T042300590592+0000", "timestamp": "2026-06-24T04:23:00.590592+00:00", "location_hint": "current_scene", "summary_zh": "办公室场景，有办公桌、椅子和人员，目标为挂黄衣的椅子。", "confidence": 0.8}
+{"observation_id": "obs_2026-06-25T063411577957+0000", "timestamp": "2026-06-25T06:34:11.577957+00:00", "location_hint": "current_room", "summary_zh": "办公室场景，地面光洁，左侧有门框和黄色墙面，右侧有办公桌和人员。", "confidence": 0.0}
+{"observation_id": "obs_2026-06-25T081615481025+0000", "timestamp": "2026-06-25T08:16:15.481025+00:00", "location_hint": "current_scene", "summary_zh": "空旷的办公室大厅，地面光洁，无明显家具或物品。", "confidence": 0.0}
+{"observation_id": "obs_2026-06-25T091018483898+0000", "timestamp": "2026-06-25T09:10:18.483898+00:00", "location_hint": "current_scene", "summary_zh": "空旷的办公室大厅，地面光洁，远处有门和窗户。", "confidence": 0.0}
+{"observation_id": "obs_2026-06-26T033322257375+0000", "timestamp": "2026-06-26T03:33:22.257375+00:00", "location_hint": "current_scene", "summary_zh": "卧室入口区域，可见床边柜、衣柜和装饰柜。", "confidence": 0.9}

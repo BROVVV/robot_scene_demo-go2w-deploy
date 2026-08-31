@@ -1,0 +1,196 @@
+schema_version: 1
+robot_model: Unitree Go2-W
+validation_status: validated
+confirmed: true
+confirmation_scope: stationary_read_only_current_standing_posture
+measured_at: 2026-08-06T11:41:00+08:00
+measured_at_updated: 2026-08-14T00:00:00+08:00
+evidence:
+  - outputs/go2w_acceptance/lidar_preprocessor_live_corrected_tf/result.json
+  - outputs/go2w_acceptance/lidar_stationary_geometry/result.json
+  - outputs/go2w_acceptance/lidar_collision_height_live_20260813/result.json
+  - outputs/go2w_acceptance/rotation_current_hardware/baseline.json
+official_reference: configs/go2w/official_reference.yaml
+input_frame_requirement: transform_to_base_link
+revalidation_required: true
+revalidation_note: >
+  The 2026-08-13 live diagnosis found that the former 0.58 m front result
+  came from points around z=0.6 m, above the Go2-W standing collision
+  envelope, and that side minima contain near-field/self returns. Full-height
+  obstacles remain available for semantics, while scan and clearance use the
+  explicit collision-height band below. Side rotation clearance is not yet
+  independently validated and therefore does not authorize rotation.
+  On 2026-08-14, after the PandarXT-16 protective frame was installed, a live
+  near-field audit found the tire/frame edge self-returns extend to |y|~0.42 m
+  (old masks stopped at 0.37 m). The left/right body-side self regions were
+  extended to |y|=0.42 m so the swept annulus 0.42..0.511 m stays available for
+  obstacle detection. This revalidation is stationary read-only and does NOT
+  authorize rotation; it keeps the four-direction marker crosscheck meaningful
+  for the current hardware.
+range_m:
+  minimum: 0.37
+  maximum: 6.20
+  source: stationary_live_topic_audit
+height_m:
+  minimum: -0.588
+  maximum: 0.972
+  source: urdf_leg_chain_ground_minus_0.06_to_plus_1.50_m
+ground_separation_height_m: -0.448
+ground_separation_source: urdf_leg_chain_ground_plus_0.08_m
+collision_height_m:
+  minimum_exclusive: -0.448
+  maximum: 0.052
+  source: ground_separation_height_plus_manufacturer_standing_height_0.50_m
+  purpose: navigation_scan_and_directional_clearance_only
+  note: >
+    This top bound is 0.08 m above the nominal standing top: nominal URDF
+    ground z=-0.528 m plus the manufacturer standing height 0.50 m gives
+    z=-0.028 m, then the same 0.08 m conservative separation margin gives
+    z=0.052 m. Points above it remain in /go2w/lidar/obstacles.
+self_filter_margin_m: 0.040
+front_corridor_half_width_m: 0.315
+rotation_envelope_radius_m: 0.511
+rotation_clearance_validation:
+  valid: false
+  validation_method: null
+  validated_at: null
+  operator: null
+  posture: stationary_standing
+  validated_rotation_envelope_radius_m: null
+  evidence_paths: []
+  checks:
+    horizontal_frame_yaw_validated: false
+    near_field_blind_zone_mitigated: false
+    self_filter_regions_physically_validated: false
+    full_360_sector_detection_validated: false
+    standing_posture_validated: false
+  reason: >
+    The L2 near-field/self-return zone overlaps the 0.511 m full-body swept
+    radius, so left/right clearance alone cannot certify an in-place turn.
+    This block cannot be lifted by changing valid alone: the loader requires
+    physical 360-degree cross-check metadata, evidence paths, matching posture,
+    horizontal-yaw validation, blind-zone mitigation, and self-filter tests.
+self_regions:
+  - name: head_and_camera
+    note: >
+      Dense points at base x 0.28..0.58 / y +-0.31 / z 0.30..0.82 are the
+      robot's own head/camera, visible after the corrected base->lidar TF
+      (live observation 2026-08-06). Excluding them keeps front clearance
+      meaningful; physical tape confirmation remains recommended.
+    x_min: 0.28
+    x_max: 0.58
+    y_min: -0.31
+    y_max: 0.31
+    z_min: 0.30
+    z_max: 0.82
+  - name: left_body_side
+    note: >
+      Own-body side points at |y| ~0.26..0.46, x ~-0.6..0.6, z ~0.0..0.80.
+      Extended to |y|=0.46 m on 2026-08-14 to cover the full tire edge
+      (measured 0.42..0.43 m) plus the Pandar frame side; the swept annulus
+      beyond 0.46 m stays available for obstacle detection.
+    x_min: -0.60
+    x_max: 0.60
+    y_min: 0.255
+    y_max: 0.46
+    z_min: 0.0
+    z_max: 0.80
+  - name: right_body_side
+    x_min: -0.60
+    x_max: 0.60
+    y_min: -0.46
+    y_max: -0.255
+    z_min: 0.0
+    z_max: 0.80
+  - name: pandarxt16_protective_frame
+    note: >
+      Own protective frame around the externally mounted Hesai PandarXT-16.
+      Measured 2026-08-14: the frame returns sit at x -0.22..0.90, y +-0.60,
+      z 0.40..0.85, protruding past the old head_and_camera mask (x<=0.58).
+      After removing a nearby object, the frame right edge was still detected
+      at y -0.63 / x 0.93 (just past the previous mask), so the mask was
+      widened to x<=0.96, |y|<=0.68. These are the robot's own structure and
+      must not count as obstacles; the swept annulus beyond the frame and the
+      marker placement zone (>=0.9 m) stay available.
+    x_min: -0.30
+    x_max: 0.96
+    y_min: -0.68
+    y_max: 0.68
+    z_min: 0.40
+    z_max: 0.88
+  - name: left_rear_wheel_live_cluster
+    note: >
+      Current-posture self return identified from 80 stationary live frames
+      after the collision-height fix, corroborated by the operator reporting
+      the left side physically clear. The cluster is centered near
+      x=-0.21/y=0.42/z=-0.02 m and has the low vertical extent of the 7-inch
+      wheel. This empirical mask removes false scan obstacles but does not
+      validate rotation clearance or authorize motion.
+    x_min: -0.36
+    x_max: -0.08
+    y_min: 0.255
+    y_max: 0.56
+    z_min: -0.19
+    z_max: 0.06
+  - name: left_front_wheel_live_cluster
+    note: >
+      Current-posture front-left wheel/self-return cluster from the same live
+      stationary audit. Kept separate from the rear cluster to avoid masking
+      the entire left side; no unobserved right-side region is inferred.
+    x_min: 0.12
+    x_max: 0.36
+    y_min: 0.255
+    y_max: 0.52
+    z_min: -0.19
+    z_max: 0.06
+  - name: right_rear_wheel_live_cluster
+    note: >
+      Added 2026-08-14 as the mirror of the left rear wheel cluster. The old
+      self-filter only had left-side wheel masks, so the right tire self-return
+      was reported as a false obstacle at ~0.42 m. This masks the right rear
+      tire; it does not validate rotation clearance or authorize motion.
+    x_min: -0.36
+    x_max: -0.08
+    y_min: -0.56
+    y_max: -0.255
+    z_min: -0.19
+    z_max: 0.06
+  - name: right_front_wheel_live_cluster
+    x_min: 0.12
+    x_max: 0.36
+    y_min: -0.52
+    y_max: -0.255
+    z_min: -0.19
+    z_max: 0.06
+voxel_size_m: 0.050
+stationary_validation:
+  superseded: true
+  superseded_reason: >
+    This fit used the official 165 deg base->lidar flip and fitted a
+    world-down surface, not the floor. Kept as historical evidence only.
+  cloud_frames: 120
+  point_count: 475641
+  imu_samples: 1920
+  cloud_frame: utlidar_lidar
+  ground_origin_z_m: -0.4199463426632175
+  ground_tilt_deg: 0.5689395192758439
+  ground_fit_rmse_m: 0.027992769684656686
+  gyro_norm_p95_rad_s: 0.02786636101199268
+  passed: true
+derivation_policy:
+  below_ground_tolerance_m: 0.060
+  minimum_obstacle_height_above_ground_m: 0.080
+  maximum_obstacle_height_above_ground_m: 1.500
+  footprint_margin_m: 0.040
+  corridor_side_clearance_m: 0.100
+  rotation_clearance_m: 0.100
+safety:
+  lidar_timeout_seconds: 0.3
+  front_stop_clearance_m: 0.6
+  target_candidate_step_limit_m: 0.2
+  ordinary_search_step_limit_m: 0.3
+  source: implementation_plan_conservative_policy
+scan:
+  angle_min_rad: -3.141592653589793
+  angle_max_rad: 3.141592653589793
+  angle_increment_rad: 0.008726646259971648

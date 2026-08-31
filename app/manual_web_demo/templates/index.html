@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Go2-W 自主语义搜索控制台</title>
+  <link rel="stylesheet" href="/static/style.css?v=persistent-history-20260821" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Go2-W 自主语义搜索控制台</div>
+    <div class="status-lights">
+      <span class="light" id="light-camera"><i></i>Camera</span>
+      <span class="light" id="light-motion"><i></i>Motion</span>
+      <span class="light" id="light-search"><i></i>Search</span>
+      <span class="light" id="light-robot"><i></i>Robot</span>
+      <span class="light" id="light-llm"><i></i>LLM</span>
+      <span class="light" id="light-slam"><i></i>3D Map</span>
+      <span class="light" id="light-ws"><i></i>WebSocket</span>
+    </div>
+    <button id="btn-estop" class="estop" disabled>紧急停止</button>
+    <button id="btn-estop-reset" class="reset-estop" type="button" title="确认机器人已停止且场地安全后解除 WebUI 急停锁存">解除急停</button>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="search">自主搜索</button>
+    <button class="tab" data-tab="manual">手动控制</button>
+    <button class="tab" data-tab="system">系统状态</button>
+  </nav>
+
+  <main>
+    <!-- ============================ Autonomous Search ==================== -->
+    <section id="tab-search" class="tab-pane active">
+      <div class="search-taskbar">
+        <input id="search-target" type="text" maxlength="500"
+               autofocus placeholder="直接说出要找的目标，如：找到饮水机旁边的蓝色垃圾桶" />
+        <button id="btn-search-start" class="primary">开始搜索</button>
+        <div id="search-active-controls" class="search-active-controls hidden">
+          <button id="btn-search-pause" disabled>暂停</button>
+          <button id="btn-search-resume" disabled>继续</button>
+          <button id="btn-search-stop" class="danger" disabled>停止</button>
+          <button id="btn-search-estop" class="estop" disabled>急停</button>
+        </div>
+        <button id="btn-history-current" class="hidden" type="button">返回当前任务</button>
+        <details class="search-advanced">
+          <summary>高级显示</summary>
+          <label class="debug-toggle"><input type="checkbox" id="chk-debug" /> 调试信息</label>
+        </details>
+        <!-- 运动权限由服务器启动配置决定；普通搜索不再要求用户理解或勾选参数。 -->
+        <input type="checkbox" id="chk-motion" class="hidden" tabindex="-1" />
+        <span id="search-session-info" class="session-info">输入自然语言目标即可开始</span>
+      </div>
+      <div class="search-banner hidden" id="search-banner"></div>
+      <div id="search-error-detail" class="search-error-detail hidden"></div>
+
+      <div class="search-layout">
+        <div class="cell cell-camera">
+          <div class="cell-title">相机 <span id="scam-age" class="sub">--</span></div>
+          <div class="camera-wrap">
+            <!-- Reuse the ROS worker's fresh camera stream.  The old direct
+                 D435 proxy path inherited a SOCKS proxy on some hosts and
+                 rendered a permanently blank search preview. -->
+            <img id="search-camera" src="/api/camera.mjpeg" alt="实时相机" />
+            <canvas id="search-overlay" width="640" height="480"></canvas>
+            <div class="camera-overlay">
+              <span id="scam-fps">-- FPS</span>
+              <span id="scam-label">LIVE CAMERA</span>
+              <span id="scam-cycle">cycle --</span>
+            </div>
+            <div id="search-camera-stale" class="stale-banner hidden">相机断流 / 画面非实时</div>
+          </div>
+        </div>
+
+        <div class="cell cell-status">
+          <div class="cell-title">搜索状态</div>
+          <div class="kv">
+            <div><span>Target</span><b id="st-target">--</b></div>
+            <div><span>Phase</span><b id="st-phase">IDLE</b></div>
+            <div id="startup-stage-wrap" class="startup-stage hidden"><span>启动</span><b id="st-startup-stage">--</b><span id="st-startup-error" class="no"></span></div>
+            <div><span>Cycle</span><b id="st-cycle">0</b></div>
+            <div><span>Elapsed</span><b id="st-elapsed">00:00</b></div>
+            <div><span>Match</span><b id="st-match">none</b></div>
+            <div><span>Anchor</span><b id="st-anchor">--</b></div>
+            <div><span>Robot action</span><b id="st-action">IDLE</b></div>
+            <div><span>Pose quality</span><b id="st-pose">--</b></div>
+          </div>
+          <div class="cell-title" style="margin-top:8px">目标证据</div>
+          <div id="st-evidence" class="evidence">--</div>
+          <div class="cell-title" style="margin-top:8px">任务理解</div>
+          <div id="task-understanding" class="task-understanding">等待任务解析…</div>
+        </div>
+
+        <div class="cell cell-obs">
+          <div class="cell-title">识别物体 <span class="sub" id="obs-objects-meta"></span></div>
+          <div id="obs-objects" class="obs-list">等待首次识别…（识别到第一个物体后自动开始建物体列表 / 拓扑图）</div>
+          <div class="cell-title" style="margin-top:8px">当前观察</div>
+          <div id="obs-current" class="obs-list">等待观察…</div>
+          <div class="cell-title" style="margin-top:8px">Session 累计</div>
+          <div id="obs-seen" class="obs-list">--</div>
+        </div>
+
+        <div class="cell cell-decision">
+          <div class="cell-title">下一步决策</div>
+          <div id="dec-motion" class="dec-motion">等待决策…</div>
+          <div id="dec-intent" class="dec-intent">--</div>
+          <div id="dec-reason" class="dec-reason"></div>
+          <div id="dec-scores" class="dec-scores"></div>
+          <div class="cell-title" style="margin-top:8px">未选候选</div>
+          <div id="dec-alternatives" class="obs-list muted">无其他候选</div>
+          <div class="cell-title" style="margin-top:8px">Candidates</div>
+          <div id="dec-candidates" class="obs-list"></div>
+          <div class="cell-title" style="margin-top:8px">Decision history</div>
+          <div id="dec-history" class="decision-history"></div>
+        </div>
+
+        <div class="cell cell-map">
+          <div class="cell-title">地图
+            <span class="view-toggle" id="map-view-toggle">
+              <button class="vtab active" data-mode="semantic_topology" type="button">语义拓扑</button>
+              <button class="vtab" data-mode="spatial_map" type="button">空间地图</button>
+            </span>
+            <span class="sub" id="map-meta"></span>
+            <span class="viewport-hint" title="滚轮缩放 / 拖拽平移 / 双击复位">滚轮缩放 · 拖拽平移 · 双击复位</span>
+            <span class="legend" id="map-legend">
+              <i class="l-cur">▲</i><span>当前</span>
+              <i class="l-vis">●</i><span>已访问</span>
+              <i class="l-int">★</i><span>语义兴趣</span>
+              <i class="l-neg">◌</i><span>负证据</span>
+              <i class="l-unc">✕</i><span>不可达</span>
+              <i class="l-cand">◎</i><span>候选</span>
+              <i class="l-conf">✓</i><span>确认</span>
+            </span>
+          </div>
+          <svg id="search-map" viewBox="0 0 600 400" preserveAspectRatio="xMidYMid meet"></svg>
+          <div id="map-node-detail" class="map-node-detail hidden"></div>
+        </div>
+
+        <div class="cell cell-slam3d">
+          <div class="cell-title">Pandar 实时三维建图
+            <span class="sub" id="slam3d-meta">等待 /go2w/slam/map_3d…</span>
+            <span class="viewport-hint" title="拖拽旋转 / 滚轮缩放 / 双击复位">拖拽旋转 · 滚轮缩放 · 双击复位</span>
+          </div>
+          <div class="slam3d-wrap">
+            <canvas id="slam-map-3d" width="1200" height="640"></canvas>
+            <div id="slam3d-state" class="slam3d-state">正在连接实时点云…</div>
+            <div class="slam3d-axis"><i class="axis-x">X</i><i class="axis-y">Y</i><i class="axis-z">Z</i></div>
+          </div>
+          <div class="slam3d-safety">mapping_assist · candidate_unconfirmed · 不接管 /go2w/odom/fused</div>
+        </div>
+
+        <div class="cell cell-timeline">
+          <div class="cell-title">事件时间线 <span id="tl-ws-state" class="sub">OFFLINE</span></div>
+          <div id="search-timeline" class="timeline"></div>
+        </div>
+
+        <div class="cell cell-history">
+          <div class="cell-title">最近搜索记录 <span class="sub">完整保留最近 10 次</span></div>
+          <div id="search-history" class="search-history"><div class="muted">正在读取记录…</div></div>
+        </div>
+
+        <div class="cell cell-debug hidden" id="debug-panel">
+          <div class="cell-title">Debug</div>
+          <div class="debug-tabs">
+            <button class="dtab active" data-dtab="goal_graph">GoalGraph</button>
+            <button class="dtab" data-dtab="scene_graph">SceneGraph</button>
+            <button class="dtab" data-dtab="candidates">Candidates</button>
+            <button class="dtab" data-dtab="raw">Raw state</button>
+          </div>
+          <pre id="debug-goal_graph" class="debug-pre"></pre>
+          <pre id="debug-scene_graph" class="debug-pre hidden"></pre>
+          <pre id="debug-candidates" class="debug-pre hidden"></pre>
+          <pre id="debug-raw" class="debug-pre hidden"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ Manual control ======================= -->
+    <section id="tab-manual" class="tab-pane">
+      <div class="manual-layout">
+        <section class="camera-pane">
+          <div class="camera-wrap">
+            <img id="camera" src="/api/camera.mjpeg" alt="实时相机" />
+            <div class="camera-overlay">
+              <span id="cam-fps">-- FPS</span>
+              <span id="cam-age">帧年龄 --s</span>
+              <span id="cam-key">按键: -</span>
+              <span id="cam-cmd">当前: --</span>
+            </div>
+            <div id="camera-stale" class="stale-banner hidden">相机断流 / 画面非实时</div>
+          </div>
+        </section>
+
+        <section class="objects-pane">
+          <div class="pane-title">当前场景主要物体
+            <button id="btn-llm" class="llm-toggle">大模型分析: 关</button>
+          </div>
+          <div id="scene-summary" class="scene-summary">—</div>
+          <table id="object-table">
+            <thead>
+              <tr><th>物体</th><th>数量</th><th>位置</th><th>置信</th></tr>
+            </thead>
+            <tbody id="object-tbody">
+              <tr><td colspan="4" class="empty">等待识别…</td></tr>
+            </tbody>
+          </table>
+          <div id="llm-meta" class="llm-meta">
+            <div>最近识别：<span id="llm-last">--</span></div>
+            <div>状态：<span id="llm-status">--</span></div>
+          </div>
+          <div id="llm-error" class="llm-error hidden"></div>
+        </section>
+      </div>
+
+      <footer class="control-bar">
+        <div class="keys">
+          <div class="key-grid">
+            <button class="keybtn" data-key="w" title="前进">W</button>
+            <button class="keybtn" data-key="a" title="左移">A</button>
+            <button class="keybtn" data-key="s" title="后退">S</button>
+            <button class="keybtn" data-key="d" title="右移">D</button>
+            <button class="keybtn" data-key="q" title="左转">Q</button>
+            <button class="keybtn" data-key="e" title="右转">E</button>
+          </div>
+          <div class="key-help">
+            <span>W 前进</span><span>S 后退</span><span>A 左移</span>
+            <span>D 右移</span><span>Q 左转</span><span>E 右转</span>
+            <span class="sp">Space 停止</span><span class="esc">Esc 急停</span>
+          </div>
+        </div>
+        <div class="controls">
+          <button id="btn-enable" class="enable">启用键盘控制</button>
+          <button id="btn-disable" class="disable hidden">停用控制</button>
+          <div class="motion-state" id="motion-state">当前：STOP</div>
+          <div id="blocked-note" class="blocked-note"></div>
+        </div>
+      </footer>
+    </section>
+
+    <!-- ============================ System status ======================== -->
+    <section id="tab-system" class="tab-pane">
+      <div class="sys-grid">
+        <div class="sys-card"><div class="sys-title">Camera</div><pre id="sys-camera">--</pre></div>
+        <div class="sys-card"><div class="sys-title">ROS Worker</div><pre id="sys-worker">--</pre></div>
+        <div class="sys-card"><div class="sys-title">Motion</div><pre id="sys-motion">--</pre></div>
+        <div class="sys-card"><div class="sys-title">Control Owner</div><pre id="sys-owner">--</pre></div>
+        <div class="sys-card"><div class="sys-title">Search</div><pre id="sys-search">--</pre></div>
+        <div class="sys-card"><div class="sys-title">LLM</div><pre id="sys-llm">--</pre></div>
+        <div class="sys-card"><div class="sys-title">Search Readiness</div><pre id="sys-readiness">--</pre></div>
+        <div class="sys-card"><div class="sys-title">Sessions (outputs/live_runs)</div><pre id="sys-history">--</pre></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/search_map.js?v=plain-slam-web3d-20260831"></script>
+  <script src="/static/slam_map_3d.js?v=plain-slam-web3d-20260831"></script>
+  <script src="/static/search_ui.js?v=plain-slam-web3d-20260831"></script>
+  <script src="/static/app.js?v=plain-slam-web3d-20260831"></script>
+</body>
+</html>

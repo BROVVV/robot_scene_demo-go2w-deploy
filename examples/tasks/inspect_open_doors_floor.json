@@ -1,0 +1,11 @@
+{
+  "task_text": "巡查这层楼看看有几个房间的门是打开的",
+  "expected_task_type": "inspect_area",
+  "scene_fixture": "data/scene_kb/floor_layout.json",
+  "expected_capabilities": [
+    "parse_floor_scope",
+    "check_door_state_subtask",
+    "plan_ordered_inspection"
+  ],
+  "success_criteria_zh": "应将任务解析为楼层巡查和门状态检查，按楼层门序生成检查点，并区分 open、closed、unknown。"
+}

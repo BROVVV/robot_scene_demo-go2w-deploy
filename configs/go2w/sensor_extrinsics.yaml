@@ -1,0 +1,37 @@
+schema_version: 1
+robot_model: Unitree Go2-W
+calibration_status: experimental
+confirmed: false
+diagnostic_overlay_accepted: true
+navigation_geometry_validated: false
+source: plane_based_box_target_20260806
+operator: brov
+timestamp: '2026-08-06'
+transform_parent: front_camera_optical_frame
+transform_child: utlidar_lidar
+translation_m:
+  x: -0.0738
+  y: -0.1934
+  z: -0.1750
+rotation_rpy_rad:
+  roll: -1.32536
+  pitch: -0.46296
+  yaw: -0.08134
+validation:
+  required_scene_count: 5
+  completed_scene_count: 7
+  mean_edge_error_px: 33.6
+  maximum_allowed_mean_edge_error_px: 40.0
+  distance_bands_tested:
+  - near
+  - medium
+  - far
+  moved_position_recheck_passed: false
+  moved_position_recheck_note: physical moved-robot recheck remains BLOCKED; an experimental override is not geometric validation
+  report_path: outputs/calibration/plane_extrinsic_candidate/overlay_validation_report.json
+acceptance_override:
+  requested_by: brov
+  reason: temporary experimental acceptance for stationary diagnostic overlays only; threshold lowered from 5.0 px to 40.0 px
+  original_maximum_allowed_mean_edge_error_px: 5.0
+  transform_note: solved in the raw z-up /utlidar/cloud frame; fusion must consume /go2w/sensors/cloud (not the official-flip filtered cloud) for consistency
+  calibration_limitation: plane normals were nearly parallel across poses; yaw/in-plane translation are weakly constrained; do not treat as a confirmed geometric calibration

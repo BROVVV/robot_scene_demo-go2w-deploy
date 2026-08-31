@@ -1,0 +1,63 @@
+{
+  "floor_layouts": [
+    {
+      "floor_id": "floor_5",
+      "building_id": "building_demo",
+      "corridor_direction": "east-west",
+      "description_zh": "示例五层楼道：从电梯出来后，左侧依次是 501、502，右侧有 503。",
+      "doors": [
+        {
+          "door_id": "door_501",
+          "label": "501",
+          "side": "left",
+          "order": 1,
+          "connected_room_id": "room_501",
+          "location_hint": "near elevator",
+          "confidence": 0.78
+        },
+        {
+          "door_id": "door_502",
+          "label": "502",
+          "side": "left",
+          "order": 2,
+          "connected_room_id": "room_502",
+          "location_hint": "after 501",
+          "confidence": 0.74
+        },
+        {
+          "door_id": "door_503",
+          "label": "503",
+          "side": "right",
+          "order": 2,
+          "connected_room_id": "room_503",
+          "location_hint": "opposite 502",
+          "confidence": 0.72
+        }
+      ],
+      "rooms": [
+        {
+          "room_id": "room_501",
+          "label": "501",
+          "room_type": "office",
+          "location_hint": "left side near elevator",
+          "confidence": 0.72
+        },
+        {
+          "room_id": "room_502",
+          "label": "502",
+          "room_type": "office",
+          "location_hint": "left side after 501",
+          "confidence": 0.7
+        },
+        {
+          "room_id": "room_503",
+          "label": "503",
+          "room_type": "meeting_room",
+          "location_hint": "right side opposite 502",
+          "confidence": 0.68
+        }
+      ],
+      "confidence": 0.72
+    }
+  ]
+}

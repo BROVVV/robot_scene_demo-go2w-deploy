@@ -1,0 +1,11 @@
+{
+  "task_text": "数数这个房间里有几个椅子",
+  "expected_task_type": "count_objects",
+  "scene_fixture": "examples/mock_scene_result.json",
+  "expected_capabilities": [
+    "count_visible_objects",
+    "track_counted_object_ids",
+    "report_uncertain_regions"
+  ],
+  "success_criteria_zh": "应输出当前确认椅子数量，并给出遮挡区域或视野边缘的补充观察建议。"
+}

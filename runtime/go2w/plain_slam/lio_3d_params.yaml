@@ -1,0 +1,52 @@
+imu_params:
+  acc_scale: 1.0
+initial_pose:
+  translation:
+  - 0.0
+  - 0.0
+  - 0.0
+  rotation_matrix:
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+keyframe:
+  distance_th: 1.0
+  angle_th: 20.0
+  min_active_points_rate: 0.8
+scan_cloud_preprocess:
+  clip_range: 0.35
+  filter_size: 0.15
+normal_map:
+  num_keyframes: 15
+  filter_size: 0.15
+  num_normal_points: 10
+  normal_eigen_val_thresh: 0.2
+estimator:
+  use_loose_coupling: true
+  huber_delta: 0.1
+  num_max_iteration: 5
+  num_max_matching_points: 8000
+  max_correspondence_dist: 1.5
+  convergence_th: 0.1
+extrinsics:
+  imu_to_lidar:
+    translation:
+    - -0.13041667
+    - 0.029655
+    - 0.09357132
+    rotation_matrix:
+    - 0.94237645
+    - -0.18827621
+    - 0.27654782
+    - 0.19689704
+    - 0.980418
+    - -0.00347767
+    - -0.2704777
+    - 0.05772872
+    - 0.96099386

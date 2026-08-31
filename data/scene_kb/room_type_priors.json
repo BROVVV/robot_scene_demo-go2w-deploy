@@ -1,0 +1,38 @@
+{
+  "room_type_priors": [
+    {
+      "room_type": "office",
+      "name_zh": "办公室",
+      "common_objects": [
+        "desk",
+        "chair",
+        "monitor",
+        "keyboard",
+        "trash_bin"
+      ],
+      "likely_layout": [
+        "desk near wall or window",
+        "chair in front of desk",
+        "monitor on desk",
+        "trash bin under or beside desk"
+      ],
+      "confidence": 0.9
+    },
+    {
+      "room_type": "meeting_room",
+      "name_zh": "会议室",
+      "common_objects": [
+        "conference_table",
+        "chair",
+        "display",
+        "whiteboard"
+      ],
+      "likely_layout": [
+        "large table in the center",
+        "multiple chairs around table",
+        "display or whiteboard near wall"
+      ],
+      "confidence": 0.8
+    }
+  ]
+}

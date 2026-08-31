@@ -1,0 +1,77 @@
+{
+  "pandar_extrinsic_source": "configs/go2w/hesai_pandarxt16_extrinsics.yaml",
+  "pandar_extrinsic_status": "candidate_unconfirmed",
+  "confirmed": false,
+  "used_for": "mapping_assist_only",
+  "authorizes_motion": false,
+  "authorizes_safety": false,
+  "authorizes_tf_publication": false,
+  "imu_source": "/utlidar/imu",
+  "mode": "mapping_assist_only",
+  "ready_semantics": {
+    "mode": "MAPPING_ASSIST",
+    "motion_authorized": false,
+    "safety_authorized": false
+  },
+  "motion_odom_topic": "/go2w/odom/fused",
+  "source_transforms": {
+    "base_to_utlidar_lidar": {
+      "translation_m": [
+        0.28945,
+        0.0,
+        -0.046825
+      ],
+      "rotation_rpy_rad": [
+        0.0,
+        -0.263392653559,
+        0.0
+      ],
+      "source": "configs/go2w/official_reference.yaml"
+    },
+    "utlidar_lidar_to_utlidar_imu": {
+      "translation_m": [
+        -0.007698,
+        -0.014655,
+        0.00667
+      ],
+      "rotation_rpy_rad": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": "configs/go2w/official_reference.yaml"
+    },
+    "base_to_pandarxt16_candidate": {
+      "translation_m": [
+        0.13,
+        0.015,
+        0.014
+      ],
+      "rotation_rpy_deg": [
+        0.385,
+        0.905,
+        11.357
+      ],
+      "source": "configs/go2w/hesai_pandarxt16_extrinsics.yaml"
+    }
+  },
+  "derived_imu_to_pandar": {
+    "translation": [
+      -0.13041667,
+      0.029655,
+      0.09357132
+    ],
+    "rotation_matrix": [
+      0.94237645,
+      -0.18827621,
+      0.27654782,
+      0.19689704,
+      0.980418,
+      -0.00347767,
+      -0.2704777,
+      0.05772872,
+      0.96099386
+    ]
+  },
+  "generator": "scripts/go2w/generate_plain_slam_pandar_config.py"
+}

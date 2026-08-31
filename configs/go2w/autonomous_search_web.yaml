@@ -1,0 +1,132 @@
+# Go2-W autonomous semantic search WebUI configuration (plan book §117).
+#
+# Everything here is optional: environment variables (AUTONOMOUS_SEARCH_*)
+# and API request fields override these defaults.  Manual calibration items
+# never block the WebUI (plan book §2).
+
+web:
+  host: 127.0.0.1
+  port: 8765
+  search_event_buffer: 500
+
+search:
+  reasoner: semantic_navigation
+  backend: go2w_experimental     # go2w_experimental | mock | mock_metric
+  finish_on_visual_confirmation: true
+  # The WebUI search button enters the repository's existing
+  # operator_supervised_experiment path.  The operator remains responsible
+  # for holding the remote emergency stop; all motion bounds and per-step
+  # stop behavior stay in the high-level executor.
+  enable_autonomous_motion: true
+  operator_supervised_experiment: true
+
+  # D435 is the primary RGB-D camera; the WebUI start request can still opt
+  # out by passing rgbd_source=false.
+  rgbd_source: true
+  rgbd_base_url: http://192.168.123.18:8080
+
+  # SemanticNavigation V2 spatial exploration loop (PlaceGraph + Frontier +
+  # LongTermGoalSelector + LocalGoalExecutor).
+  spatial_v2: true
+
+  # PandarXT-16 plain_slam supplies the metric map/frontiers.  Its provider
+  # has camera-local fallback and remains mapping-assist only; it does not
+  # replace /go2w/odom/fused or authorize motion.
+  spatial_provider: plain_slam
+
+  # Use RTAB-Map ROS2 topics when the D435 bridge + rtabmap_slam are running.
+  # ``auto`` resolves to rtabmap when its topics are healthy, else degrades to
+  # the camera-local relative provider (never blocks the search).
+  rtabmap: false
+
+  max_search_seconds: 600
+  max_planning_cycles: 100
+  max_motion_steps: 50
+  verify_min_confidence: 0.6
+  # Optional visual override; empty means use SILICONFLOW_VISION_MODEL.
+  llm_model: ""
+
+map:
+  mode: auto                     # topological (current Go2-W) / metric (future)
+
+supervision:
+  operator_supervised: true
+  stop_search_on_last_browser_disconnect: false
+
+# --- Spatial semantic world-model tuning (plan §11 / §114) -------------------
+spatial:
+  provider: plain_slam
+
+  rtabmap:
+    enabled: auto
+    map_topic: /rtabmap/map
+    odom_topic: /rtabmap/odom
+    map_frame: map
+    odom_frame: odom
+    camera_frame: d435_color_optical_frame
+    base_frame: base_link
+
+  camera_extrinsic:
+    mode: tf2_then_nominal
+    nominal_translation_m: [0.10, 0.0, 0.30]
+
+  place_graph:
+    merge_distance_m: 0.35
+    relocation_min_displacement_m: 0.10
+
+  entity_map:
+    base_merge_distance_m: 0.35
+    confirm_min_observations: 2
+    stale_after_seconds: 120
+    geometry_weight: 0.60
+    semantic_weight: 0.15
+    place_weight: 0.10
+    appearance_weight: 0.10
+    temporal_weight: 0.05
+
+  route_planner:
+    mode: auto
+    allow_unknown: false
+    inflation_radius_m: 0.25
+    max_waypoints: 32
+
+  decision:
+    keep_alternatives: 3
+
+outputs:
+  session_dir: outputs/live_runs
+  events_jsonl: outputs/live_sessions
+
+# --- 2026-08-26 plan: breadcrumb-safe reverse recovery ----------------------
+go2w:
+  backward_recovery:
+    enabled: true
+    default_step_m: 0.10
+    min_step_m: 0.05
+    max_step_m: 0.12
+    max_age_sec: 8.0
+    heading_tolerance_deg: 8.0
+    max_per_place: 2
+    max_consecutive: 2
+
+# --- 2026-08-26 plan: topology-native navigation ----------------------------
+topology:
+  enabled: true
+  execute_route_edges: true
+  max_edge_failures: 2
+  blocked_edge_retry_sec: 120
+  place_merge_distance_m: 0.35
+  heading_bin_deg: 30
+
+frontier:
+  source: topology_local_geometry
+  heading_bin_deg: 30
+  merge_bearing_deg: 15
+
+memory:
+  observation_memory: true
+  experience_memory: true
+  commonsense_prior: true
+
+webui:
+  topology_only: true

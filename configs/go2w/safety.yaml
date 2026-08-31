@@ -1,0 +1,16 @@
+schema_version: 1
+platform_obstacle_avoidance_assumed: false
+dynamic_motion_horizon_enabled: true
+motion_horizon_profile: strict_safe
+strict_safe_max_step_m: 0.3
+absolute_max_step_m: 0.5
+target_confirm_max_step_m: 0.2
+default_stop_and_reobserve: true
+observe_while_moving: false
+shorten_on_target_candidate: true
+visual_navigation_execution_enabled: false
+video_navigation_allow_nav2_from_metric_video: false
+sensor_timeout_sec: 0.3
+minimum_front_clearance_m: 0.6
+command_watchdog_sec: 0.3
+motion_authorized_by_operator: false

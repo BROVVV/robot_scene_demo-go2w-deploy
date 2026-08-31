@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_scene_nav_bringup</name><version>0.1.0</version>
+  <description>Humble Nav2 baseline for robot_scene_demo.</description>
+  <maintainer email="maintainer@example.com">robot_scene_demo</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>nav2_bringup</exec_depend><exec_depend>nav2_collision_monitor</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend><exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

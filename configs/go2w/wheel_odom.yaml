@@ -1,0 +1,53 @@
+schema_version: 1
+implementation: go2w_wheel_odom_experimental
+enabled: true
+tuning_status: experimental_fallback_20260807
+validation_scope: small_range_motion_only
+wheel:
+  radius_m: 0.089
+  indices: [12, 13, 14, 15]
+  note: >
+    7-inch tire nominal radius 0.0889 m; kinematic/steering model is not
+    calibrated. Straight-line encoder integration is monotonic and reliable;
+    turning translation is approximated by pure in-place rotation (heading
+    from the robot's own Sport yaw). Do not use for long-range navigation
+    until a radius/kinematics calibration pass is completed.
+  turn_translation:
+    skip_during_turns: true
+    yaw_rate_threshold_radps: 0.10
+    note: >
+      Go2-W 4WS turns rotate the wheels asymmetrically, so the mean-dq model
+      over-counts translation (a 90 deg turn reported ~1.9 m). Translation is
+      therefore integrated only while |Sport yaw rate| <= 0.10 rad/s; turn
+      heading still comes from Sport yaw.
+heading:
+  source: sport_imu_rpy_z
+  note: >
+    Same yaw used by the validated turn controller; drifts about
+    -0.019 deg/min at rest.
+  fusion:
+    enabled: true
+    lio_odom_topic: /lio/odom
+    lio_yaw_weight: 0.35
+    lio_max_age_sec: 0.5
+    lio_max_position_m: 5.0
+    lio_max_yaw_step_rad: 0.05
+    note: >
+      Fused heading = Sport yaw + weight * (LIO yaw delta - Sport yaw delta)
+      while LIO is fresh, position-magnitude-bounded, finite and per-tick
+      consistent with Sport. Point-LIO translation remains BLOCKED; only its
+      yaw participates. On any LIO violation the fused output falls back to
+      Sport yaw for that tick; three consecutive violations log once.
+topics:
+  low: /lf/lowstate
+  sport: /lf/sportmodestate
+  odom: /go2w/odom/wheel
+  fused_odom: /go2w/odom/fused
+  fused_status: /go2w/odom/fused/status
+frames:
+  odom: odom_wheel
+  fused_odom: odom_fused
+  base: base_link
+safety:
+  authorizes_motion: false
+  publish_tf: false

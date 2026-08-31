@@ -1,0 +1,74 @@
+# Operator-Supervised Experiment Profile (Go2-W).
+#
+# This is a NEW experimental profile, explicitly NOT a production mode.
+# It does not modify or relax the formal Stage-2 / dual-LiDAR / Nav2
+# fail-closed policies (configs/go2w/* stay untouched).  It only declares
+# which automatic checks this experiment needs and which manual calibration
+# steps are NOT required for this experiment.
+
+profile: operator_supervised_experiment
+
+purpose:
+  production_safe: false
+  research_only: true
+  operator_present: true
+
+backend:
+  type: go2w_experimental
+
+high_level:
+  semantic_reasoning: true
+  reasoner: semantic_navigation
+  continuous_exploration: true
+
+manual_calibration_requirements:
+  required: false
+
+production_readiness:
+  stage2_readiness_required: false
+  pandar_extrinsic_required: false
+  dual_lidar_validation_required: false
+  four_direction_physical_evidence_required: false
+  nav2_gate_required: false
+
+automatic_checks:
+  motion_action_available: true
+  robot_mode_error_check: true
+  pose_freshness_if_available: true
+  camera_freshness: true
+  emergency_stop_available: true
+  stop_on_backend_error: true
+
+limits:
+  max_turn_deg: 30
+  max_forward_step_m: 1.5
+  max_radius_m: 0.0          # 0 = unlimited for the experiment (supervised)
+  front_half_plane_only: false
+  turn_only: false
+
+# Capability contract consumed by the high-level planner/backend wiring.
+# Names are intentionally the semantic primitives shown in experiment logs;
+# the Go2-W executor maps them to /go2w/motion Action commands.
+motion_primitives:
+  FORWARD: true
+  ROTATE_LEFT: true
+  ROTATE_RIGHT: true
+  REVERSE: false
+  LATERAL: false
+
+execution:
+  stop_after_each_step: true
+  reobserve_after_motion: true
+  # 2026-08-21 controlled forward calibration: a 0.30 m command produced
+  # 0.198 m wheel odometry at scale 1.0 (ratio 0.66).  Keep this bounded and
+  # re-verify every <=0.30 m segment; it never bypasses the distance gates.
+  forward_command_duration_scale: 1.5
+
+# Merge with the exploration policy defaults.
+exploration:
+  budget:
+    max_search_seconds: 600
+    max_planning_cycles: 100
+    max_motion_steps: 50
+  candidates:
+    heading_sectors: 12

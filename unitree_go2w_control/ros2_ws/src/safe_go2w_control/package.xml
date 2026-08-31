@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>safe_go2w_control</name>
+  <version>0.1.0</version>
+  <description>Bounded high-level Go2-W ROS 2 motion verification.</description>
+  <maintainer email="brov@example.com">brov</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>unitree_api</depend>
+  <depend>unitree_go</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

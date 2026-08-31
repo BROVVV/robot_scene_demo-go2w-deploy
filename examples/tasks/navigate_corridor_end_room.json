@@ -1,0 +1,11 @@
+{
+  "task_text": "去走廊尽头的房间",
+  "expected_task_type": "navigate_to_location",
+  "scene_fixture": "data/scene_kb/floor_layout.json",
+  "expected_capabilities": [
+    "extract_destination",
+    "observe_corridor_direction",
+    "plan_navigation_checkpoints"
+  ],
+  "success_criteria_zh": "应把走廊尽头作为目标地点，先确认走廊方向和门牌线索，再向下一个可验证标识移动。"
+}

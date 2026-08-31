@@ -1,0 +1,44 @@
+# Dual-LiDAR safety fusion policy (built-in L2 + PandarXT-16).
+#
+# Default is fail-closed: dual-lidar safety integration is DISABLED until the
+# Pandar extrinsic transform is validated and the operator explicitly enables
+# it. The Pandar may contribute diagnostic evidence (zero-return, coverage,
+# clock, self-occlusion) while it remains unvalidated, but never a formal
+# CLEAR or a published transform.
+schema_version: 1
+
+enabled: false
+require_validated_extrinsics: true
+unknown_is_clear: false
+max_evidence_age_seconds: 0.5
+
+sources:
+  builtin_l2:
+    present: true
+    transform_tier: validated_tf
+    can_contribute_clear: true
+  pandarxt16:
+    present: true
+    transform_tier: candidate_tf
+    can_contribute_clear: false
+
+fusion:
+  occupied_wins: true
+  require_full_sweep_for_clear: true
+  no_return_is_clear: false
+  unknown_is_clear: false
+
+rotation_observability:
+  footprint_radius_m: 0.350
+  envelope_radius_m: 0.511
+  requested_turn_range_deg: 30.0
+  require_full_360: true
+
+# The operator must flip enabled=true (and fill a validated extrinsics file)
+# only after a multi-scene calibration passes translation residual < 0.05 m
+# and yaw multi-scene consistency <= 3 degrees.
+promotion_requirements:
+  - multi_scene_extrinsics_confirmed
+  - self_occlusion_validated
+  - clock_tier_validated_for_metric
+  - hardware_state_binds_geometry_and_extrinsics

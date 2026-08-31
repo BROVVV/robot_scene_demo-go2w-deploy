@@ -1,0 +1,7 @@
+<!-- Humble-compatible behavior tree: prefer Nav2's packaged default unless customized. -->
+<root main_tree_to_execute="MainTree"><BehaviorTree ID="MainTree">
+  <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+    <PipelineSequence><RateController hz="1.0"><ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/></RateController><FollowPath path="{path}" controller_id="FollowPath"/></PipelineSequence>
+    <ReactiveFallback><GoalUpdated/><RoundRobin><ClearEntireCostmap service_name="local_costmap/clear_entirely_local_costmap"/><ClearEntireCostmap service_name="global_costmap/clear_entirely_global_costmap"/><Wait wait_duration="5"/></RoundRobin></ReactiveFallback>
+  </RecoveryNode>
+</BehaviorTree></root>

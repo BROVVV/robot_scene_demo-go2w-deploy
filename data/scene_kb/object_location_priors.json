@@ -1,0 +1,44 @@
+{
+  "object_location_priors": [
+    {
+      "object_name": "phone",
+      "name_zh": "手机",
+      "likely_locations": [
+        "on desk",
+        "beside keyboard",
+        "near charger",
+        "on sofa",
+        "on bedside table"
+      ],
+      "unlikely_locations": [
+        "ceiling",
+        "middle of corridor floor"
+      ],
+      "related_objects": [
+        "desk",
+        "keyboard",
+        "charger",
+        "sofa"
+      ],
+      "confidence": 0.86
+    },
+    {
+      "object_name": "chair",
+      "name_zh": "椅子",
+      "likely_locations": [
+        "beside desk",
+        "around conference_table",
+        "near wall"
+      ],
+      "unlikely_locations": [
+        "on desk",
+        "ceiling"
+      ],
+      "related_objects": [
+        "desk",
+        "conference_table"
+      ],
+      "confidence": 0.82
+    }
+  ]
+}

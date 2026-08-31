@@ -1,0 +1,65 @@
+source_clock: utlidar_cloud_and_imu_header
+scale: 1.0000085561900407
+offset_seconds: -14740.9559674263
+drift_ppm: 8.556190040698297
+fit_rmse_ms: 0.5932833170011177
+stable: true
+measurement_duration_sec: 119.97561383247375
+measured_at: '2026-08-06T02:01:33.690818+00:00'
+timestamp_semantics: host ROS receive time fit; not hardware exposure time
+cloud:
+  scale: 1.0000085561900407
+  offset_seconds: -14740.9559674263
+  drift_ppm: 8.556190040698297
+  fit_rmse_ms: 0.5932833170011177
+  sample_count: 1847
+  duration_sec: 119.97561383247375
+  stable: true
+imu:
+  scale: 1.0000092818953925
+  offset_seconds: -16037.118600130081
+  drift_ppm: 9.281895392510009
+  fit_rmse_ms: 0.12338035576044624
+  sample_count: 30075
+  duration_sec: 120.00292253494263
+  stable: true
+cloud_imu_relative_clock:
+  reference_offset_seconds: -0.06664926320330543
+  relative_drift_ppm: 1.5971700935343585
+  fit_rmse_ms: 0.8380797669913262
+  sample_count: 1847
+  duration_sec: 119.97561383247375
+  maximum_pair_receive_delta_ms: 4.547595977783203
+  stable: true
+alignment_policy: per_stream_linear_fit_for_ros_aligned_copies
+raw_lio_relative_time_preserved: true
+point_time_field_modified: false
+point_time_field_statistics:
+  frames_observed: 1847
+  frames_with_valid_time: 1847
+  field_modified: false
+  unit: unknown_not_inferred
+  minimum_observed: 0.0
+  maximum_observed: 0.06449242681264877
+  minimum_frame_span: 0.059823427349328995
+  maximum_frame_span: 0.06445376848205342
+  first_frame:
+    available: true
+    datatype: 7
+    count: 1
+    unit: unknown_not_inferred
+    minimum: 0.0
+    maximum: 0.06283915042877197
+    span: 0.06283915042877197
+    finite_points: 4007
+    total_points: 4007
+  last_frame:
+    available: true
+    datatype: 7
+    count: 1
+    unit: unknown_not_inferred
+    minimum: 0.0
+    maximum: 0.06279098987579346
+    span: 0.06279098987579346
+    finite_points: 3967
+    total_points: 3967

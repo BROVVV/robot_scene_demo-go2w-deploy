@@ -1,0 +1,17 @@
+python-dotenv
+PyYAML
+numpy
+openai
+pydantic
+networkx
+pandas
+matplotlib
+Pillow
+opencv-python-headless
+socksio
+streamlit
+fastapi
+uvicorn
+websockets
+httpx
+pytest

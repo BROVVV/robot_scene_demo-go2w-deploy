@@ -1,0 +1,90 @@
+# Isolated bring-up for the externally mounted Hesai PandarXT-16.
+#
+# This stream is diagnostic-only until the mounting transform, new full-body
+# envelope, self-occlusion, timestamps, and collision coverage are validated.
+# It must not replace /utlidar/cloud or feed the motion safety chain directly.
+# The current photo/ground-fit estimate is recorded separately in
+# hesai_pandarxt16_mount_candidate.yaml and must not be promoted here.
+lidar:
+  - driver:
+      use_gpu: false
+      source_type: 1
+      lidar_udp_type:
+        device_ip_address: 192.168.123.20
+        udp_port: 2368
+        ptc_port: 9347
+        # The sensor sends unicast to this workstation; the official driver
+        # requires this field to be empty when no multicast group is used.
+        multicast_ip_address: ""
+        use_ptc_connected: true
+        host_ptc_port: 0
+        correction_file_path: ""
+        firetimes_path: ""
+        recv_point_cloud_timeout: 3
+        ptc_connect_timeout: 3
+        host_ip_address: 192.168.123.99
+        fault_message_port: 0
+        standby_mode: -1
+        speed: -1
+        ptc_mode: 0
+        certFile: ""
+        privateKeyFile: ""
+        caFile: ""
+
+      pcap_type:
+        pcap_path: ""
+        correction_file_path: ""
+        firetimes_path: ""
+        pcap_play_synchronization: true
+        pcap_play_in_loop: false
+        play_rate_: 1.0
+
+      rosbag_type:
+        correction_file_path: ""
+        firetimes_path: ""
+
+      serial_type:
+        rs485_com: ""
+        rs232_com: ""
+        point_cloud_baudrate: 3125000
+        correction_save_path: ""
+        correction_file_path: ""
+
+      # Pandar is currently free-running. Use host receive time until PTP/GPS
+      # alignment is measured; sensor time must not be presented as aligned.
+      use_timestamp_type: 1
+      frame_start_azimuth: 0
+      thread_num: 4
+
+      # No base_link transform is claimed before a measured mount calibration.
+      transform_flag: false
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      roll: 0.0
+      pitch: 0.0
+      yaw: 0.0
+
+      fov_start: -1
+      fov_end: -1
+      channel_fov_filter_path: ""
+      multi_fov_filter_ranges: ""
+      enable_packet_loss_tool: true
+      distance_correction_flag: false
+      xt_spot_correction: false
+      device_udp_src_port: 10000
+      device_fault_port: 0
+      frame_frequency: 0
+      default_frame_frequency: 10.0
+      echo_mode_filter: 0
+
+    ros:
+      ros_frame_id: pandarxt16_link_unvalidated
+      ros_recv_packet_topic: /hesai/pandarxt16/packets_in
+      ros_send_packet_topic: /hesai/pandarxt16/packets_raw
+      ros_send_point_cloud_topic: /hesai/pandarxt16/points_raw
+      ros_send_imu_topic: /hesai/pandarxt16/imu_raw
+      ros_send_packet_loss_topic: /hesai/pandarxt16/packet_loss
+      send_packet_ros: false
+      send_point_cloud_ros: true
+      send_imu_ros: false

@@ -1,0 +1,87 @@
+# Go2-W plain_slam_ros2 integration master configuration.
+#
+# This file is the single switching point for the whole mapping-assist
+# pipeline.  Every consumer (config generator, launch files, scripts,
+# health monitor) reads its values from here or from the sub-files it
+# references.  Nothing here authorizes motion or safety integration.
+#
+# Safety posture (must never be changed by any tooling):
+#   mode = mapping_assist
+#   pandar extrinsic = candidate_unconfirmed
+#   motion_authorized = false
+#   safety_authorized = false
+schema_version: 1
+
+mode: mapping_assist
+status_source: configs/go2w/hesai_pandarxt16_extrinsics.yaml
+imu_source_default: /utlidar/imu
+imu_source_requirement: sensor_msgs/msg/Imu
+
+# Frame isolation: plain_slam owns only these frames.  It never publishes
+# or claims odom -> base_link, map -> odom, or base_link -> pandarxt16_link.
+frames:
+  odom: pslam_odom
+  imu: pslam_imu
+  map: pslam_map
+  base_child: base_link_mapping_assist
+  cloud_input_frame: pandarxt16_link_unvalidated
+
+# Topic layout (all mapping topics live under /go2w/slam/*).
+topics:
+  pandar_raw: /hesai/pandarxt16/points_raw
+  pandar_adapted: /go2w/slam/pandar_points
+  # Host-clock-aligned copy of the real /utlidar/imu stream.  The Unitree
+  # sensor epoch can lag the corrected DCU/host clock after boot.
+  imu: /go2w/slam/imu
+  imu_pose_raw: /go2w/slam/imu_pose_raw
+  imu_odom_raw: /go2w/slam/imu_odom_raw
+  lio_map_cloud: /go2w/slam/lio_map_cloud
+  aligned_scan: /go2w/slam/aligned_scan
+  deskewed_scan: /go2w/slam/deskewed_scan
+  map_3d: /go2w/slam/map_3d
+  map_2d: /go2w/slam/map_2d
+  odom_base: /go2w/slam/odom_base
+  base_pose: /go2w/slam/base_pose
+  graph_nodes: /go2w/slam/pose_graph_nodes
+  graph_odom_edges: /go2w/slam/pose_graph_odom_edges
+  graph_loop_edges: /go2w/slam/pose_graph_loop_edges
+  graph_poses: /go2w/slam/pose_graph_poses
+  health: /go2w/slam/health
+  ready: /go2w/slam/ready
+
+# Existing motion-authoritative odometry.  plain_slam must never publish
+# or merge into this topic.
+motion_odom_topic: /go2w/odom/fused
+
+# Sub-configuration files consumed by the config generator.
+sub_configs:
+  lio_params: configs/go2w/plain_slam_lio_params.yaml
+  slam_params: configs/go2w/plain_slam_slam_params.yaml
+  bridge: configs/go2w/plain_slam_bridge.yaml
+  lock: configs/go2w/plain_slam_lock.yaml
+
+# Runtime artifact layout (generated, never hand-edited).
+runtime:
+  dir: runtime/go2w/plain_slam
+  map_cache_dir: /tmp/go2w_plain_slam
+
+# Health / readiness thresholds shared with the health monitor.
+health:
+  ready:
+    adapted_cloud_stale_s: 1.0
+    imu_stale_s: 0.2
+    odom_stale_s: 1.0
+    aligned_scan_stale_s: 1.0
+    map_2d_stale_s: 2.0
+  degrade_flags:
+    - TIMESTAMP_SYNTHETIC
+    - EXTRINSIC_CANDIDATE
+    - IMU_DEGRADED
+    - LIO_STALE
+    - MAP2D_STALE
+
+# Quality gate: mapping readiness is NEVER motion/safety authorization.
+ready_semantics:
+  mode: MAPPING_ASSIST
+  motion_authorized: false
+  safety_authorized: false

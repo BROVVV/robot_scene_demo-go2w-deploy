@@ -1,0 +1,19 @@
+# Dependency lock for the plain_slam_ros2 integration.
+#
+# The commit below is filled in by scripts/go2w/vendor_plain_slam_ros2.sh (or
+# manually) with the SHA actually checked out in ros2_ws/src/plain_slam_ros2.
+# Never guess a SHA in documentation; the lock is a record of what is built.
+schema_version: 1
+plain_slam_ros2:
+  repository: https://github.com/NaokiAkai/plain_slam_ros2.git
+  commit: 0c4b610f6a486a906d51dd32e897bc787f67b208
+  vendored_at: 2026-08-31T03:45:00+08:00
+  notes: >
+    Academic/personal free use; commercial use requires the author's written
+    permission.  See docs/go2w/plain_slam_license_note.md.
+nanoflann:
+  minimum_version: "1.6.0"
+  preferred_tag: "v1.6.3"
+sophus:
+  repository: https://github.com/strasdat/Sophus.git
+  tag_or_commit: v0.9.5

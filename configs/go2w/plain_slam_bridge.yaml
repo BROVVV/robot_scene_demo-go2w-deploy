@@ -1,0 +1,112 @@
+# go2w_plain_slam_bridge node parameters (all thresholds configurable,
+# none hard-coded in C++).
+schema_version: 1
+
+pandar_adapter:
+  ros__parameters:
+    input_topic: /hesai/pandarxt16/points_raw
+    output_topic: /go2w/slam/pandar_points
+    expected_input_frame: pandarxt16_link_unvalidated
+
+    range_min_m: 0.30
+    range_max_m: 60.0
+
+    drop_nan: true
+    drop_inf: true
+
+    timestamp_mode: auto
+    scan_period_s: 0.10
+    absolute_stamp_tolerance_s: 5.0
+    timestamp_fallback: linear_scan
+
+    # The repository already has a Pandar self-occlusion candidate AABB, but
+    # it is equally unvalidated.  First version: do NOT cull close-range
+    # environment points with a large-volume box.  Only zero-point, NaN/Inf
+    # and min/max range filtering are applied.
+    self_filter_enabled: false
+
+    output_frame: pandarxt16_link_unvalidated
+
+plain_slam_odom_adapter:
+  ros__parameters:
+    imu_pose_topic: /go2w/slam/imu_pose_raw
+    imu_odom_topic: /go2w/slam/imu_odom_raw
+    odom_base_topic: /go2w/slam/odom_base
+    base_pose_topic: /go2w/slam/base_pose
+
+    odom_frame: pslam_odom
+    child_frame: base_link_mapping_assist
+
+    # plain_slam's internal pose is in the IMU frame; adapter converts to the
+    # base frame using the manufacturer geometry.  Never publish TF by
+    # default: avoids clashing with the existing TF owners.
+    publish_tf: false
+
+    official_reference_file: configs/go2w/official_reference.yaml
+
+pointcloud_to_occupancy:
+  ros__parameters:
+    scan_topic: /go2w/slam/aligned_scan
+    odom_topic: /go2w/slam/odom_base
+    map_topic: /go2w/slam/map_2d
+    debug_cloud_topic: /go2w/slam/map_debug_cloud
+    publish_debug_cloud: false
+
+    map_frame: pslam_odom
+    resolution_m: 0.10
+    width_m: 80.0
+    height_m: 80.0
+    origin_x_m: -40.0
+    origin_y_m: -40.0
+
+    publish_rate_hz: 2.0
+    max_scan_update_hz: 10.0
+
+    min_range_m: 0.35
+    max_range_m: 25.0
+
+    ground_mode: auto
+    ground_search_radius_m: 3.0
+    ground_histogram_bin_m: 0.05
+    ground_update_interval_s: 1.0
+    ground_ema_alpha: 0.3
+
+    floor_tolerance_m: 0.08
+    obstacle_min_height_m: 0.10
+    obstacle_max_height_m: 1.60
+
+    log_odds_hit: 0.85
+    log_odds_miss: -0.40
+    log_odds_min: -2.0
+    log_odds_max: 3.5
+
+    free_probability_threshold: 0.35
+    occupied_probability_threshold: 0.65
+
+    angular_ray_bin_deg: 0.5
+
+plain_slam_health_monitor:
+  ros__parameters:
+    adapted_cloud_topic: /go2w/slam/pandar_points
+    imu_topic: /go2w/slam/imu
+    odom_topic: /go2w/slam/odom_base
+    aligned_scan_topic: /go2w/slam/aligned_scan
+    map_2d_topic: /go2w/slam/map_2d
+    map_3d_topic: /go2w/slam/map_3d
+
+    health_topic: /go2w/slam/health
+    ready_topic: /go2w/slam/ready
+
+    adapted_cloud_stale_s: 1.0
+    imu_stale_s: 0.2
+    odom_stale_s: 1.0
+    aligned_scan_stale_s: 1.0
+    map_2d_stale_s: 2.0
+    map_3d_stale_s: 5.0
+
+    publish_rate_hz: 2.0
+
+    imu_min_freq_hz: 50.0
+    imu_max_accel_m_s2: 50.0
+    imu_min_accel_m_s2: 0.5
+    imu_bad_frame_grace: 10

@@ -1,0 +1,63 @@
+# Experimental Point-LIO L2 calibration candidate (2026-08-07).
+# Baseline: identity lidar->IMU extrinsic produced forward-translation
+# bearing ~69 deg off heading (lidar-only, 0.2 m filters) while turn yaw was
+# correct. Hypothesis: the published /utlidar/cloud scan frame is yaw-rotated
+# ~+69 deg relative to /utlidar/imu; identity R makes the filter treat lidar
+# translation as IMU-frame translation. This copy applies Rz(+69 deg).
+# NOT validated until a forward trial shows translation along heading.
+common:
+  lid_topic: /unilidar/cloud
+  imu_topic: /unilidar/imu
+  con_frame: false
+  con_frame_num: 1
+  cut_frame: false
+  cut_frame_time_interval: 0.1
+  time_lag_imu_to_lidar: 0.0
+
+preprocess:
+  lidar_type: 5
+  scan_line: 18
+  timestamp_unit: 0
+  blind: 0.5
+
+mapping:
+  imu_en: true
+  start_in_aggressive_motion: false
+  extrinsic_est_en: false
+  imu_time_inte: 0.004
+  satu_acc: 30.0
+  satu_gyro: 35.0
+  acc_norm: 9.81
+  lidar_meas_cov: 0.01
+  acc_cov_output: 500
+  gyr_cov_output: 1000
+  b_acc_cov: 0.0001
+  b_gyr_cov: 0.0001
+  imu_meas_acc_cov: 0.1
+  imu_meas_omg_cov: 0.1
+  gyr_cov_input: 0.01
+  acc_cov_input: 0.1
+  plane_thr: 0.1
+  match_s: 81
+  fov_degree: 180
+  det_range: 30.0
+  gravity_align: true
+  gravity: [0.0, 0.0, -9.81]
+  gravity_init: [0.0, 0.0, -9.81]
+  extrinsic_T: [0.007698, 0.014655, -0.00667]
+  # Rz(-69 deg): cos=0.358368, sin=-0.933580
+  extrinsic_R: [0.358368, 0.933580, 0.0,
+                -0.933580, 0.358368, 0.0,
+                0.0, 0.0, 1.0]
+
+odometry:
+  publish_odometry_without_downsample: false
+
+publish:
+  path_en: false
+  scan_publish_en: true
+  scan_bodyframe_pub_en: false
+
+pcd_save:
+  pcd_save_en: false
+  interval: -1

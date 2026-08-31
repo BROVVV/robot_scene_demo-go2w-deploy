@@ -1,0 +1,39 @@
+robot:
+  ip: 192.168.123.18
+  expected_motion_mode: ai-w
+
+ros:
+  distro: humble
+  domain_id: 0
+  rmw: rmw_cyclonedds_cpp
+
+topics:
+  wireless_controller_candidates:
+    - /wirelesscontroller
+    - /wirelesscontroller_unprocessed
+    - /lf/wirelesscontroller
+  sport_request: /api/sport/request
+  sport_response: /api/sport/response
+  sport_state: /lf/sportmodestate
+  low_state: /lf/lowstate
+
+capture:
+  pre_action_seconds: 8
+  post_action_seconds: 10
+  baseline_seconds: 15
+  idle_seconds: 12
+  repetitions: 3
+  record_rosout: true
+  enable_pcap: true
+  pcap_filter: "net 192.168.123.0/24 and (udp or arp or icmp)"
+  maximum_round_seconds: 60
+  minimum_free_disk_gb: 10
+
+safety:
+  passive_only: true
+  acquire_lease: false
+  allow_publish_sport_request: false
+  allow_publish_lowcmd: false
+  allow_rosbag_playback: false
+  require_confirmation: true
+  confirmation_text: I_CONFIRM_PASSIVE_CAPTURE

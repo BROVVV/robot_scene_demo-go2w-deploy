@@ -1,0 +1,30 @@
+/wirelesscontroller:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 50
+/wirelesscontroller_unprocessed:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 50
+/api/sport/request:
+  reliability: reliable
+  durability: volatile
+  history: keep_last
+  depth: 100
+/api/sport/response:
+  reliability: reliable
+  durability: volatile
+  history: keep_last
+  depth: 100
+/lf/sportmodestate:
+  reliability: reliable
+  durability: volatile
+  history: keep_last
+  depth: 100
+/lf/lowstate:
+  reliability: reliable
+  durability: volatile
+  history: keep_last
+  depth: 200

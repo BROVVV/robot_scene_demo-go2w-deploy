@@ -1,0 +1,38 @@
+schema_version: 1
+policy: fail_closed
+plan_only_requires_level_d: true
+execution_requires_second_confirmation: true
+current_evidence:
+  level_d_passed: false
+  physical_geometry_confirmed: true
+  footprint_confirmed: true
+  scan_frame_valid: true
+  lidar_fresh: false
+  lio_fresh: false
+  map_valid: false
+  tf_valid: false
+  compute_path_to_pose_ready: false
+  nav2_allow_execute: false
+  collision_monitor_active: false
+  velocity_smoother_active: false
+  lease_valid: false
+  arbiter_active: false
+  cmd_vel_bridge_active: false
+  cmd_vel_watchdog_active: false
+  operator_armed: false
+  second_confirmation: false
+  emergency_stop_confirmed: false
+  remote_override_clear: false
+  robot_error_zero: false
+notes:
+  - >
+    Level D motion LIO was attempted on 2026-08-07 under operator
+    authorization (GO2W_MOTION_READY). Both lidar-only and IMU-input
+    Point-LIO modes failed (frozen odom / km-scale divergence); LIO motion
+    remains BLOCKED and level_d_passed stays false. Evidence:
+    outputs/go2w_acceptance/point_lio_motion_small/motion_trial_summary.json.
+  - Geometry and footprint use the pinned Unitree Go2-W manufacturer reference in official_reference.yaml; live clearance validation remains required before execution.
+  - The base_link scan frame and stationary LiDAR preprocessing passed read-only live validation; lidar_fresh remains a live runtime field and is false while the stack is stopped.
+  - Official Unitree Point-LIO passed a five-minute stationary read-only trial, but lio_fresh remains a live runtime field and is false while the stack is stopped; Level D motion/map trials were not run.
+  - Runtime health fields must come from live ROS observations, never operator assumptions.
+  - This file authorizes neither motion nor a Sport lease.

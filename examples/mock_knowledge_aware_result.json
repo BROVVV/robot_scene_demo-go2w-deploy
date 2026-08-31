@@ -1,0 +1,410 @@
+{
+  "base_scene": {
+    "scene_summary_zh": "当前画面像办公室，能看到办公桌、显示器、键盘和椅子，但没有直接看到手机。",
+    "objects": [
+      {
+        "id": "obj_001",
+        "name": "desk",
+        "name_zh": "办公桌",
+        "category": "furniture",
+        "color": "white",
+        "attributes": [
+          "near wall",
+          "partly cluttered"
+        ],
+        "visible": true,
+        "position": {
+          "horizontal": "center",
+          "vertical": "front",
+          "relative_to_robot": "front",
+          "estimated_distance_m": 1.4
+        },
+        "bbox_2d": {
+          "x1": 0.12,
+          "y1": 0.36,
+          "x2": 0.86,
+          "y2": 0.82
+        },
+        "confidence": 0.91
+      },
+      {
+        "id": "obj_002",
+        "name": "monitor",
+        "name_zh": "显示器",
+        "category": "electronics",
+        "color": "black",
+        "attributes": [
+          "on desk"
+        ],
+        "visible": true,
+        "position": {
+          "horizontal": "center",
+          "vertical": "front",
+          "relative_to_robot": "front-center",
+          "estimated_distance_m": 1.5
+        },
+        "bbox_2d": {
+          "x1": 0.38,
+          "y1": 0.18,
+          "x2": 0.62,
+          "y2": 0.46
+        },
+        "confidence": 0.86
+      },
+      {
+        "id": "obj_003",
+        "name": "keyboard",
+        "name_zh": "键盘",
+        "category": "electronics",
+        "color": "black",
+        "attributes": [
+          "on desk",
+          "near monitor"
+        ],
+        "visible": true,
+        "position": {
+          "horizontal": "center",
+          "vertical": "front",
+          "relative_to_robot": "front-center",
+          "estimated_distance_m": 1.35
+        },
+        "bbox_2d": {
+          "x1": 0.42,
+          "y1": 0.54,
+          "x2": 0.68,
+          "y2": 0.63
+        },
+        "confidence": 0.82
+      }
+    ],
+    "relations": [
+      {
+        "source_id": "obj_002",
+        "target_id": "obj_001",
+        "relation_type": "on",
+        "description_zh": "显示器在办公桌上",
+        "estimated_distance_m": 0.05,
+        "confidence": 0.87
+      },
+      {
+        "source_id": "obj_003",
+        "target_id": "obj_001",
+        "relation_type": "on",
+        "description_zh": "键盘在办公桌上",
+        "estimated_distance_m": 0.05,
+        "confidence": 0.84
+      },
+      {
+        "source_id": "obj_003",
+        "target_id": "obj_002",
+        "relation_type": "near",
+        "description_zh": "键盘靠近显示器",
+        "estimated_distance_m": 0.25,
+        "confidence": 0.78
+      }
+    ],
+    "topology": {
+      "nodes": [
+        {
+          "id": "node_001",
+          "label": "办公桌",
+          "object_id": "obj_001"
+        },
+        {
+          "id": "node_002",
+          "label": "显示器",
+          "object_id": "obj_002"
+        },
+        {
+          "id": "node_003",
+          "label": "键盘",
+          "object_id": "obj_003"
+        }
+      ],
+      "edges": [
+        {
+          "source_id": "obj_002",
+          "target_id": "obj_001",
+          "relation_type": "on",
+          "label": "显示器在办公桌上",
+          "relation_id": null
+        },
+        {
+          "source_id": "obj_003",
+          "target_id": "obj_001",
+          "relation_type": "on",
+          "label": "键盘在办公桌上",
+          "relation_id": null
+        },
+        {
+          "source_id": "obj_003",
+          "target_id": "obj_002",
+          "relation_type": "near",
+          "label": "键盘靠近显示器",
+          "relation_id": null
+        }
+      ]
+    },
+    "target_decision": {
+      "target_text": "找到手机",
+      "is_present": false,
+      "matched_object_ids": [],
+      "match_reason_zh": "当前画面没有直接检测到手机。",
+      "confidence": 0.72
+    },
+    "route_plan": {
+      "route_type": "explore_likely_location",
+      "summary_zh": "目标当前不可见，建议优先检查办公桌右侧和键盘附近。",
+      "steps": [
+        {
+          "step_id": 1,
+          "action": "move_forward",
+          "distance_m": 0.8,
+          "turn_angle_deg": null,
+          "description_zh": "向前靠近办公桌，保持避障距离"
+        },
+        {
+          "step_id": 2,
+          "action": "turn_right",
+          "distance_m": null,
+          "turn_angle_deg": 15,
+          "description_zh": "略向右转，重新观察桌面右侧"
+        }
+      ],
+      "safety_notes_zh": [
+        "靠近桌边时降低速度，避免碰撞桌腿。"
+      ]
+    }
+  },
+  "parsed_task": {
+    "task_id": "task_001",
+    "raw_text": "找到手机",
+    "task_type": "find_object",
+    "target_object": "phone",
+    "target_location": null,
+    "target_room": null,
+    "scope": "current_room",
+    "constraints": [],
+    "parsed_slots": {
+      "object_zh": "手机"
+    },
+    "confidence": 0.9
+  },
+  "retrieved_knowledge": [
+    {
+      "id": "knowledge_001",
+      "knowledge_type": "room_type_prior",
+      "content_zh": "办公室通常包含办公桌、椅子、显示器和键盘。",
+      "source": "data/scene_kb/room_type_priors.json",
+      "confidence": 0.82,
+      "metadata": {
+        "room_type": "office"
+      }
+    },
+    {
+      "id": "knowledge_002",
+      "knowledge_type": "object_location_prior",
+      "content_zh": "手机在办公室中更可能出现在桌面、键盘旁、显示器底座附近或充电线附近。",
+      "source": "data/scene_kb/object_location_priors.json",
+      "confidence": 0.86,
+      "metadata": {
+        "object_name": "phone"
+      }
+    }
+  ],
+  "predictive_scene_graph": {
+    "nodes": [
+      {
+        "id": "psg_obj_001",
+        "label": "办公桌",
+        "node_type": "observed_object",
+        "object_id": "obj_001",
+        "visible": true,
+        "confidence": 0.91,
+        "reason_zh": "来自当前视觉检测结果。",
+        "source_ids": [
+          "obj_001"
+        ]
+      },
+      {
+        "id": "psg_obj_003",
+        "label": "键盘",
+        "node_type": "observed_object",
+        "object_id": "obj_003",
+        "visible": true,
+        "confidence": 0.82,
+        "reason_zh": "来自当前视觉检测结果。",
+        "source_ids": [
+          "obj_003"
+        ]
+      },
+      {
+        "id": "psg_inf_phone_001",
+        "label": "候选手机位置",
+        "node_type": "inferred_object",
+        "object_id": null,
+        "visible": false,
+        "confidence": 0.68,
+        "reason_zh": "当前像办公室且可见办公桌、键盘，知识库显示手机常在桌面或键盘旁。",
+        "source_ids": [
+          "knowledge_001",
+          "knowledge_002"
+        ]
+      },
+      {
+        "id": "psg_target_001",
+        "label": "目标：手机",
+        "node_type": "task_target_node",
+        "object_id": null,
+        "visible": false,
+        "confidence": 0.9,
+        "reason_zh": "来自用户任务。",
+        "source_ids": [
+          "task_001"
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "source_id": "psg_obj_003",
+        "target_id": "psg_obj_001",
+        "edge_type": "visible_relation",
+        "label": "键盘在办公桌上",
+        "confidence": 0.84,
+        "reason_zh": "来自当前场景关系。",
+        "source_ids": [
+          "obj_003",
+          "obj_001"
+        ]
+      },
+      {
+        "source_id": "psg_inf_phone_001",
+        "target_id": "psg_obj_001",
+        "edge_type": "containment_prior",
+        "label": "手机可能在办公桌桌面区域",
+        "confidence": 0.68,
+        "reason_zh": "来自手机位置先验和当前可见办公桌。",
+        "source_ids": [
+          "knowledge_002"
+        ]
+      },
+      {
+        "source_id": "psg_target_001",
+        "target_id": "psg_inf_phone_001",
+        "edge_type": "verification_relation",
+        "label": "需要靠近桌面右侧重新观察",
+        "confidence": 0.74,
+        "reason_zh": "候选位置尚未被当前视角验证。",
+        "source_ids": [
+          "task_001"
+        ]
+      }
+    ],
+    "observed_node_ids": [
+      "psg_obj_001",
+      "psg_obj_003"
+    ],
+    "inferred_node_ids": [
+      "psg_inf_phone_001",
+      "psg_target_001"
+    ],
+    "uncertainty_notes": [
+      "桌面右侧存在未完整观察区域。",
+      "当前没有看到充电线，手机位置先验只作为候选。"
+    ],
+    "recommended_verification_targets": [
+      "办公桌右侧",
+      "键盘旁"
+    ]
+  },
+  "hypotheses": [
+    {
+      "hypothesis_id": "hyp_001",
+      "target": "phone",
+      "possible_location": "办公桌右侧或键盘旁",
+      "supporting_evidence": [
+        "当前场景像办公室。",
+        "画面中可见办公桌、显示器和键盘。",
+        "知识库显示手机常见于桌面和键盘附近。"
+      ],
+      "contradicting_evidence": [
+        "当前视角没有直接看到手机。"
+      ],
+      "knowledge_sources": [
+        "knowledge_001",
+        "knowledge_002"
+      ],
+      "probability": 0.68,
+      "verification_action": "靠近办公桌右侧并重新观察桌面和键盘周围。",
+      "status": "proposed"
+    }
+  ],
+  "reasoning_summary_zh": "当前画面没有直接看到手机，但可见办公桌、显示器和键盘，场景更接近办公室。结合知识库，手机最可能在桌面、键盘旁或显示器底座附近，因此应先验证桌面右侧和键盘附近。",
+  "task_plan": {
+    "plan_type": "find_object",
+    "summary_zh": "先检查当前办公室中最可能放置手机的桌面区域，若仍未发现，再扩大到椅子附近和桌下区域。",
+    "steps": [
+      {
+        "step_id": 1,
+        "action_type": "move",
+        "target": "办公桌右侧",
+        "description_zh": "向前靠近办公桌右侧，保持桌边安全距离。",
+        "expected_result": "获得更清晰的桌面右侧视角。",
+        "depends_on": [],
+        "confidence": 0.78
+      },
+      {
+        "step_id": 2,
+        "action_type": "observe",
+        "target": "键盘旁和显示器底座",
+        "description_zh": "重新观察键盘旁和显示器底座附近是否有手机。",
+        "expected_result": "确认候选手机位置是否存在目标。",
+        "depends_on": [
+          1
+        ],
+        "confidence": 0.74
+      }
+    ],
+    "fallback_steps": [
+      {
+        "step_id": 3,
+        "action_type": "inspect",
+        "target": "椅子附近和桌下",
+        "description_zh": "如果桌面未发现手机，检查椅子附近和桌下区域。",
+        "expected_result": "覆盖办公室内次高概率区域。",
+        "depends_on": [
+          2
+        ],
+        "confidence": 0.55
+      }
+    ],
+    "success_conditions": [
+      "检测到手机并确认其位置。",
+      "完成高概率区域检查后给出未发现结论和下一步建议。"
+    ],
+    "uncertainty_notes": [
+      "单张图片无法确认桌面遮挡区域后方是否有手机。"
+    ]
+  },
+  "knowledge_updates": [
+    {
+      "update_id": "update_001",
+      "update_type": "confirmed",
+      "knowledge_type": "room_type_prior",
+      "content_zh": "当前观察确认办公室场景中存在办公桌、显示器和键盘。",
+      "source_observation_id": "obs_001",
+      "stable": true,
+      "confidence": 0.8
+    },
+    {
+      "update_id": "update_002",
+      "update_type": "ignored",
+      "knowledge_type": "temporary_state",
+      "content_zh": "本次没有看到手机，只作为当前任务状态，不写入长期知识。",
+      "source_observation_id": "obs_001",
+      "stable": false,
+      "confidence": 0.72
+    }
+  ],
+  "final_answer_zh": "当前没有直接看到手机。系统判断这里像办公室，手机较可能在办公桌右侧、键盘旁或显示器底座附近。建议先靠近办公桌右侧重新观察，再检查椅子附近和桌下区域。"
+}

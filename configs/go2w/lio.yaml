@@ -1,0 +1,47 @@
+schema_version: 1
+implementation: rko_lio
+implementation_version: 0.3.0
+selection_reason: native_ros2_humble_supports_standard_pointcloud2_imu_and_relative_point_timestamps
+enabled: false
+tuning_status: rejected_after_stationary_trials
+validation_scope: stationary_read_only
+base_frame: base_link
+odom_frame: odom
+lidar_topic: /go2w/lio_input/cloud_raw
+imu_topic: /go2w/lio_input/imu_raw
+outputs:
+  odometry: /lio/odom
+  path: /lio/path
+  cloud_registered: /lio/cloud_registered
+point_time:
+  field: time
+  interpretation: relative_to_cloud_header
+  multiplier_to_seconds: 1.0
+  evidence: measured_range_0_to_0.0645_seconds_matches_15.4_hz_scan_period
+  field_modified: false
+parameters:
+  initialization_phase: true
+  deskew: false
+  voxel_size_m: 0.40
+  minimum_range_m: 0.50
+  maximum_range_m: 30.0
+  max_correspondence_distance_m: 0.50
+  double_downsample: false
+  source: unitree_l2_official_range_point_lio_baseline_deskew_ab_stationary_trial
+  parameter_basis:
+    maximum_range: Unitree L2 User Manual v1.1 maximum range at 90 percent reflectivity
+    minimum_range: Unitree point_lio_unilidar L2 blind radius
+    voxel_size: Unitree point_lio_unilidar L2 surface/map filter size
+    deskew: Disabled only for the second stationary A/B diagnosis
+    validation: rejected_after_both_deskew_true_and_false_produced_false_motion
+extrinsics:
+  source: unitree_official_reference
+  rko_convention: sensor_to_base_quat_xyzw_xyz
+  runtime_resolution: compose_pinned_reference_frames
+  evidence: configs/go2w/official_reference.yaml
+safety:
+  input_timeout_seconds: 0.3
+  publish_tf: true
+  allow_second_odom_base_publisher: false
+  stationary_only: true
+  authorizes_motion: false

@@ -1,0 +1,37 @@
+schema_version: 1
+default_mode: observe_only
+motion_enabled: false
+max_search_duration_sec: 300
+max_search_steps: 30
+max_forward_step_m: 1.5
+minimum_forward_step_m: 0.1
+max_turn_step_deg: 30
+minimum_turn_step_deg: 10
+target_observation_distance_m: 1.2
+target_confirmation_stop_distance_m: 1.0
+minimum_front_clearance_m: 0.6
+sensor_timeout_sec: 0.3
+stop_settle_sec: 0.8
+observe_while_moving: false
+target_lost_strategy:
+  action: stop_reobserve_then_backtrack
+  maximum_reobserve_attempts: 2
+  require_stationary_observation: true
+candidate_region_visit_limit:
+  maximum_visits_per_region: 2
+  cooldown_steps: 3
+confirmation:
+  require_bbox: true
+  require_mask: true
+  require_crop_verify: true
+  require_track_vote: true
+  require_evidence_gate: true
+  llm_context_can_confirm: false
+navigation_goal:
+  require_visual_confirmation: true
+  require_3d_localization: true
+  target_center_is_goal: false
+  minimum_standoff_m: 1.0
+  maximum_standoff_m: 1.5
+  require_free_space: true
+  require_line_of_sight: true

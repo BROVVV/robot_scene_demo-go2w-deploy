@@ -1,0 +1,100 @@
+# Default exploration policy for the high-level autonomous semantic
+# exploration system.  All scoring weights are tunable policy values, not
+# research conclusions (see docs/HIGH_LEVEL_AUTONOMOUS_SEMANTIC_EXPLORATION.md).
+
+profile: exploration_default
+
+exploration:
+  # ---- search budget ------------------------------------------------------
+  budget:
+    max_search_seconds: 600
+    max_planning_cycles: 100
+    max_motion_steps: 50
+    max_replans: 100
+    max_same_node_visits: 2
+    max_navigation_failures_per_goal: 2
+    # 连续“无新信息”轮数：只要机器人仍在成功移动/转向探索，不计入空转；
+    # 仅在走不动（导航失败/无候选）时累计。20 轮作为最后的兜底阈值，避免无限空转。
+    max_consecutive_no_information_cycles: 20
+    verify_attempts: 1
+    negative_memory_ttl_seconds: 120
+
+  # ---- candidate generation ----------------------------------------------
+  candidates:
+    heading_sectors: 12            # 12 x 30 deg around the robot
+    max_candidates: 12
+    unvisited_sector_bonus: 0.30
+    anchor_reobserve_radius_m: 1.5
+    last_known_revisit_priority: 0.8
+    fallback_turn_deg: 30.0
+    min_turn_deg: 5.0
+
+  # ---- scoring weights (plan section 10.1) -------------------------------
+  scoring:
+    semantic_relevance: 0.35
+    novelty: 0.25
+    information_gain: 0.20
+    frontier_bonus: 0.10
+    continuity_bonus: 0.10
+    visited_penalty: 0.30
+    negative_evidence_penalty: 0.25
+    navigation_failure_penalty: 0.35
+    estimated_motion_cost: 0.15
+    oscillation_penalty: 0.20
+
+  # ---- memory / TTL -------------------------------------------------------
+  memory:
+    negative_ttl_seconds: 120
+    node_revisit_ttl_seconds: 60
+    max_same_node_visits: 2
+
+  # ---- recovery -----------------------------------------------------------
+  recovery:
+    replan_after_failure: true
+    timeout_retry_count: 1
+    backend_reconnect_attempts: 3
+    backend_reconnect_delay_seconds: 2.0
+
+  # ---- logging ------------------------------------------------------------
+  logging:
+    session_dir: outputs/live_runs
+    jsonl_path: outputs/live_sessions
+    save_graph_every_cycle: true
+
+backend:
+  type: go2w_experimental
+  go2w_experimental:
+    max_turn_deg_per_action: 30
+    forward_step_m: 1.5
+    max_forward_step_m: 1.5
+    allow_lateral: false
+    motion_timeout_sec: 60.0
+    relative_pose_source: auto
+    odom_candidates:
+      - /go2w/odom/fused
+      - /go2w/odom/wheel
+
+# ---------------------------------------------------------------------------
+# VLM-only low-latency runtime (read via app.config Settings / .env)
+# ---------------------------------------------------------------------------
+vlm_runtime:
+  mode: vlm_only
+  transport: daemon
+  fallback_to_subprocess: true
+  allow_api_concurrency: true
+  quick_max_tokens: 256
+  verify_max_tokens: 256
+  semantic_max_tokens: 1536
+  quick_timeout_seconds: 20
+  verify_timeout_seconds: 20
+  semantic_timeout_seconds: 45
+  semantic_background_enabled: true
+  semantic_initial_warmup_blocking: true
+  semantic_max_inflight: 1
+  semantic_ttl_seconds: 12.0
+  semantic_translation_refresh_m: 0.30
+  semantic_heading_sector_deg: 30.0
+  semantic_visual_change_enabled: true
+  planner_semantic_soft_stale_seconds: 15
+  planner_semantic_hard_stale_seconds: 45
+  verify_same_frame_max_calls: 1

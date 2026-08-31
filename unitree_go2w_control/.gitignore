@@ -1,0 +1,12 @@
+logs/
+*.pcap
+*.pcapng
+*.log
+.env
+*.secret
+*credential*
+build/
+install/
+log/
+__pycache__/
+reports/raw_*

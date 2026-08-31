@@ -1,0 +1,12 @@
+slam_3d_node:
+  ros__parameters:
+    map_cloud_dir: /tmp/go2w_plain_slam/
+    param_files_dir: /home/unitree/robotscene/runtime/go2w/plain_slam
+    imu_pose_topic: /go2w/slam/imu_pose_raw
+    deskewed_scan_cloud_topic: /go2w/slam/deskewed_scan
+    filtered_map_cloud_topic: /go2w/slam/map_3d
+    graph_nodes_topic: /go2w/slam/pose_graph_nodes
+    odom_edges_topic: /go2w/slam/pose_graph_odom_edges
+    loop_edges_topic: /go2w/slam/pose_graph_loop_edges
+    graph_poses_topic: /go2w/slam/pose_graph_poses
+    map_frame: pslam_map

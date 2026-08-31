@@ -1,0 +1,240 @@
+{
+  "scene_summary_zh": "当前是一个室内办公场景，前方有桌子、椅子、黑色手机和水杯。",
+  "objects": [
+    {
+      "id": "obj_001",
+      "name": "table",
+      "name_zh": "桌子",
+      "category": "furniture",
+      "color": "white",
+      "attributes": [
+        "rectangular",
+        "in front of robot"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "center",
+        "vertical": "front",
+        "relative_to_robot": "front",
+        "estimated_distance_m": 1.2
+      },
+      "bbox_2d": {
+        "x1": 0.18,
+        "y1": 0.36,
+        "x2": 0.82,
+        "y2": 0.78
+      },
+      "confidence": 0.91
+    },
+    {
+      "id": "obj_002",
+      "name": "phone",
+      "name_zh": "手机",
+      "category": "electronics",
+      "color": "black",
+      "attributes": [
+        "on table",
+        "small rectangular object"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "center",
+        "vertical": "front",
+        "relative_to_robot": "front-right",
+        "estimated_distance_m": 1.3
+      },
+      "bbox_2d": {
+        "x1": 0.53,
+        "y1": 0.43,
+        "x2": 0.62,
+        "y2": 0.5
+      },
+      "confidence": 0.86
+    },
+    {
+      "id": "obj_003",
+      "name": "chair",
+      "name_zh": "椅子",
+      "category": "furniture",
+      "color": "black",
+      "attributes": [
+        "with backrest",
+        "near table"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "front-left",
+        "estimated_distance_m": 1.6
+      },
+      "bbox_2d": {
+        "x1": 0.08,
+        "y1": 0.42,
+        "x2": 0.28,
+        "y2": 0.88
+      },
+      "confidence": 0.83
+    },
+    {
+      "id": "obj_004",
+      "name": "cup",
+      "name_zh": "水杯",
+      "category": "container",
+      "color": "white",
+      "attributes": [
+        "on table",
+        "near phone"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "right",
+        "vertical": "front",
+        "relative_to_robot": "front-right",
+        "estimated_distance_m": 1.25
+      },
+      "bbox_2d": {
+        "x1": 0.68,
+        "y1": 0.38,
+        "x2": 0.75,
+        "y2": 0.55
+      },
+      "confidence": 0.79
+    }
+  ],
+  "relations": [
+    {
+      "source_id": "obj_002",
+      "target_id": "obj_001",
+      "relation_type": "on",
+      "description_zh": "手机在桌子上",
+      "estimated_distance_m": 0.05,
+      "confidence": 0.88
+    },
+    {
+      "source_id": "obj_004",
+      "target_id": "obj_001",
+      "relation_type": "on",
+      "description_zh": "水杯在桌子上",
+      "estimated_distance_m": 0.05,
+      "confidence": 0.84
+    },
+    {
+      "source_id": "obj_004",
+      "target_id": "obj_002",
+      "relation_type": "near",
+      "description_zh": "水杯靠近手机",
+      "estimated_distance_m": 0.3,
+      "confidence": 0.77
+    },
+    {
+      "source_id": "obj_003",
+      "target_id": "obj_001",
+      "relation_type": "left_of",
+      "description_zh": "椅子在桌子左侧",
+      "estimated_distance_m": 0.6,
+      "confidence": 0.74
+    }
+  ],
+  "topology": {
+    "nodes": [
+      {
+        "id": "node_001",
+        "label": "桌子",
+        "object_id": "obj_001"
+      },
+      {
+        "id": "node_002",
+        "label": "手机",
+        "object_id": "obj_002"
+      },
+      {
+        "id": "node_003",
+        "label": "椅子",
+        "object_id": "obj_003"
+      },
+      {
+        "id": "node_004",
+        "label": "水杯",
+        "object_id": "obj_004"
+      }
+    ],
+    "edges": [
+      {
+        "source_id": "obj_002",
+        "target_id": "obj_001",
+        "relation_type": "on",
+        "label": "手机在桌子上",
+        "relation_id": null
+      },
+      {
+        "source_id": "obj_004",
+        "target_id": "obj_001",
+        "relation_type": "on",
+        "label": "水杯在桌子上",
+        "relation_id": null
+      },
+      {
+        "source_id": "obj_004",
+        "target_id": "obj_002",
+        "relation_type": "near",
+        "label": "水杯靠近手机",
+        "relation_id": null
+      },
+      {
+        "source_id": "obj_003",
+        "target_id": "obj_001",
+        "relation_type": "left_of",
+        "label": "椅子在桌子左侧",
+        "relation_id": null
+      }
+    ]
+  },
+  "target_decision": {
+    "target_text": "桌子上的手机",
+    "is_present": true,
+    "matched_object_ids": [
+      "obj_002"
+    ],
+    "match_reason_zh": "画面中央偏右的桌面上有一个黑色手机，符合“桌子上的手机”的描述。",
+    "confidence": 0.84
+  },
+  "route_plan": {
+    "route_type": "approach_visible_target",
+    "summary_zh": "目标在前方偏右约 1.3 米处，建议先向前靠近，再小角度右转并停止观察。",
+    "steps": [
+      {
+        "step_id": 1,
+        "action": "move_forward",
+        "distance_m": 1.0,
+        "turn_angle_deg": null,
+        "description_zh": "向前走 1.0 米"
+      },
+      {
+        "step_id": 2,
+        "action": "turn_right",
+        "distance_m": null,
+        "turn_angle_deg": 20,
+        "description_zh": "右转 20 度"
+      },
+      {
+        "step_id": 3,
+        "action": "move_forward",
+        "distance_m": 0.3,
+        "turn_angle_deg": null,
+        "description_zh": "再向前走 0.3 米"
+      },
+      {
+        "step_id": 4,
+        "action": "stop",
+        "distance_m": null,
+        "turn_angle_deg": null,
+        "description_zh": "停止并重新观察"
+      }
+    ],
+    "safety_notes_zh": [
+      "该路线基于单张图片估计，仅用于 Demo 展示",
+      "真实机器狗执行前需要避障和深度感知"
+    ]
+  }
+}

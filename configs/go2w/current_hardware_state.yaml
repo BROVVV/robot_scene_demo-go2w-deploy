@@ -1,0 +1,26 @@
+# Hardware state manifest binding the current physical rig to the exact config
+# hashes that describe it. Any change to the mount, geometry or extrinsic slot
+# must flip bindings below so stale evidence cannot be reused for motion.
+schema_version: 1
+
+hardware_profile: go2w_pandarxt16_v1
+
+geometry_config: configs/go2w/current_hardware_geometry.yaml
+pandar_config: configs/go2w/hesai_pandarxt16.yaml
+pandar_extrinsics: configs/go2w/hesai_pandarxt16_extrinsics.yaml
+pandar_mount_candidate: configs/go2w/hesai_pandarxt16_mount_candidate.yaml
+builtin_lidar_config: configs/go2w/lidar_preprocess.yaml
+
+builtin_lidar_present: true
+pandar_present: true
+
+height_m: 0.70
+highest_point: pandarxt16_protective_frame
+
+# Set to true only after the operator re-installs or moves the Pandar mount.
+# While true, the extrinsic candidate and any rotation lease are invalidated.
+mount_changed_since_calibration: false
+
+motion_authorization:
+  rotation: false
+  forward: false

@@ -1,0 +1,97 @@
+schema_version: 1
+robot_model: Unitree Go2-W
+reference_status: manufacturer_published
+retrieved_at: 2026-08-06T00:00:00+08:00
+scope: Static manufacturer geometry and built-in LiDAR frame reference; not a camera calibration or motion authorization.
+sources:
+  product_page:
+    publisher: Unitree Robotics
+    url: https://unitree-robot.com/mobile/go2-w/index.html
+    facts: Standing dimensions 70 cm x 43 cm x 50 cm; 7-inch pneumatic tires.
+  go2w_urdf:
+    publisher: Unitree Robotics
+    repository: https://github.com/unitreerobotics/unitree_ros
+    commit: f3772ce54c56ef2d34c6aee8100bc768896c7d19
+    path: robots/go2w_description/urdf/go2w_description.urdf
+    raw_url: https://raw.githubusercontent.com/unitreerobotics/unitree_ros/f3772ce54c56ef2d34c6aee8100bc768896c7d19/robots/go2w_description/urdf/go2w_description.urdf
+    sha256: f5940cbef9be28b76c075a94ed535c9c8c22c89a79b54ec8c854dc9f023c1ab8
+  unilidar_sdk2:
+    publisher: Unitree Robotics
+    repository: https://github.com/unitreerobotics/unilidar_sdk2
+    commit: 0e3c51f512e6b8ff60b8c32f160b412cb48445c2
+    facts: LiDAR and IMU axes are parallel; IMU origin in LiDAR coordinates is [-0.007698, -0.014655, 0.00667] m; point time is relative to the cloud start stamp.
+  unilidar_l2_manual:
+    publisher: Unitree Robotics
+    version: '1.1'
+    url: https://oss-global-cdn.unitree.com/static/Unitree%204D%20LiDAR%20L2%20User%20Manual.pdf
+    facts: Minimum detectable range 0.05 m; maximum range 30 m at 90 percent reflectivity and 15 m at 10 percent reflectivity.
+  point_lio_unilidar:
+    publisher: Unitree Robotics
+    repository: https://github.com/unitreerobotics/point_lio_unilidar
+    commit: 18ed5976d8fab2bd8a5148c26a40692bd3c0dc91
+    facts: Official L2 baseline uses 0.5 m blind radius, 0.4 m surface/map filters, 18 scan lines, and seconds for point time.
+dimensions:
+  standing_envelope_m:
+    length: 0.70
+    width: 0.43
+    height: 0.50
+    source: product_page
+    applicability: Manufacturer standing envelope; posture and tire compression can change the physical envelope.
+  tire_nominal_diameter_m:
+    value: 0.1778
+    source: product_page_7_inch
+  base_collision_box_m:
+    length: 0.3762
+    width: 0.0935
+    height: 0.114
+    source: go2w_urdf_base_collision
+  navigation_footprint_xy_m:
+    points:
+      - [0.35, 0.215]
+      - [0.35, -0.215]
+      - [-0.35, -0.215]
+      - [-0.35, 0.215]
+    source: product_page_standing_length_width
+    derivation: Centered rectangular projection of the manufacturer standing envelope about the official URDF base origin.
+    execution_validation_required: true
+frames:
+  base_frame_mapping:
+    official_urdf_frame: base
+    ros_frame: base_link
+    accepted: true
+    basis: Project REP-105 name for the official Go2-W base frame.
+  base_to_lidar:
+    official_urdf_child: radar
+    ros_child: utlidar_lidar
+    translation_m: [0.28945, 0.0, -0.046825]
+    # Published /utlidar/cloud and /utlidar/imu are already in the z-up SDK
+    # frame (live IMU specific force ~ (3.0, 0.0, 9.8) m/s^2 and cloud
+    # elevation -1.1..+89.6 deg). The official URDF pitch 2.8782 rad
+    # (~165 deg) applies to the sensor's native z-down mounting frame; the
+    # ROS frame therefore uses (2.8782 - pi) = -0.263393 rad, i.e. the
+    # official rotation minus a 180 deg y-flip. Verified live 2026-08-06.
+    rotation_rpy_rad: [0.0, -0.263392653559, 0.0]
+    source: go2w_urdf_radar_joint
+    accepted: true
+    accepted_basis: >
+      live IMU gravity direction, published z-up cloud elevation range, and
+      the official URDF leg-chain geometry; replaces the previous
+      manufacturer-flip interpretation that produced a world-down cloud.
+    verification_evidence:
+      - live_imu_specific_force_20260806: "(3.0, 0.0, 9.8) m/s^2 in utlidar_imu"
+      - live_cloud_elevation_20260806: "-1.14..+89.60 deg in utlidar_lidar"
+      - derived_pitch_deg: -15.09
+      - derived_rpy_rad: [0.0, -0.263392653559, 0.0]
+  lidar_to_lidar_imu:
+    parent: utlidar_lidar
+    child: utlidar_imu
+    translation_m: [-0.007698, -0.014655, 0.00667]
+    rotation_rpy_rad: [0.0, 0.0, 0.0]
+    source: unilidar_sdk2_coordinate_system_definition
+    accepted: true
+safety:
+  authorizes_motion: false
+  camera_extrinsics_available: false
+  base_ground_height_available: false
+  require_live_tf_and_cloud_orientation_check: true
+  require_footprint_clearance_validation_before_execution: true

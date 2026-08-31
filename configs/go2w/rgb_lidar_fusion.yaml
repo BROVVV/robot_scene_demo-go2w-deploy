@@ -1,0 +1,25 @@
+schema_version: 1
+enabled: true
+validation_status: experimental
+diagnostic_overlay_enabled: true
+navigation_geometry_validated: false
+authorizes_3d_localization: false
+acceptance_override:
+  requested_by: brov
+  reason: temporary experimental acceptance of the plane-based extrinsic candidate for stationary diagnostic overlays; extrinsic threshold lowered from 5.0 px to 40.0 px
+  fusion_limitation: extrinsic yaw/in-plane translation are weakly constrained; 3D localization is experimental and not trusted for navigation
+maximum_timestamp_delta_ms: 3000.0
+temporal_sync_note: live camera frames are ~2.33 s newer than the buffered /go2w/sensors/cloud frames; window widened experimentally so the fusion can pair them (static scene only)
+minimum_mask_points: 12
+mask_boundary_margin_px: 3
+depth_mad_multiplier: 3.5
+cluster_tolerance_m: 0.12
+minimum_cluster_points: 8
+maximum_cluster_extent_m: 1.5
+target_observation_standoff_m: 1.2
+observation_standoff_minimum_m: 1.0
+observation_standoff_maximum_m: 1.5
+require_free_space_for_observation_goal: true
+require_line_of_sight_for_observation_goal: true
+target_center_is_navigation_goal: false
+static_robot_only_without_trusted_camera_capture_time: true

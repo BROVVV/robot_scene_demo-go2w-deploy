@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "warning": "OFFLINE PREVIEW / 非 Nav2 真实路径 / 不可执行",
+  "map": {"resolution": 0.05, "origin": [-2.0, -2.0, 0.0]},
+  "obstacles": [
+    {"x": 0.8, "y": 0.15, "radius": 0.25},
+    {"x": 1.6, "y": 0.75, "radius": 0.3}
+  ],
+  "poses": [
+    {"x": 0.0, "y": 0.0, "yaw_rad": 0.0},
+    {"x": 0.5, "y": 0.0, "yaw_rad": 0.2},
+    {"x": 0.9, "y": 0.35, "yaw_rad": 0.7},
+    {"x": 1.2, "y": 0.8, "yaw_rad": 0.35},
+    {"x": 1.8, "y": 1.0, "yaw_rad": -0.25},
+    {"x": 2.5, "y": 0.8, "yaw_rad": 0.0}
+  ],
+  "feedback": [
+    {"current_pose": {"frame_id": "map", "x": 0.0, "y": 0.0, "yaw_rad": 0.0}, "distance_remaining_m": 2.9, "estimated_time_remaining_sec": 24.0, "navigation_time_sec": 0.0, "number_of_recoveries": 0},
+    {"current_pose": {"frame_id": "map", "x": 1.2, "y": 0.8, "yaw_rad": 0.35}, "distance_remaining_m": 1.35, "estimated_time_remaining_sec": 11.0, "navigation_time_sec": 12.0, "number_of_recoveries": 0}
+  ]
+}

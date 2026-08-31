@@ -1,0 +1,99 @@
+.env
+.env.*
+!.env.example
+!.env.go2w
+
+.venv/
+venv/
+env/
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Third-party repositories, downloaded model weights and generated package
+# trees are provisioned by scripts/bootstrap_fresh_machine.sh.  Keeping them
+# out of Git avoids nested repositories, licensing ambiguity and GitHub's
+# 100 MiB object limit.
+external/
+node_modules/
+
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Reproducible, locally built ROS 1 Point-LIO fallback workspace.
+point_lio_ws/
+
+outputs/*
+!outputs/.gitkeep
+logs/
+scripts/go2w/outputs/
+
+runtime/go2w/spool/*
+!runtime/go2w/spool/.gitkeep
+runtime/go2w/sessions/*
+!runtime/go2w/sessions/.gitkeep
+runtime/go2w/status/*
+!runtime/go2w/status/.gitkeep
+runtime/go2w/locks/*
+!runtime/go2w/locks/.gitkeep
+runtime/go2w/pids/*
+runtime/go2w/CANCEL_*
+runtime/go2w/EXECUTION_DISABLED
+runtime/go2w/*.pid
+runtime/go2w/*.log
+runtime/go2w/*.xml
+runtime/go2w/forward_*_validation*.jsonl
+runtime/go2w/detection_result.json
+runtime/go2w/llm_detection_result.json
+runtime/go2w/llm_verify_result.json
+
+*.log
+
+.DS_Store
+
+# Large local model/checkpoint files should stay outside the repo.
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.safetensors
+
+# Run/colcon logs, the nested official Hesai driver (cloned via README), and
+# local runtime JSON artifacts.
+log/
+ros2_ws/src/hesai_ros_driver/
+runtime/go2w/*.json
+
+# Live semantic observation frame cache (camera JPEGs, not source).
+runtime/go2w/semantic_observe_cache/
+# RGB-D HTTP source local frame cache and validation artifacts.
+runtime/go2w/rgbd_cache/
+runtime/go2w/rgbd_validate/
+runtime/go2w/rgbd_quick/
+runtime/go2w/rgbd_bridge_cache/
+
+# The Go2-W control source is versioned, but its local ROS/SDK build state is
+# reproducible and must stay out of Git.
+unitree_go2w_control/.venv/
+unitree_go2w_control/build/
+unitree_go2w_control/install/
+unitree_go2w_control/log/
+unitree_go2w_control/logs/
+unitree_go2w_control/captures/
+unitree_go2w_control/robot_capability_audit/captures/
+unitree_go2w_control/ros2_ws/build/
+unitree_go2w_control/ros2_ws/install/
+unitree_go2w_control/ros2_ws/log/
+unitree_go2w_control/**/__pycache__/
+unitree_go2w_control/**/*.pyc
+
+# Vendored upstream plain_slam_ros2: keep source, drop demo binaries.
+ros2_ws/src/plain_slam_ros2/data/
+ros2_ws/src/plain_slam_ros2/gifs/

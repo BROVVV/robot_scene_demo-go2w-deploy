@@ -1,0 +1,23 @@
+{
+  "image": "images/example_phone.jpg",
+  "target": "手机",
+  "objects": [
+    {
+      "label": "phone",
+      "bbox": [0.2, 0.2, 0.4, 0.5],
+      "attributes": ["black", "screen"],
+      "is_target": true
+    }
+  ],
+  "prediction": {
+    "candidate_objects": [
+      {
+        "object_id": "obj_001",
+        "label": "smartphone",
+        "bbox": [0.21, 0.2, 0.4, 0.49],
+        "decision": "confirmed",
+        "final_score": 0.88
+      }
+    ]
+  }
+}

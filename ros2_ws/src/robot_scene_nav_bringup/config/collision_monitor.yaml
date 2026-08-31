@@ -1,0 +1,16 @@
+collision_monitor:
+  ros__parameters:
+    base_frame_id: base_link
+    odom_frame_id: odom
+    cmd_vel_in_topic: /cmd_vel
+    cmd_vel_out_topic: /go2w/nav2_cmd_vel
+    state_topic: collision_monitor_state
+    transform_tolerance: 0.2
+    source_timeout: 0.30
+    polygons: [Stop, Slowdown]
+    observation_sources: [scan]
+    # Polygons enclose the official 0.70 x 0.43 m standing envelope. Runtime
+    # validation and the execution gate remain mandatory before motion.
+    Stop: {type: polygon, points: "[[0.45, 0.30], [0.45, -0.30], [-0.35, -0.30], [-0.35, 0.30]]", action_type: stop, min_points: 4}
+    Slowdown: {type: polygon, points: "[[0.8, 0.5], [0.8, -0.5], [-0.6, -0.5], [-0.6, 0.5]]", action_type: slowdown, slowdown_ratio: 0.35, min_points: 4}
+    scan: {type: scan, topic: /go2w/lidar/scan, min_height: 0.05, max_height: 1.5, enabled: true}

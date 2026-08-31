@@ -1,0 +1,9 @@
+"""Backward-compatible prompt exports for task understanding."""
+
+from app.task_understanding.prompt_templates import (
+    LLM_TASK_INTERPRETER_SYSTEM_PROMPT,
+    LLM_TASK_INTERPRETER_USER_PROMPT_TEMPLATE,
+)
+
+TASK_PARSE_SYSTEM_PROMPT = LLM_TASK_INTERPRETER_SYSTEM_PROMPT
+TASK_PARSE_USER_PROMPT_TEMPLATE = LLM_TASK_INTERPRETER_USER_PROMPT_TEMPLATE

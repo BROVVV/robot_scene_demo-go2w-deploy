@@ -1,0 +1,58 @@
+schema_version: 1
+robot_model: Unitree Go2-W
+measurement_status: unmeasured
+confirmed: false
+notes: Manufacturer dimensions and LiDAR frames are recorded separately in official_reference.yaml. This file remains reserved for missing on-robot camera pose, base height, and physical validation data.
+measurements:
+  body_max_length_m: &empty_length
+    value: null
+    measurement_method: null
+    operator: null
+    timestamp: null
+    uncertainty: null
+  body_max_width_m:
+    <<: *empty_length
+  stationary_standing_height_m:
+    <<: *empty_length
+  wheel_outer_envelope_length_m:
+    <<: *empty_length
+  wheel_outer_envelope_width_m:
+    <<: *empty_length
+  base_link_ground_height_m:
+    <<: *empty_length
+  front_camera_x_m: &empty_pose
+    <<: *empty_length
+  front_camera_y_m:
+    <<: *empty_pose
+  front_camera_z_m:
+    <<: *empty_pose
+  front_camera_roll_rad:
+    <<: *empty_pose
+  front_camera_pitch_rad:
+    <<: *empty_pose
+  front_camera_yaw_rad:
+    <<: *empty_pose
+  lidar_x_m:
+    <<: *empty_pose
+  lidar_y_m:
+    <<: *empty_pose
+  lidar_z_m:
+    <<: *empty_pose
+  lidar_roll_rad:
+    <<: *empty_pose
+  lidar_pitch_rad:
+    <<: *empty_pose
+  lidar_yaw_rad:
+    <<: *empty_pose
+  lidar_imu_x_m:
+    <<: *empty_pose
+  lidar_imu_y_m:
+    <<: *empty_pose
+  lidar_imu_z_m:
+    <<: *empty_pose
+  lidar_imu_roll_rad:
+    <<: *empty_pose
+  lidar_imu_pitch_rad:
+    <<: *empty_pose
+  lidar_imu_yaw_rad:
+    <<: *empty_pose

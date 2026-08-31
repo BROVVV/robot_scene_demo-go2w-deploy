@@ -1,0 +1,133 @@
+schema_version: 1
+implementation: unitree_point_lio_unilidar
+upstream_commit: 18ed5976d8fab2bd8a5148c26a40692bd3c0dc91
+enabled: true
+tuning_status: stationary_read_only_validated
+validation_scope: stationary_read_only
+isolation:
+  environment: go2w_point_lio_noetic
+  ros_distribution: noetic
+  host: 127.0.0.1
+  port: 29876
+bridge:
+  generic_topic_forwarding: false
+  ros2_cloud_input: /go2w/lio_input/cloud_raw
+  ros2_imu_input: /go2w/lio_input/imu_raw
+  ros1_cloud_input: /unilidar/cloud
+  ros1_imu_input: /unilidar/imu
+  ros1_odometry_output: /pointlio/odom
+  ros1_registered_cloud_output: /pointlio/cloud_registered
+outputs:
+  odometry: /lio/odom
+  path: /lio/path
+  cloud_registered: /lio/cloud_registered
+frames:
+  lidar: utlidar_lidar
+  imu: utlidar_imu
+  odom: odom
+  base: base_link
+imu_frame:
+  # Live 2026-08-07 turn matrix (all with lidar-only mode + 0.2 m filters):
+  # 1) gyro (1,1,1) + identity extrinsic: stable, yaw opposite Sport.
+  # 2) gyro (1,1,-1): fixed yaw vs Sport in IMU-input mode but unstable.
+  # 3) gyro (1,-1,-1) + identity extrinsic: stable, yaw opposite Sport.
+  # 4) gyro (1,-1,-1) + extrinsic Rz(180): stable, yaw opposite Sport.
+  # The robot's own IMU z has the same sign as Sport yaw while the raw lidar
+  # gyro z is opposite; the stable LiDAR-only solutions agree with the raw
+  # lidar frame. Conclusion pending operator visual confirmation: Go2-W Sport
+  # yaw appears physically mirrored (positive = right turn) while the lidar
+  # IMU/cloud are standard z-up right-handed. Keep bridge default (1,1,1)
+  # until the physical direction is confirmed.
+  gyro_sign: [1.0, 1.0, 1.0]
+  # Operator visually confirmed (2026-08-07 10:58): a +10 deg action is a
+  # physical LEFT turn. The stable LiDAR-only LIO reports -8..-10 deg for that
+  # turn, so its world frame is yaw-mirrored relative to the base frame.
+  # Reflect the odometry world across the X-Z plane (y -> -y, yaw -> -yaw).
+  yaw_reflect: true
+  verification:
+    date: 2026-08-07
+    evidence:
+      - outputs/go2w_acceptance/imu_turn_verify_20260807/imu_turn_log.jsonl
+      - outputs/go2w_acceptance/imu_turn_verify_20260807/imu_turn_log_corrected.jsonl
+    summary: >
+      z-only correction (1,1,-1) fixed the LIO yaw sign (+10 deg command ->
+      +2.15 deg LIO yaw instead of -8.2) but the pose still diverged while
+      stationary after turns. Switched to Rx(180) = (1,-1,-1) for the raw
+      z-down gyro chip frame.
+extrinsics:
+  source: unitree_official_reference
+  point_lio_lidar_to_imu_source: unitree_point_lio_unilidar_l2_baseline
+  point_lio_output_body: imu
+  output_conversion: compose_world_to_imu_with_inverse_base_to_imu
+safety:
+  input_timeout_seconds: 0.3
+  stationary_only: true
+  authorizes_motion: false
+  forwards_control_messages: false
+  pose_republished_when_stale: false
+motion_validation:
+  status: turns_validated_linear_blocked_20260807
+  date: 2026-08-07
+  operator_authorization: GO2W_MOTION_READY (small-range motion and turning)
+  trials:
+    - mode: lidar_only
+      commanded: vx=0.05 m/s x 2 s forward
+      result: wheels rotated (max dq 0.64 rad/s for 3.15 s) but LIO odom stayed at stationary-drift level
+    - mode: imu_input
+      commanded: relative yaw +10 deg then -10 deg at 0.15 rad/s
+      result: first turn partially tracked with opposite yaw sign; pose then diverged to km-scale while stationary (x 16368 m, z -4271 m at log end)
+    - mode: lidar_only_dense_official
+      commanded: relative yaw +10 deg then -10 deg at 0.15 rad/s
+      config: use_imu_as_input=false, filter_size_surf/map=0.2, official identity
+        extrinsic, no gyro sign correction, bridge yaw_reflect=true
+      result: LIO yaw tracked 87% of magnitude with sign opposite to the
+        Action/Sport convention; position drift cm-level; stationary drift
+        2 cm/0.3 deg over 10 s. LIO stable and internally consistent.
+    - mode: lidar_only_dense_yaw_reflect_final
+      commanded: relative yaw +10 deg then -10 deg at 0.15 rad/s
+      config: lidar-only + 0.2 m filters + official identity + no gyro
+        correction + bridge yaw_reflect=true (operator confirmed +10 deg is a
+        physical LEFT turn)
+      result: physical left +11.01 deg -> LIO yaw +9.80 deg (89%); physical
+        right -9.92 deg -> LIO yaw -8.82 deg (89%); position drift cm-level;
+        wheels actively braked after turns (no post-STOP rollback beyond
+        ~0.5 cm slow creep). Verified 2026-08-07 11:07.
+  conclusion: >
+    Operator visually confirmed +10 deg is a physical left turn. The stable
+    lidar-only LIO world is yaw-mirrored relative to the base frame, so the
+    bridge now reflects the odometry world (y -> -y, yaw -> -yaw); small turns
+    now track with correct sign and ~89% magnitude. Forward/rectangular motion
+    retests (0.05 and 0.12 m/s) show the robot's low-speed deadband prevents
+    commanded distances, and when translation does occur the LIO magnitude is
+    close but the direction is systematically rotated ~55-60 deg with z drift,
+    in both lidar-only and IMU-input modes. Linear LIO is BLOCKED; the
+    experimental wheel-encoder + Sport-yaw odometry (/go2w/odom/wheel) is the
+    small-range fallback. Level D stays BLOCKED.
+  evidence:
+    - outputs/go2w_acceptance/point_lio_motion_small/motion_trial_summary.json
+    - outputs/go2w_acceptance/point_lio_motion_small/odom_log.jsonl
+    - outputs/go2w_acceptance/point_lio_motion_small_imu/odom_log.jsonl
+    - outputs/go2w_acceptance/imu_turn_verify_20260807/
+    - outputs/go2w_acceptance/imu_turn_verify_20260807/imu_turn_log_final_fix.jsonl
+validation:
+  evidence:
+    - outputs/go2w_acceptance/point_lio_stationary/result_5min.json
+    - outputs/go2w_acceptance/point_lio_stationary_corrected_tf/result.json
+  stale_evidence:
+    - outputs/go2w_acceptance/point_lio_stationary/stale_timeout_5min.json
+    - outputs/go2w_acceptance/point_lio_stationary_corrected_tf/stale_timeout.json
+  evidence_note: >
+    The corrected base_to_lidar rotation (2.8782 - pi) rad was introduced on
+    2026-08-06; the corrected-TF 60 s stationary rerun passed all gates.
+  duration_seconds: 299.93334555625916
+  odometry_samples: 4615
+  median_rate_hz: 15.385109731091882
+  maximum_stamp_gap_seconds: 0.06864666938781738
+  final_displacement_m: 0.07851094077184916
+  maximum_displacement_m: 0.0933579057724731
+  yaw_span_deg: 1.6242589252913882
+  sustained_linear_speed_p95_mps: 0.04105992353273908
+  sustained_angular_speed_p95_radps: 0.010661616633468795
+  bridge_dropped_messages: 0
+  first_stale_elapsed_seconds: 0.1639105450012721
+  passed: true

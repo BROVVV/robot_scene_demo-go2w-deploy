@@ -1,0 +1,70 @@
+# RGB-D Spatial Semantic Exploration configuration (plan §115).
+# Merge with the existing exploration policy; this file is the V2 spatial
+# overlay, not a replacement for configs/exploration/default.yaml.
+
+camera:
+  primary: d435
+  d435_base_url: http://192.168.123.18:8080
+  require_atomic_rgbd: true
+  fallback_camera: go2w_builtin
+
+depth:
+  min_m: 0.15
+  max_m: 8.0
+  bbox_inner_ratio: 0.5
+
+spatial:
+  preferred_provider: camera_local   # rtabmap when available, else camera_local
+  fallback_provider: camera_local
+  merge_distance_m: 0.25
+  relocation_min_displacement_m: 0.10
+
+place_graph:
+  merge_distance_m: 0.25
+  relocation_min_displacement_m: 0.10
+
+local_scan:
+  max_rotations: 3
+  max_heading_sectors: 4
+
+frontier:
+  min_component_size: 10
+  relative_step_m: 0.25
+
+psg:
+  enabled: true
+  zero_match_weight: 1.0
+  partial_match_weight: 0.7
+  strong_match_weight: 0.2
+  verify_weight: 0.0
+
+exploration:
+  max_search_seconds: 600
+  max_planning_cycles: 100
+  max_relocations: 50
+
+backend:
+  type: go2w_experimental
+
+# Semantic object topology (plan §27): persistent OBJECT->OBJECT relation graph
+# and WebUI semantic-topology projection.  These params only affect the display
+# projection; they never change navigation/motion/safety.
+semantic_topology:
+  enabled: true
+  default_web_view: true
+
+  relation_min_confidence: 0.45
+  relation_confirm_min_observations: 2
+  relation_stale_after_seconds: 180
+
+  include_tentative_objects: true
+  include_stale_objects: true
+  include_view_relative_relations: true
+
+  max_relation_descriptions: 5
+
+  layout:
+    mode: layered_bfs
+    layer_gap_x: 180
+    row_gap_y: 90
+    component_gap_y: 150

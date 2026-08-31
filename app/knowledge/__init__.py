@@ -1,0 +1,1 @@
+"""Scene knowledge base helpers."""

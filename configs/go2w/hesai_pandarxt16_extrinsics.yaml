@@ -1,0 +1,44 @@
+# Formal PandarXT-16 extrinsics slot relative to base_link.
+#
+# This file is deliberately NOT confirmed. It is seeded from the
+# photo/static-registration candidate so the hardware state manifest can bind
+# to a stable config path. Until a multi-scene calibration passes the
+# translation/yaw thresholds, the candidate values here may only contribute
+# diagnostic evidence, never a published TF or safety clearance.
+schema_version: 1
+sensor_model: Hesai PandarXT-16
+calibration_status: candidate_unconfirmed
+confirmed: false
+authorizes_tf_publication: false
+authorizes_safety_integration: false
+authorizes_motion: false
+
+coordinate_convention:
+  parent_frame: base_link
+  child_frame: pandarxt16_link
+  x: forward
+  y: left
+  z: up
+  rotation: fixed-axis roll_pitch_yaw_radians
+
+transform_candidate:
+  translation_m:
+    x: 0.130
+    y: 0.015
+    z: 0.014
+  rotation_rpy_deg:
+    roll: 0.385
+    pitch: 0.905
+    yaw: 11.357
+  source: hesai_pandarxt16_mount_candidate_20260813
+  note: >
+    Seeded from the operator-photo + static cross-registration candidate only.
+    Multi-scene calibration output from scripts/go2w/calibrate_pandarxt16_extrinsics.py
+    must overwrite this file's transform fields and set confirmed=true before any
+    authorizes_* flag may be raised.
+
+acceptance_thresholds:
+  translation_residual_m: 0.05
+  yaw_multi_scene_consistency_deg: 3.0
+  minimum_valid_scenes: 3
+  require_normal_diversity: true
