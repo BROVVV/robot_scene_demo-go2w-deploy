@@ -1,0 +1,67 @@
+tmp
+tmp/*
+
+src/scan_intensity_matcher.cpp
+include/plain_slam/scan_intensity_matcher.hpp
+src/lidar_imu_calibration.cpp
+include/plain_slam/lidar_imu_calibration.hpp
+src/GNSSConvert.cpp
+src/GNSSConvert.h
+src/odom_gnss_recorder.cpp
+src/tgm_estimator.cpp
+	
+data
+data/*
+
+doc/jp/Makefile
+doc/jp/*aux
+doc/jp/*bbl
+doc/jp/*blg
+doc/jp/*dvi
+doc/jp/*log
+doc/jp/root.pdf
+doc/jp/book_opt.pdf
+
+doc/en/Makefile
+doc/en/*aux
+doc/en/*bbl
+doc/en/*blg
+doc/en/*dvi
+doc/en/*log
+doc/en/root.pdf
+doc/en/book_opt.pdf
+
+doc/figs/*svg
+
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app

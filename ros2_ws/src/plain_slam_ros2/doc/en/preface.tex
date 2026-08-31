@@ -1,0 +1,45 @@
+\section*{Preface}
+
+I have been engaged in research on autonomous navigation of mobile robots since joining my laboratory in 2011.
+At that time, 3D LiDAR was not yet common; when people said ``LiDAR,'' they generally meant 2D LiDAR.
+For localization using 2D LiDAR, Monte Carlo Localization (MCL) \cite{DellaertICRA1999} was the mainstream method.
+MCL is a particle filter-based approach and belongs to the family of probabilistic methods.
+Because it is relatively easy to implement and highly extensible, I have mainly focused my research on probabilistic localization methods using MCL.
+In particular, I have worked on proposing new frameworks centered around 2D LiDAR.
+If I may be a little self-promotional, one of my representative works is the following paper \cite{AkaiJFR2023}.
+
+However, in the broader robotics community, 3D LiDAR was becoming the standard.
+Around 2023, I was approached by a company asking whether it would be possible to develop an LIO system using 3D LiDAR.
+Although I was familiar with the term LIO, I had not been closely following its research.
+To start, I read the well-known FAST LIO paper \cite{FAST-LIO}.
+My first impression after reading it was simply, ``I don't understand.''
+The paper assumed knowledge of Lie groups and Lie algebras as if it were common sense, and for someone without that background, it was incomprehensible.
+However, I also realized that what FAST LIO achieved was remarkable, so I decided to work through it.
+After about six months of study, I managed to understand the minimum essentials and became able to implement LIO.
+
+Still, implementing LIO alone did not result in clean maps.
+From there, I also implemented graph-based SLAM using Lie groups.
+After more than a year, I felt I had finally acquired at least the foundational understanding of LIO and SLAM with Lie groups.
+Based on this experience, I decided to reorganize and reimplement the functionality of LIO and SLAM, which led to the development of {\it plain\_slam\_ros2}\footnote{\url{https://github.com/NaokiAkai/plain_slam_ros2}}.
+SLAM software--especially LIO and related systems--tends to become very large and complex, making it difficult for newcomers to explore the code.
+In contrast, {\it plain\_slam\_ros2} was designed to be relatively compact and well-organized.
+After creating {\it plain\_slam\_ros2}, I decided to compile all the knowledge I had used into a single reference, in the hope that it would serve as a resource for those studying LiDAR SLAM in the future.
+That was the motivation behind writing this book\footnote{I refer to it as a ``book,'' but please note that it has not undergone formal external review, so there may be errors.}.
+
+To understand this book, the following mathematical knowledge is assumed as prerequisites:
+%
+\begin{itemize}
+  \item Linear algebra (matrix operations, rotation matrices, rigid transformations)
+  \item Calculus (partial derivatives of multivariable functions, Jacobians)
+\end{itemize}
+%
+Additionally, the following knowledge will deepen your understanding:
+%
+\begin{itemize}
+  \item Probability and statistics (Gaussian distribution, maximum likelihood estimation)
+  \item Numerical optimization (nonlinear least squares)
+  \item Lie groups and Lie algebras (${\rm SO}(3)$, ${\rm SE}(3)$ and their exponential/logarithmic maps)
+\end{itemize}
+%
+That said, the minimum necessary mathematical background required to follow this book is summarized in Chapter~\ref{chap:数学的知識}.
+

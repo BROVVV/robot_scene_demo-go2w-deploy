@@ -1,0 +1,543 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="192.87119mm"
+   height="85.071495mm"
+   viewBox="0 0 192.87119 85.071495"
+   version="1.1"
+   id="svg5"
+   inkscape:version="1.1.2 (0a00cf5339, 2022-02-04)"
+   sodipodi:docname="overview.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:document-units="mm"
+     showgrid="false"
+     inkscape:zoom="1.2496322"
+     inkscape:cx="269.27923"
+     inkscape:cy="48.414245"
+     inkscape:window-width="1858"
+     inkscape:window-height="1216"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1"
+     fit-margin-top="0"
+     fit-margin-left="0"
+     fit-margin-right="0"
+     fit-margin-bottom="0" />
+  <defs
+     id="defs2">
+    <marker
+       style="overflow:visible"
+       id="Arrow1Lend"
+       refX="0"
+       refY="0"
+       orient="auto"
+       inkscape:stockid="Arrow1Lend"
+       inkscape:isstock="true">
+      <path
+         transform="matrix(-0.8,0,0,-0.8,-10,0)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         id="path18025" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Arrow1Lend-9"
+       refX="0"
+       refY="0"
+       orient="auto"
+       inkscape:stockid="Arrow1Lend"
+       inkscape:isstock="true">
+      <path
+         transform="matrix(-0.8,0,0,-0.8,-10,0)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         id="path18025-2" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Arrow1Lend-9-5"
+       refX="0"
+       refY="0"
+       orient="auto"
+       inkscape:stockid="Arrow1Lend"
+       inkscape:isstock="true">
+      <path
+         transform="matrix(-0.8,0,0,-0.8,-10,0)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         id="path18025-2-9" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Arrow1Lend-9-5-2"
+       refX="0"
+       refY="0"
+       orient="auto"
+       inkscape:stockid="Arrow1Lend"
+       inkscape:isstock="true">
+      <path
+         transform="matrix(-0.8,0,0,-0.8,-10,0)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         id="path18025-2-9-8" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Arrow1Lend-7"
+       refX="0"
+       refY="0"
+       orient="auto"
+       inkscape:stockid="Arrow1Lend"
+       inkscape:isstock="true">
+      <path
+         transform="matrix(-0.8,0,0,-0.8,-10,0)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         id="path18025-3" />
+    </marker>
+  </defs>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(38.341513,-78.389019)">
+    <rect
+       style="opacity:1;fill:#ffd5d5;fill-opacity:1;stroke:#120000;stroke-width:0.176389;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect15891"
+       width="119.54452"
+       height="78.997932"
+       x="34.896965"
+       y="84.37439"
+       ry="4.0524263"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;fill-opacity:1;stroke:#120000;stroke-width:0.176389;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect13527-9"
+       width="38.537739"
+       height="8.0728235"
+       x="-6.6321268"
+       y="135.30254"
+       ry="1.7378516"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;fill-opacity:1;stroke:#120000;stroke-width:0.176389;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect13527"
+       width="38.537739"
+       height="8.0728235"
+       x="-6.6321273"
+       y="94.450195"
+       ry="1.7378516"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       id="rect12851"
+       style="fill:#ffffff;fill-opacity:1;stroke:#120000;stroke-width:0.176389;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       d="m 39.929358,94.390103 c -1.209993,0 -2.184137,0.795853 -2.184137,1.784387 v 0.415478 l -2.582004,0.583427 -5.717468,1.313098 6.110271,1.38131 2.189201,0.486797 v 0.41237 c 0,0.98854 0.974144,1.78439 2.184137,1.78439 h 38.199328 c 1.209992,0 2.184137,-0.79585 2.184137,-1.78439 v -4.59248 c 0,-0.988534 -0.974145,-1.784387 -2.184137,-1.784387 z"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       id="rect12851-7"
+       style="fill:#ffffff;fill-opacity:1;stroke:#120000;stroke-width:0.176389;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       d="m 39.929354,135.30364 c -1.209991,0 -2.184137,0.79585 -2.184137,1.78439 v 0.41548 l -2.582002,0.58342 -5.717468,1.31362 6.11027,1.38079 2.1892,0.48679 v 0.4129 c 0,0.98853 0.974146,1.78439 2.184137,1.78439 h 38.199329 c 1.209992,0 2.184138,-0.79586 2.184138,-1.78439 v -4.593 c 0,-0.98854 -0.974146,-1.78439 -2.184138,-1.78439 z"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       id="rect10532"
+       style="fill:#ffffff;fill-opacity:1;stroke:#120000;stroke-width:0.176389;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       d="m 88.392542,94.233007 c -1.659337,0 -2.996573,1.321448 -3.026172,2.973461 l -4.356322,1.054201 -3.923792,0.969449 5.268413,1.321882 3.009119,0.73897 v 28.34091 c 0,1.678 1.350748,3.02875 3.028754,3.02875 H 147.6913 c 1.67801,0 3.02927,-1.35075 3.02927,-3.02875 V 97.261763 c 0,-1.678006 -1.35126,-3.028756 -3.02927,-3.028756 z"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       id="rect10532-6"
+       style="fill:#ffffff;fill-opacity:1;stroke:#120000;stroke-width:0.176389;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       d="m 87.388986,135.52763 c -1.127332,0 -2.0345,0.90768 -2.0345,2.03502 v 0.016 l -4.316016,1.04438 -3.923792,0.96996 5.268412,1.32189 2.971396,0.72967 v 17.66507 c 0,1.12733 0.907168,2.03502 2.0345,2.03502 h 61.305874 c 1.12733,0 2.03502,-0.90769 2.03502,-2.03502 v -21.74699 c 0,-1.12734 -0.90769,-2.03502 -2.03502,-2.03502 z"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="-2.4531984"
+       y="99.39077"
+       id="text1508"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         id="tspan1506"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="-2.4531984"
+         y="99.39077">lio_3d_node.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="-2.4531984"
+         y="103.80049"
+         id="tspan39128" /></text>
+    <rect
+       style="fill:#ffffff;fill-opacity:1;stroke:#120000;stroke-width:0.176389;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect13527-2"
+       width="18.030445"
+       height="8.1304388"
+       x="49.956924"
+       y="114.77833"
+       ry="1.7502546"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="54.164658"
+       y="119.7477"
+       id="text1508-6"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         id="tspan1506-1"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="54.164658"
+         y="119.7477">io.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="54.164658"
+         y="124.15742"
+         id="tspan39128-8" /></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="-2.3136718"
+       y="140.32068"
+       id="text1508-3"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="-2.3136718"
+         y="140.32068"
+         id="tspan39128-7">slam_3d_node.cpp</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="40.295948"
+       y="99.39077"
+       id="text1508-36"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="40.295948"
+         y="99.39077"
+         id="tspan40396">lio_3d_interface.cpp</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="40.435474"
+       y="140.32068"
+       id="text1508-36-5"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="40.435474"
+         y="140.32068"
+         id="tspan40396-5">slam_3d_interface.cpp</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="89.64003"
+       y="98.727356"
+       id="text1508-36-6"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.64003"
+         y="98.727356"
+         id="tspan22545">lie_algebra.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.64003"
+         y="103.19349"
+         id="tspan18772">gravity_direc_estimator.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.64003"
+         y="107.65961"
+         id="tspan18774">imu_preintegrator.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.64003"
+         y="112.12575"
+         id="tspan18776">keyframe_detector.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.64003"
+         y="116.59187"
+         id="tspan18778">voxel_grid_filter.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.64003"
+         y="121.05801"
+         id="tspan18780">normal_map.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.64003"
+         y="125.52414"
+         id="tspan18782">hierarchical_geometric_observer.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.64003"
+         y="129.99026"
+         id="tspan18784">joint_optimizer.cpp</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="-38.630901"
+       y="99.739586"
+       id="text1508-2"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="-38.630901"
+         y="99.739586"
+         id="tspan40014">LiDAR &amp; IMU</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="3.4374704"
+       y="90.703239"
+       id="text1508-2-3"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         id="tspan1506-7-1"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial Bold';stroke-width:0.264583"
+         x="3.4374704"
+         y="90.703239">ROS nodes</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="63.682133"
+       y="127.6321"
+       id="text1508-2-3-0"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="63.682133"
+         y="127.6321"
+         id="tspan16505">Past scans</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="63.682133"
+         y="132.09824"
+         id="tspan28895">&amp; Map</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="36.868393"
+       y="130.21399"
+       id="text1508-2-3-0-1"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="36.868393"
+         y="130.21399"
+         id="tspan28895-4">Past scans</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;text-align:center;text-anchor:middle;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="69.061821"
+       y="107.20116"
+       id="text1508-2-3-0-1-7"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';text-align:center;text-anchor:middle;stroke-width:0.264583"
+         x="69.061821"
+         y="107.20116"
+         id="tspan28895-4-8">Map</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';text-align:center;text-anchor:middle;stroke-width:0.264583"
+         x="69.061821"
+         y="111.66729"
+         id="tspan35995">(Optional)</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="5.2459297"
+       y="115.95525"
+       id="text1508-2-3-0-2"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         id="tspan1506-7-1-6-9"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="5.2459297"
+         y="115.95525">Odometry &amp;</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="5.2459297"
+         y="120.42139"
+         id="tspan16505-3">Deskewed scan</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="-34.622528"
+       y="90.656731"
+       id="text1508-2-3-9"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         id="tspan1506-7-1-4"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial Bold';stroke-width:0.264583"
+         x="-34.622528"
+         y="90.656731">Sensors</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="48.245136"
+       y="90.354424"
+       id="text1508-2-3-7"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial Bold';stroke-width:0.264583"
+         x="48.245136"
+         y="90.354424"
+         id="tspan37304">Interface layer</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="105.27676"
+       y="90.354424"
+       id="text1508-2-3-7-4"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial Bold';stroke-width:0.264583"
+         x="105.27676"
+         y="90.354424"
+         id="tspan34895">Core modules</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="82.858421"
+       y="80.945282"
+       id="text1508-2-3-7-4-3"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial Bold';stroke-width:0.264583"
+         x="82.858421"
+         y="80.945282"
+         id="tspan34895-6">Plain SLAM</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:3.52778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="89.541847"
+       y="140.41586"
+       id="text1508-36-6-6"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.541847"
+         y="140.41586"
+         id="tspan23403">lie_algebra.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.541847"
+         y="144.88199"
+         id="tspan20736">keyframe_detector.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.541847"
+         y="149.34813"
+         id="tspan20738">voxel_grid_filter.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.541847"
+         y="153.81425"
+         id="tspan20740">gicp.cpp</tspan><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;font-family:sans-serif, Arial;-inkscape-font-specification:'sans-serif, Arial';stroke-width:0.264583"
+         x="89.541847"
+         y="158.28038"
+         id="tspan20744">graph_optimizer.cpp</tspan></text>
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.176389;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Lend)"
+       d="m 1.9438569,102.58927 v 32.39274"
+       id="path17940"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.176389;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Lend-7)"
+       d="m -16.184878,98.486607 h 9.3283786"
+       id="path17940-6"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.176389;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Lend-9)"
+       d="M 56.806911,122.79781 V 134.8951"
+       id="path17940-0"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.176389;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Lend-9-5)"
+       d="M 58.908152,114.8066 V 102.70931"
+       id="path17940-0-2"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.176389;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Lend-9-5-2)"
+       d="M 60.978896,135.23753 V 123.14025"
+       id="path17940-0-2-9"
+       inkscape:export-filename="/home/akai/Dropbox/git/git_ros2_ws/src/plain_slam_ros2/figs/overview.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+  </g>
+</svg>

@@ -1,0 +1,93 @@
+\chapter{Introduction}
+
+\section{Background}
+
+In the context of autonomous navigation for robots and self-driving vehicles, technologies for building maps and recognizing one's position on those maps--commonly referred to as {\bf localization} and {\bf Simultaneous Localization and Mapping} (SLAM)--are considered essential \cite{Thrun:2005:PR:1121596}.
+Traditionally, these technologies have relied on a framework known as {\bf odometry}, which estimates motion.
+Put simply, localization and SLAM determine a robot's position on a map (in the case of SLAM, the map is built online) by aligning sensor observations with the map.
+By incorporating motion predictions from odometry, it is possible to anticipate how far the system has moved and thus restrict the search space during the map-observation matching process.
+Consequently, using odometry can improve both the accuracy and robustness of localization and SLAM.
+
+However, using odometry requires sensors in addition to the external perception sensors (such as LiDAR or cameras) typically employed in localization and SLAM \cite{BorensteinJRS1997}.
+The simplest way to build an odometry system--in terms of implementation effort--is to use an {\bf Inertial Measurement Unit} (IMU).
+An IMU measures accelerations and angular velocities with respect to the sensor's origin, and integrating these values yields an estimate of motion.
+Unfortunately, IMU measurements contain significant errors, and straightforward integration results in extremely poor accuracy in position and orientation estimates, rendering them unsuitable for localization or SLAM in most cases.
+Thus, constructing an odometry system solely with an IMU is nearly impossible.
+
+The most widely used odometry system in mobile robotics and autonomous driving relies on measuring wheel rotations with encoders and integrating the results to estimate motion.
+This is known as {\bf wheel odometry}.
+Provided that wheel slip does not occur, wheel odometry can estimate motion very accurately over short distances.
+However, to employ wheel odometry, significant modifications must be made to the robot's hardware in addition to adding external sensors.
+For this reason, wheel odometry cannot be considered a plug-and-play solution.
+Moreover, since wheel odometry depends on measuring wheel rotations, it can only be applied to wheeled platforms.
+
+As an alternative to wheel odometry, {\bf visual odometry} was proposed \cite{VisuailOdometry}.
+Visual odometry estimates motion by tracking features extracted from images.
+Therefore, it can be applied to non-wheeled platforms as well.
+However, it is generally known that the accuracy of visual odometry is not as high as that of wheel odometry.
+
+Similarly, various methods were explored to estimate motion using LiDAR.
+Among these, the representative work that popularized the term {\bf LiDAR odometry} (LO) is LiDAR Odometry and Mapping (LOAM) \cite{LOAM}.
+LO estimates motion by sequentially registering LiDAR point clouds.
+Because LiDAR provides highly accurate range measurements, LO achieves high-accuracy motion estimation and thus has been widely adopted in various applications.
+
+Nevertheless, LO also has limitations.
+The scan rate of LiDAR--especially 3D LiDAR--is relatively slow (typically around $10 \sim 20~{\rm Hz}$), making it difficult to estimate fast motions, particularly those involving rotation.
+To overcome this problem, {\bf LiDAR-Inertial Odometry} (LIO) was proposed, which fuses LiDAR with IMU measurements for motion estimation.
+IMUs can measure accelerations and angular velocities at high frequencies (typically above $100~{\rm Hz}$), allowing interpolation of motion between LiDAR scans.
+This interpolation enables the correction of LiDAR point clouds distorted by rapid motion.
+Furthermore, LIO estimates additional states not considered in LO, such as velocities and IMU measurement biases.
+As a result, integration of IMU measurements becomes more accurate, enabling higher-precision motion estimation.
+It is worth noting that {\bf Visual-Inertial Odometry} (VIO), which fuses vision and IMU, was proposed slightly earlier than LIO (see, for example, \cite{VIO}).
+
+
+
+
+
+
+
+
+\section{Performance and Limitation of LIO}
+
+The evolution of LIO algorithms has been remarkable, but in recent years the performance of LiDAR sensors themselves has also advanced significantly.
+A decade ago (when the author began research in 2011), it was common to see papers include the phrase, ``Since LiDAR is too expensive, we propose a method using cameras instead.''
+Nowadays, however, 3D LiDARs are available for around 100,000 JPY, and surprisingly, even devices in this price range are capable of measuring nearly 360 degrees up to ranges of about 100 meters.
+As a result, performing highly accurate motion estimation using LIO has become fairly common.
+Moreover, with LIO alone, it is now possible to construct sufficiently accurate point cloud maps in small-scale environments.
+Consequently, it has become feasible to mount compact LiDARs on aerial platforms such as drones and generate high-precision point cloud maps with relative ease.
+
+That said, LIO is fundamentally an odometry system, meaning that it only estimates motion.
+No matter how accurately motion is estimated, the results inevitably contain errors (drift).
+Therefore, relying solely on LIO to build maps of large-scale environments remains challenging.
+In particular, in large-scale scenarios that involve loops (revisiting previously traversed places), map consistency cannot be maintained--the same objects will no longer be correctly mapped to the same locations.
+By contrast, SLAM is designed to ensure consistency even in environments containing loops.
+In other words, if one wishes to build highly accurate maps, the use of SLAM is indispensable.
+
+Furthermore, LIO is merely a motion estimation system.
+In practical applications, simply knowing the motion is often of limited value; the greater benefit comes from knowing one's location on a map constructed with SLAM.
+For instance, in factory settings where one wishes to manage the positions of AGVs or forklifts, LIO alone is insufficient, and localization is required.
+Thus, merely having access to high-accuracy LIO does not by itself enable the proposal of new application systems.
+Rather, it is essential to properly understand the algorithms underlying LIO and extend them to SLAM and localization.
+
+
+
+
+
+\section{This Book in the Context of Existing Methods}
+
+There already exist numerous open-source implementations of LIO and SLAM.
+For example, well-known open-source systems for LIO include LIO-SAM \cite{liosam2020shan} and FAST-LIO \cite{FAST-LIO2}.
+These methods deliver extremely high performance, and simply downloading and running them is sufficient to achieve accurate motion estimation.
+Moreover, LIO-SAM also incorporates SLAM functionality, making it possible to perform map building as well.
+As for LiDAR-based SLAM, a prominent open-source system is GLIM \cite{KoideRAS2024}, which also achieves very high accuracy and can construct highly precise point cloud maps across a variety of environments.
+
+However, since many of these open-source codes implement a wide range of functions, they inevitably become large in scale.
+For beginners trying to learn SLAM, it is often difficult to determine where to start or what to focus on, which frequently results in using the code only as a black box rather than as a learning resource.
+This book, along with its accompanying source code, emphasizes keeping the software structure as simple as possible.
+The developed source code provides functionality for LIO, SLAM, and localization, with the entire implementation contained in fewer than 2,000 lines of C++ (excluding blank lines and comments).
+Within this code, all the essential components are implemented, including scan matching, LiDAR-IMU fusion (both loosely coupled and tightly coupled), loop detection, and pose graph optimization (terminology will be explained in later sections).
+In addition, external dependencies are kept to a minimum so that LIO and SLAM can be implemented almost entirely from scratch.
+The main dependencies are limited to {\it Sophus} (built on {\it Eigen}) and {\it nanoflann} (with {\it YAML} used only for parameter configuration).
+Sophus is a library for linear algebra and Lie groups, while nanoflann is for nearest-neighbor search.
+Because the core parts of LIO and SLAM are implemented from scratch, the codebase is structured in a way that makes it easier for beginners to understand how optimization and other processes are actually realized.
+

@@ -1,0 +1,486 @@
+\chapter{タイトカップリングに基づくLIO}
+
+\section{状態量と問題設定}
+
+前章では，推定対象の状態としてIMUの姿勢（並進ベクトル${}^{O}{\bf t}_{I}$と回転行列${}^{O}R_{I}$），速度${}^{O}{\bf v}$，およびIMUの角速度と加速度に対する計測バイアス${\bf b}^{\omega}$，${\bf b}^{a}$としていました．
+タイトカップリングを用いたLIOも同様の状態で実装可能ですが，本章では拡張性を考慮し，状態量を以下とします．
+%
+\begin{align}
+  {\bf x} = \left( {}^{O}{\bf t}_{I} ~ {}^{O}R_{I} ~ {}^{O}{\bf v} ~ {\bf b}^{\omega} ~ {\bf b}^{a} ~ {\bf g} ~ {}^{I}{\bf t}_{L} ~ {}^{I}R_{L} \right)
+  \label{eq:tight_coupling_lio_state}
+\end{align}
+%
+ここで${\bf g} \in \mathbb{R}^{3}$は重力加速度ベクトル，${}^{I}{\bf t}_{L} \in \mathbb{R}^{3}$と${}^{I}R_{L} \in {\rm SO}(3)$はLiDARとIMU間の相対姿勢を表す並進ベクトルと回転行列です．
+なお，$\left( \log \left( {}^{I}R_{L} \right) \right)^{\vee} \in \mathbb{R}^{3}$となるので，本章で扱うLIOでは24次元の状態推定を行います．
+また前章で述べたLIOでは扱いませんでしたが，推定状態に対する共分散行列$\Sigma \in \mathbb{R}^{24 \times 24}$も扱います．
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{IMUプレインテグレーションによる更新}
+
+本章で述べるLIOでも，\ref{subsec:imu_preintegration}節で述べたIMUプレインテグレーションを用いて，IMUの姿勢と速度の更新を行います．
+ただし本章で述べるLIOでは，これらに加えて共分散行列の更新も行います．
+
+共分散行列の更新を考えるにあたり，まずホワイトノイズベクトル$\boldsymbol \eta = \left( \boldsymbol \eta^{\omega} ~ \boldsymbol \eta^{a} ~ \boldsymbol \eta^{ b^{\omega} } ~ \boldsymbol \eta^{ b^{a} } \right)^{\top} \in \mathbb{R}^{12}$を導入します．
+なお$\boldsymbol \eta^{\omega}, \boldsymbol \eta^{a}, \boldsymbol \eta^{ b^{\omega} }, \boldsymbol \eta^{ b^{a} } \in \mathbb{R}^{3}$はそれぞれIMUの角速度と加速度の計測値，およびそれらの計測バイアスに加わるホワイトノイズとします．
+今，${\bf u}_{t} = \left( \boldsymbol \omega_{t}^{\top} ~ {\bf a}_{t}^{\top} \right)^{\top} \in \mathbb{R}^{6}$として，1つのIMUの計測値に対する更新則を考えます．
+これらの条件を用いると，IMUプレインテグレーションに基づく状態の更新は以下のように定めることができます．
+%
+\begin{align}
+  \begin{gathered}
+    {}^{O}{\bf t}_{I, t} = {}^{O}{\bf t}_{I, t-1} + {}^{O}{\bf v}_{t-1} \Delta t + \frac{1}{2} {}^{O}R_{I, t-1} \left( {\bf a}_{t} - {\bf b}_{t-1}^{a} - \boldsymbol \eta_{t}^{a} \right)\Delta t^{2} + \frac{1}{2} {\bf g} \Delta t^{2} \\
+%
+    {}^{O}R_{I, t} = {}^{O}R_{I, t-1} \exp \left( \left( \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} - \boldsymbol \eta_{t}^{\omega} \right)^{\wedge} \Delta t \right) \\
+%
+    {}^{O}{\bf v}_{t} = {}^{O}{\bf v}_{t-1} + {}^{O}R_{I, t-1} \left( {\bf a}_{t} - {\bf b}_{t-1}^{a} - \boldsymbol \eta_{t}^{a} \right) \Delta t + {\bf g} \Delta t \\
+%
+    {\bf b}_{t}^{\omega} = {\bf b}_{t-1}^{\omega} + \boldsymbol \eta_{t}^{ b^{\omega} } \Delta t \\
+%
+    {\bf b}_{t}^{\omega} = {\bf b}_{t-1}^{a} + \boldsymbol \eta_{t}^{ b^{a} } \Delta t \\
+%
+    {\bf g}_{t} = {\bf g}_{t-1} \\
+%
+    {}^{I}{\bf t}_{L, t} = {}^{I}{\bf t}_{L, t-1} \\
+%
+    {}^{I}R_{L, t} = {}^{I}R_{L, t-1}
+  \end{gathered}
+  \label{eq:discrete_imu_preintegration_tight}
+\end{align}
+%
+ここで$\Delta t$は，IMUの計測にかかった時間です．
+%
+
+式(\ref{eq:discrete_imu_preintegration_tight})による状態の更新を${\bf x}_{t} = {\bf f} \left( {\bf x}_{t-1}, {\bf u}_{t}, \boldsymbol \eta_{t} \right)$と記述することとします．
+このとき，共分散行列の更新は以下のようにすることで行うことができます．
+%
+\begin{align}
+  \Sigma_{t} = F_{x} \Sigma_{t-1} F_{x}^{\top} + F_{\eta} Q F_{\eta}^{\top}
+\end{align}
+%
+ここで，$F_{x} = \partial {\bf f} / \partial {\bf x}_{t-1} \in \mathbb{R}^{24 \times 24}$，$F_{\eta} = \partial {\bf f} / \partial \boldsymbol \eta_{t} \in \mathbb{R}^{24 \times 12}$となり，$Q \in \mathbb{R}^{12 \times 12}$はプロセスノイズ共分散行列です．
+これらは大きな行列なので計算は煩雑になりますが，それぞれ以下のように求めることができます\footnote{何度も計算して確かめてはいますが確実にあっているか自信はありません．}．
+%
+\begin{align}
+  F_{x} = \left( \begin{matrix}
+    I_{3} & -A \Delta t^{2} & I_{3} \Delta t & 0 & -\frac{1}{2} {}^{O}R_{I, t-1} \Delta t^{2} & \frac{1}{2} I_{3} \Delta t & 0 & 0 \\
+%
+    0 & J_{l}^{-1} \left( {}^{O}{\bf r}_{I} \right) {}^{O}R_{I, t}^{\top} & 0 & -J_{l}^{-1} \left( {}^{O}{\bf r}_{I} \right) J_{r} \left( \Delta \boldsymbol \phi_{t} \right) \Delta t & 0 & 0 & 0 & 0 \\
+%
+    0 & -A \Delta t & I_{3} & 0 & -{}^{O}R_{I, t-1} \Delta t & I_{3} \Delta t & 0 & 0 \\
+%
+    0 & 0 & 0 & I_{3} & 0 & 0 & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 & I_{3} & 0 & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 & 0 & I_{3} & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 & 0 & 0 & I_{3} & 0 \\
+%
+    0 & 0 & 0 & 0 & 0 & 0 & 0 & J_{l}^{-1} \left( {}^{I}{\bf r}_{L} \right) \\
+  \end{matrix} \right)
+  \label{eq:covariance_update_fx}
+\end{align}
+%
+\begin{align}
+  F_{\eta} = \left( \begin{matrix}
+    0 & -\frac{1}{2} {}^{O}R_{I, t-1} \Delta t^{2} & 0 & 0 \\
+%
+    -J_{l}^{-1} \left( {}^{O}{\bf r}_{I} \right) J_{r} \left( \Delta \boldsymbol \phi_{t} \right) \Delta t & 0 & 0 & 0 \\
+%
+    0 & {}^{O}R_{I, t-1} \Delta t & 0 & 0 \\
+%
+    0 & 0 & I_{3} \Delta t & 0 \\
+%
+    0 & 0 & 0 & I_{3} \Delta t \\
+%
+    0 & 0 & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 \\
+  \end{matrix} \right)
+  \label{eq:covariance_update_feta}
+\end{align}
+%
+なお，$\hat{ \boldsymbol \omega }_{t} = \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} - \boldsymbol \eta_{t}^{\omega}$，$\hat{ {\bf a} }_{t} = {\bf a}_{t} - {\bf b}_{t-1}^{a} - \boldsymbol \eta_{t}^{a}$，$A = \left( {}^{O}R_{I, t-1} \hat{ {\bf a} }_{t} \right)^{\wedge}$，${}^{O}{\bf r}_{I} = \left( \log \left( {}^{O}R_{I, t} \right) \right)^{\vee}$，${}^{I}{\bf r}_{L} = \left( \log \left( {}^{I}R_{L, t} \right) \right)^{\vee}$，$\Delta \boldsymbol \phi_{t} = \hat{ \boldsymbol \omega }_{t} \Delta t$として表記を短縮しています．
+また式(\ref{eq:covariance_update_fx})，(\ref{eq:covariance_update_feta})に示す$0$はすべて$\mathbb{R}^{3 \times 3}$の要素がすべて$0$の行列です．
+
+
+
+
+
+
+
+
+
+
+
+\section{IEKFによる更新}
+
+IMUプレインテグレーションによる更新を終えた後に，\ref{subsec:deskew_scan_distortion}節で述べたLiDAR点群の歪み補正を行います．
+そしてLiDARの点群をIMU座標に変換し，式(\ref{eq:residual_vector_lio_scan_matching})，(\ref{eq:cost_function_lio_scan_matching})に示す残差ベクトルとコスト関数を定めます．
+そして，残差に対するヤコビアンを求めてコスト関数の最小化を実施しますが，本章で述べるLIOでは，式(\ref{eq:tight_coupling_lio_state})に示す状態を用いて最適化を行うため，求めるヤコビアンは\ref{subsec:point_to_plane_jacobian}節で導出したヤコビアンと異なります．
+
+本章で述べるLIOで求めるヤコビアンは以下となります．
+%
+\begin{align}
+  \frac{ \partial r_{i} }{ \partial {\bf x} }
+  = \left(
+    \frac{ \partial r_{i} }{ \partial {}^{O}{\bf t}_{I} } ~
+    \frac{ \partial r_{i} }{ \partial {}^{O}R_{I} } ~
+    \frac{ \partial r_{i} }{ \partial {}^{O}{\bf v} } ~
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{\omega} } ~
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{a} } ~
+    \frac{ \partial r_{i} }{ \partial {\bf g} } ~
+    \frac{ \partial r_{i} }{ \partial {}^{I}{\bf t}_{L} } ~
+    \frac{ \partial r_{i} }{ \partial {}^{I}R_{L} }
+  \right)^{\top} \in \mathbb{R}^{1 \times 24}
+  \label{eq:residual_jecobian_tight}
+\end{align}
+%
+それぞれのヤコビアンの導出は省きますが，それぞれ以下となります（角速度ベクトルに関するヤコビアンの導出は\ref{sec:回転および角速度バイアスに関するヤコビアンの導出}節で述べています）．
+%
+\begin{align}
+  \begin{gathered}
+    \frac{ \partial r_{i} }{ \partial {}^{O}{\bf t}_{I} } = -{\bf n}_{i}^{\top} \\
+%
+    \frac{ \partial r_{i} }{ \partial {}^{O}R_{I} } = {\bf n}_{i}^{\top} \left( {}^{O}R_{I} {}^{I}{\bf p}_{i} \right)^{\wedge} \\
+%
+    \frac{ \partial r_{i} }{ \partial {}^{O}{\bf v} } = -\Delta t {\bf n}_{i}^{\top} \\
+%
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{\omega} } = {\bf n}_{i}^{\top} \left( {}^{O}R_{I} {}^{I}{\bf p}_{i} \right)^{\wedge} J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t \\
+%
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{a} } = \frac{1}{2} \Delta t^{2} {\bf n}_{i}^{\top} {}^{O}R_{I, t-1} \\
+%
+    \frac{ \partial r_{i} }{ \partial {\bf g} } = -\frac{1}{2} \Delta t^{2} {\bf n}_{i}^{\top} \\
+%
+    \frac{ \partial r_{i} }{ \partial {}^{I}{\bf t}_{L} } = {\bf n}_{i}^{\top} {}^{O}R_{I} \\
+%
+    \frac{ \partial r_{i} }{ \partial {}^{I}R_{L} } = {\bf n}_{i}^{\top} {}^{O}R_{I} \left( {}^{I}R_{L} {}^{L}{\bf p}_{i} \right)^{\wedge} \\
+  \end{gathered}
+\end{align}
+%
+ここで${}^{L}{\bf p}$と${}^{I}{\bf p}$は同じ点をLiDAR，およびIMU座標で表したものであり${}^{I}{\bf p} = {}^{I}T_{L} {}^{L}{\bf p}$となります．
+また$\Delta \boldsymbol \phi = \left( \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} \right) \Delta t$であり，これは状態量である${\bf b}_{t-1}^{\omega}$が変更される度に再計算します．
+
+残差，およびヤコビアンを求めることができたら，{\bf Iterated Extended Kalman Filter}（IEKF）を用いた更新を行いますが，これは次式に従い状態の反復更新を行うことで達成されます．
+%
+\begin{align}
+  \begin{gathered}
+    {\bf r}^{k} = \left( r_{1}^{k} ~ \cdots ~ r_{N}^{k} \right)^{\top} \\
+%
+    J^{k} = \left( J_{1}^{k} ~ \cdots ~ J_{N}^{k} \right)^{\top} \\
+%
+    H^{k} = \left( \begin{matrix}
+      I_{3} & 0_{3 \times 3} & 0_{3 \times 15} & 0_{3 \times 3} \\
+%
+      0_{3 \times 3} & J_{l}^{-1} \left( \left( \log \left( \left( {}^{O}R_{I}^{1} \right)^{\top} {}^{O}R_{I}^{k} \right) \right)^{\vee} \right) & 0_{3 \times 15} & 0_{3 \times 3} \\
+%
+      0_{15 \times 3} & 0_{15 \times 3} & I_{15 \times 15} & 0_{3 \times 3} \\
+%
+      0_{3 \times 3} & 0_{3 \times 3} & 0_{3 \times 3} & J_{l}^{-1} \left( \left( \log \left( \left( {}^{I}R_{L}^{1} \right)^{\top} {}^{I}R_{L}^{k} \right) \right)^{\vee} \right)
+    \end{matrix} \right) \\
+%
+    \bar{ \Sigma }^{k} = \left( H^{k} \right)^{-1} \Sigma \left( \left( H^{k} \right)^{-1} \right)^{\top} \\
+%
+    K^{k} = \left( \left( J^{k} \right)^{\top} R^{-1} J^{k} + \left( \bar{ \Sigma }^{k} \right)^{-1} \right)^{-1} \left( J^{k} \right)^{\top} R^{-1} \\
+%
+    {\bf x}^{k+1} = {\bf x}^{k} \boxplus \left( -K^{k} {\bf r}^{k} - \left( I_{24} - K^{k} J^{k} \right) \left( H^{k} \right)^{-1} \left( {\bf x}^{k} \boxminus {\bf x}^{1} \right) \right)
+  \end{gathered}
+  \label{eq:iterated_extended_kalman_filter}
+\end{align}
+%
+ここで$R = {\rm diag} \left( \sigma^{2}, \cdots \sigma^{2} \right) \in \mathbb{R}^{N \times N}$であり，$\sigma^{2} \in \mathbb{R}$は残差に対する分散になります．
+また，右上に1のつく状態は，反復計算を行う際のそれぞれの初期値になります．
+そして，$k$回目の反復計算で更新量が一定以下となり収束したと判定されたら，以下のように状態と共分散行列を更新します．
+%
+\begin{align}
+  \begin{gathered}
+    {\bf x}_{t} = {\bf x}^{k} \\
+%
+    \Sigma_{t} = \left( I_{24} - K^{k} J^{k} \right) \bar{ \Sigma }^{k}
+  \end{gathered}
+\end{align}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{実用にあたって}
+
+前章で述べたルーズカップリングに基づくLIOでは，重力加速度やLiDAR-IMU間の相対姿勢などは推定対象に含まれていませんでした．
+一方でタイトカップリングに基づく手法では，これらのパラメータも同時に最適化することが可能です．
+これは，ルーズカップリングのように推定を2段階に分ける方法では冗長性が生じるのに対し，タイトカップリングではそのような冗長性を排除し，すべてのパラメータを統一的に推定できるためです．
+
+ただし，これらのパラメータを推定に含めたからといって，常に劇的な性能向上が得られるわけではありません．
+しかし多くの場面において，タイトカップリングを用いた方がより高精度な推定結果が得られる傾向があります．
+なお，重力加速度やLiDAR-IMU間の相対姿勢を最適化しなくとも，タイトカップリングに基づくLIOは十分に機能するため，これらのパラメータは必ずしも最適化されるべきとは限りません．
+
+本書では扱いませんが，近年ではLiDAR，カメラ，IMUを併用して最適化を行う手法も提案されています．
+このような手法においては，LiDAR-カメラ間の相対姿勢を高精度に求めることが極めて重要となります．
+しかし，これらの外部パラメータは事前のキャリブレーションのみでは十分に正確に求められないことも多いため，タイトカップリングの枠組みの中でLiDAR-カメラ間の相対姿勢を同時に最適化することが，実践的かつ有効なアプローチといえるます．
+
+また，IEKFには少し面白い性質があります．
+式(\ref{eq:residual_jecobian_tight})に残差に対するヤコビアンを示していますが，この中には少し複雑なヤコビアンが表れます．
+例えば速度ベクトルやIMUの計測バイアスに関するヤコビアンは，IMUプレインテグレーションによる動作まで考慮して連鎖則を用いて求める必要があります．
+実装ではこれらを求めてヤコビアンとして利用していますが，実はこれらのヤコビアンを全て${\bf 0}_{3}$にしたとしてもタイトカップリングとして機能し，速度やバイアスを求めることが可能です．
+これは式(\ref{eq:iterated_extended_kalman_filter})に示すカルマンゲイン$K$を介して，ヤコビアンを求めていない状態にも修正量が伝播されるためです．
+そのため，ヤコビアンの計算が煩雑，またIMUプレインテグレーションに基づく再計算を除外したい場合などは，ヤコビアンを求めなくとも機能させることができます．
+
+またタイトカップリングを用いたLIOの実装として，{\bf 因子グラフ}（Factor Graph）内でIMUプレインテグレーションファクタを用いる方法もあります．
+LIO-SAM~\cite{liosam2020shan}やGLIM~\cite{KoideRAS2024}ではこの方式が採用されており，この方法を用いると過去の系列も考慮しながら，地図のスムージングなども実装できます．
+ただし一般的には，逐次処理を行うIEKFによる実装のほうが計算コストが低くなることが多いです（LIO-SAMやGLIMも十分な計算速度で実行可能です）．
+
+
+
+
+
+
+
+
+
+\section{回転および角速度バイアスに関するヤコビアンの導出}
+\label{sec:回転および角速度バイアスに関するヤコビアンの導出}
+
+式(\ref{eq:covariance_update_fx})，(\ref{eq:covariance_update_feta})に共分散行列を更新するために用いられるヤコビアンを示していますが，回転に関するヤコビアンは導出が複雑なので，本説で補足としてそれらの解説をします．
+
+まず，${}^{O}{\bf t}_{I, t}$の${}^{O}R_{I, t-1}$に関するヤコビアンを求めます．
+これは，微小摂動した${}^{O}R_{I, t-1}$，すなわち$\exp \left( \delta \boldsymbol \phi^{\wedge} \right) {}^{O}R_{I, t-1}$を含む${}^{O}{\bf t}_{I, t}$の差分を考えることで導けます．
+表記を簡略化するために，$\exp \left( \delta \boldsymbol \phi^{\wedge} \right) {}^{O}R_{I, t-1}$を含む${}^{O}{\bf t}_{I, t}$を${}^{O}{\bf t}_{I, t} \left( \delta \boldsymbol \phi \right)$とし，式(\ref{eq:discrete_imu_preintegration_tight})に示す${}^{O}{\bf t}_{I, t}$との差分を考え，${}^{O}{\bf t}_{I, t} \left( \delta \boldsymbol \phi \right) - {}^{O}{\bf t}_{I, t} = J \delta \boldsymbol \phi$となる$J$を求めます．
+%
+\begin{align}
+  \begin{split}
+    {}^{O}{\bf t}_{I, t} \left( \delta \boldsymbol \phi \right) - {}^{O}{\bf t}_{I, t}
+    = &
+    \frac{1}{2} \left( \exp \left( \delta \boldsymbol \phi^{\wedge} \right) - I_{3} \right) {}^{O}R_{I, t-1} \hat{ {\bf a} }_{t} \Delta t^{2} \\
+    = &
+    \frac{1}{2} \delta \boldsymbol \phi^{\wedge} {}^{O}R_{I, t-1} \hat{ {\bf a} }_{t} \Delta t^{2} \\
+    = & - \frac{1}{2} \left( {}^{O}R_{I, t-1} \hat{ {\bf a} }_{t} \right)^{\wedge} \Delta t^{2} \delta \boldsymbol \phi
+  \end{split}
+\end{align}
+%
+よって$J = - \frac{1}{2} \left( {}^{O}R_{I, t-1} \hat{ {\bf a} } \right)^{\wedge} \Delta t^{2}$となります．
+${}^{O}{\bf v}_{t}$の${}^{O}R_{I, t-1}$に関するヤコビアンは同様の計算で求めることができます．
+
+次に${}^{O}R_{I, t}$のヤコビアンを考えますが，まず，回転に関する更新を以下に再掲します．
+%
+\begin{align}
+  R_{t} = R_{t-1} \exp \left( \left( \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} - \boldsymbol \eta_{t}^{\omega} \right)^{\wedge} \Delta t \right)
+\end{align}
+%
+$R_{t}$に関する共分散行列は，これに対応する回転ベクトル$\left( \log \left( R_{t} \right) \right)^{\vee}$に対して定義されるものになります．
+そのため，$\left( \log \left( R_{t} \right) \right)^{\vee}$に対する$R_{t-1}$と${\bf b}_{t-1}^{\omega}$の微分を考える必要があります．
+
+まず$R_{t-1}$に関するヤコビアンを考えますが，これは以下の連鎖則を用いて計算できます．
+%
+\begin{align}
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial R_{t-1} }
+  =
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial R_{t} }
+  \frac{ \partial R_{t} }{ \partial R_{t-1} }
+  \label{eq:dlogRt_dRt-1}
+\end{align}
+%
+まず$\partial \left( \log \left( R_{t} \right) \right)^{\vee} / \partial R_{t}$を考えるにあたり，次式を満たすヤコビアンを考えます．
+%
+\begin{align}
+  \left( \log \left( \exp \left( \delta \boldsymbol \phi^{\wedge} \right) R_{t} \right) \right)^{\vee} - \left( \log \left( R_{t} \right) \right)^{\vee} = J \delta \boldsymbol \phi
+\end{align}
+%
+左辺第一項のBCH展開を考えると，1次近似として$\left( \log \left( \exp \left( \delta \boldsymbol \phi^{\wedge} \right) R_{t} \right) \right)^{\vee} \simeq \left( \log \left( R_{t} \right) \right)^{\vee} + J_{l}^{-1} \left( \left( \log \left( R_{t} \right) \right)^{\vee} \right) \delta \boldsymbol \phi$が得られるため，上式を満たすヤコビアンは以下となります．
+%
+\begin{align}
+  J_{l}^{-1} \left( \left( \log \left( R_{t} \right) \right)^{\vee} \right)
+  \label{eq:dlogRt_dRt}
+\end{align}
+%
+
+次に$\partial R_{t} / \partial R_{t-1}$を考えるために，次式を満たす$J$を考えます．
+%
+\begin{align}
+  \left( R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \right)^{-1} \exp \left( \delta \boldsymbol \phi^{\wedge} \right) R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right)
+  =
+  I_{3} + \left( J \delta \boldsymbol \phi \right)^{\wedge}
+  \label{eq:dRt_dRt-1}
+\end{align}
+%
+ただし，$\hat{ \boldsymbol \omega }_{t} = \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} - \boldsymbol \eta_{t}^{\omega}$としています．
+式(\ref{eq:dRt_dRt-1})の左辺を展開すると以下が得られます．
+%
+\begin{align}
+  \begin{split}
+    & \exp \left( -\left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1} \exp \left( \delta \boldsymbol \phi^{\wedge} \right) R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \\
+    = &
+    \exp \left( \left( \operatorname{Ad}_{ \exp \left( -\left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1} } \delta \boldsymbol \phi \right)^{\wedge} \right) \\
+    \simeq & I_{3} + \left( \operatorname{Ad}_{ \exp \left( -\left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1} } \delta \boldsymbol \phi \right)^{\wedge}
+  \end{split}
+\end{align}
+%
+よって$J = \operatorname{Ad}_{ \exp \left( -\left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1} }$であり，これは式(\ref{eq:adjoint})を用いると$\exp \left( -\left( \hat{ \boldsymbol{\omega} }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1}$となります．
+また$\exp \left( -\left( \hat{ \boldsymbol{\omega} }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1}$は$R_{t}^{-1}$と等しいため，$R_{t}^{\top}$となります．
+
+以上より，式(\ref{eq:dlogRt_dRt-1})は以下となります．
+%
+\begin{align}
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial R_{t-1} }
+  =
+  J_{l}^{-1} \left( \left( \log \left( R_{t} \right) \right)^{\vee} \right) R_{t}^{\top}
+\end{align}
+%
+
+次に，${\bf b}_{t-1}^{\omega}$に関するヤコビアンを考えますが，こちらも連鎖則を用いて以下のように計算できます．
+%
+\begin{align}
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial {\bf b}_{t-1}^{\omega} }
+  =
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial R_{t} }
+  \frac{ \partial R_{t} }{ \partial {\bf b}_{t-1}^{\omega} }
+  \label{eq:dlogRt_dbomegat-1}
+\end{align}
+%
+$\partial \left( \log \left( R_{t} \right) \right)^{\vee} / \partial R_{t}$は式(\ref{eq:dlogRt_dRt})に示されていますので，$\partial R_{t} / \partial {\bf b}_{t-1}^{\omega}$について考えます．
+
+$\partial R_{t} / \partial {\bf b}_{t-1}^{\omega}$を求めるために，以下の式を満たす$J$を考えます．
+%
+\begin{align}
+  \left( R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \right)^{-1} R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} - \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t \right)
+  = 
+  I_{3} + \left( J \delta {\bf b}^{\omega} \right)^{\wedge}
+  \label{eq:dRt_dbt-1}
+\end{align}
+%
+なお式(\ref{eq:dRt_dbt-1})の左辺は$\exp \left( \left( - \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \exp \left( \left( \hat{ \boldsymbol \omega }_{t} - \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t \right)$となります．
+ここでBCH展開を用いると，式(\ref{eq:dRt_dbt-1})の左辺は以下のように一次近似できます．
+%
+\begin{align}
+  \begin{split}
+    \exp \left( \left( - \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \exp \left( \left( \hat{ \boldsymbol \omega }_{t} - \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t \right)
+%
+    \simeq &
+%
+    \exp \left( - \left( J_{r} \left( \hat{ \boldsymbol \omega } \Delta t \right) \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t \right) \\
+%
+    \simeq & 
+%
+    I_{3} - \left( J_{r} \left( \hat{ \boldsymbol \omega } \Delta t \right) \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t
+  \end{split}
+\end{align}
+%
+ここで$J_{r} \left( \cdot \right)$は${\rm SO}(3)$に関する右ヤコビアンであり以下となります．
+%
+\begin{align}
+  J_{r} \left( \boldsymbol \phi \right)
+  =
+  I_{3} -
+  \frac{ 1 - \cos \theta }{ \theta^{2} } \boldsymbol \phi^{\wedge} +
+  \frac{ \theta - \sin \theta }{ \theta^{3} } \left( \boldsymbol \phi^{\wedge} \right)^{2}
+\end{align}
+%
+ただし$\theta = \| \boldsymbol \phi \|_{2}$です．
+よって式(\ref{eq:dRt_dbt-1})を満たす$J$は$- J_{r} \left( \hat{ \boldsymbol \omega } \Delta t \right) \Delta t$となります．
+
+以上より，式(\ref{eq:dlogRt_dbomegat-1})は以下となります．
+%
+\begin{align}
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial {\bf b}_{t-1}^{\omega} }
+  =
+  - J_{l}^{-1} \left( \left( \log \left( R_{t} \right) \right)^{\vee} \right)
+  J_{r} \left( \hat{ \boldsymbol \omega }_{t} \Delta t \right) \Delta t
+\end{align}
+
+また式(\ref{eq:residual_jecobian_tight})に示される残差$r_{i}$に対する角速度バイアス${\bf b}^{\omega}$に関するヤコビアンは，以下のように連鎖則を用いて計算されます．
+%
+\begin{align}
+  \frac{ \partial r_{i} }{ \partial {\bf b}^{\omega} }
+  =
+  \frac{ \partial r_{i} }{ \partial {\bf r}_{i} }
+  \frac{ \partial {\bf r}_{i} }{ \partial {}^{O}{\bf t}_{I} }
+  \frac{ \partial {}^{O}{\bf t}_{I} }{ \partial {}^{O}R_{I} }
+  \frac{ \partial {}^{O}R_{I} }{ \partial {\bf b}^{\omega} }
+  +
+  \frac{ \partial r_{i} }{ \partial {\bf r}_{i} }
+  \frac{ \partial {\bf r}_{i} }{ \partial {}^{O}R_{I} }
+  \frac{ \partial {}^{O}R_{I} }{ \partial {\bf b}^{\omega} }
+  \label{eq:dr_dbomega}
+\end{align}
+%
+ここで，${}^{O}R_{I}$と${\bf b}^{\omega}$に関するヤコビアンはそれぞれ以下となります．
+%
+\begin{align}
+  \begin{gathered}
+    \frac{ \partial {}^{O}{\bf t}_{I} }{ \partial {}^{O}R_{I} }
+    =
+    -\frac{1}{2} \left( {}^{O}R_{I} \hat{ {\bf a} }_{t} \right)^{\wedge} \Delta t^{2} \\
+%
+    \frac{ \partial {}^{O}R_{I} }{ \partial {\bf b}^{\omega} }
+    =
+    J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t
+  \end{gathered}
+\end{align}
+%
+これらを踏まえると，式(\ref{eq:dr_dbomega})は以下となります．
+%
+\begin{align}
+  \begin{split}
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{\omega} }
+    = &
+    {\bf n}_{i}^{\top}
+    \left( -I_{3} \right)
+    \left( -\frac{1}{2} \left( {}^{O}R_{I} \hat{ {\bf a} }_{t} \right)^{\wedge} \Delta t^{2} \right)
+    \left( J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t \right)
+    +
+    {\bf n}_{i}^{\top}
+    \left( {}^{O}R_{I} {}^{I}{\bf p}_{i} \right)^{\wedge}
+    \left( J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t \right) \\
+    \simeq &
+    {\bf n}_{i}^{\top}
+    \left( {}^{O}R_{I} {}^{I}{\bf p}_{i} \right)^{\wedge}
+    J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t
+  \end{split}
+\end{align}
+%
+ただし右辺第一項は，$\Delta t^{3}$が含まれるため微小量として無視しました．
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

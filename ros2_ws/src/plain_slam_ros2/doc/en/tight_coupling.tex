@@ -1,0 +1,498 @@
+\chapter{Tight-Coupled LIO}
+
+\section{State Variables and Problem Formulation}
+
+In the previous chapter, the estimated state consisted of the IMU pose (translation vector ${}^{O}{\bf t}_{I}$ and rotation matrix ${}^{O}R_{I}$), velocity ${}^{O}{\bf v}$, and the measurement biases of the IMU angular velocity and acceleration, ${\bf b}^{\omega}$ and ${\bf b}^{a}$.
+Although LIO based on tight coupling can be implemented with the same state representation, in this chapter we extend the formulation and define the state as follows:
+%
+\begin{align}
+  {\bf x} = \left( {}^{O}{\bf t}_{I} ~ {}^{O}R_{I} ~ {}^{O}{\bf v} ~ {\bf b}^{\omega} ~ {\bf b}^{a} ~ {\bf g} ~ {}^{I}{\bf t}_{L} ~ {}^{I}R_{L} \right),
+  \label{eq:tight_coupling_lio_state}
+\end{align}
+%
+where ${\bf g} \in \mathbb{R}^{3}$ denotes the gravity vector, while ${}^{I}{\bf t}_{L} \in \mathbb{R}^{3}$ and ${}^{I}R_{L} \in {\rm SO}(3)$ represent the relative translation and rotation between the LiDAR and the IMU.
+Since $\left( \log \left( {}^{I}R_{L} \right) \right)^{\vee} \in \mathbb{R}^{3}$, the LIO formulation discussed in this chapter estimates a 24-dimensional state.
+In addition, unlike the LIO described in the previous chapter, we also maintain the covariance matrix of the estimated state, $\Sigma \in \mathbb{R}^{24 \times 24}$.
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{State Prediction with IMU Preintegration}
+
+In the LIO formulation described in this chapter, we also use IMU preintegration, as explained in Section~\ref{subsec:imu_preintegration}, to update the IMU pose and velocity.
+However, unlike the previous chapter, we additionally update the covariance matrix.
+
+To address the covariance update, we first introduce a white noise vector $\boldsymbol \eta = \left( \boldsymbol \eta^{\omega} ~ \boldsymbol \eta^{a} ~ \boldsymbol \eta^{ b^{\omega} } ~ \boldsymbol \eta^{ b^{a} } \right)^{\top} \in \mathbb{R}^{12}$.
+Here, $\boldsymbol \eta^{\omega}, \boldsymbol \eta^{a}, \boldsymbol \eta^{ b^{\omega} }, \boldsymbol \eta^{ b^{a} } \in \mathbb{R}^{3}$ represent the white noise associated with the IMU angular velocity and acceleration measurements, as well as their respective biases.
+Now, let ${\bf u}_{t} = \left( \boldsymbol \omega_{t}^{\top} ~ {\bf a}_{t}^{\top} \right)^{\top} \in \mathbb{R}^{6}$ denote the IMU measurement at time $t$.
+Using these definitions, the state update based on IMU preintegration can be expressed as follows.
+%
+\begin{align}
+  \begin{gathered}
+    {}^{O}{\bf t}_{I, t} = {}^{O}{\bf t}_{I, t-1} + {}^{O}{\bf v}_{t-1} \Delta t + \frac{1}{2} {}^{O}R_{I, t-1} \left( {\bf a}_{t} - {\bf b}_{t-1}^{a} - \boldsymbol \eta_{t}^{a} \right)\Delta t^{2} + \frac{1}{2} {\bf g} \Delta t^{2}, \\
+%
+    {}^{O}R_{I, t} = {}^{O}R_{I, t-1} \exp \left( \left( \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} - \boldsymbol \eta_{t}^{\omega} \right)^{\wedge} \Delta t \right), \\
+%
+    {}^{O}{\bf v}_{t} = {}^{O}{\bf v}_{t-1} + {}^{O}R_{I, t-1} \left( {\bf a}_{t} - {\bf b}_{t-1}^{a} - \boldsymbol \eta_{t}^{a} \right) \Delta t + {\bf g} \Delta t, \\
+%
+    {\bf b}_{t}^{\omega} = {\bf b}_{t-1}^{\omega} + \boldsymbol \eta_{t}^{ b^{\omega} } \Delta t, \\
+%
+    {\bf b}_{t}^{\omega} = {\bf b}_{t-1}^{a} + \boldsymbol \eta_{t}^{ b^{a} } \Delta t, \\
+%
+    {\bf g}_{t} = {\bf g}_{t-1}, \\
+%
+    {}^{I}{\bf t}_{L, t} = {}^{I}{\bf t}_{L, t-1}, \\
+%
+    {}^{I}R_{L, t} = {}^{I}R_{L, t-1},
+  \end{gathered}
+  \label{eq:discrete_imu_preintegration_tight}
+\end{align}
+%
+where $\Delta t$ denotes the time interval of the IMU measurement.
+
+Let the state update given by equation~(\ref{eq:discrete_imu_preintegration_tight}) be written as ${\bf x}_{t} = {\bf f} \left( {\bf x}_{t-1}, {\bf u}_{t}, \boldsymbol \eta_{t} \right)$.
+In this case, the covariance matrix can be updated as follows.
+%
+\begin{align}
+  \Sigma_{t} = F_{x} \Sigma_{t-1} F_{x}^{\top} + F_{\eta} Q F_{\eta}^{\top},
+\end{align}
+%
+where $F_{x} = \partial {\bf f} / \partial {\bf x}_{t-1} \in \mathbb{R}^{24 \times 24}$ and $F_{\eta} = \partial {\bf f} / \partial \boldsymbol \eta_{t} \in \mathbb{R}^{24 \times 12}$, while $Q \in \mathbb{R}^{12 \times 12}$ denotes the process noise covariance matrix.
+Since these are large matrices, the computations become cumbersome, but they can be derived as follows\footnote{Although I have repeatedly computed and verified them, I cannot say with absolute confidence that they are entirely correct.}.
+%
+\begin{align}
+  F_{x} = \left( \begin{matrix}
+    I_{3} & -A \Delta t^{2} & I_{3} \Delta t & 0 & -\frac{1}{2} {}^{O}R_{I, t-1} \Delta t^{2} & \frac{1}{2} I_{3} \Delta t & 0 & 0 \\
+%
+    0 & J_{l}^{-1} \left( {}^{O}{\bf r}_{I} \right) {}^{O}R_{I, t}^{\top} & 0 & -J_{l}^{-1} \left( {}^{O}{\bf r}_{I} \right) J_{r} \left( \Delta \boldsymbol \phi_{t} \right) \Delta t & 0 & 0 & 0 & 0 \\
+%
+    0 & -A \Delta t & I_{3} & 0 & -{}^{O}R_{I, t-1} \Delta t & I_{3} \Delta t & 0 & 0 \\
+%
+    0 & 0 & 0 & I_{3} & 0 & 0 & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 & I_{3} & 0 & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 & 0 & I_{3} & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 & 0 & 0 & I_{3} & 0 \\
+%
+    0 & 0 & 0 & 0 & 0 & 0 & 0 & J_{l}^{-1} \left( {}^{I}{\bf r}_{L} \right) \\
+  \end{matrix} \right),
+  \label{eq:covariance_update_fx}
+\end{align}
+%
+\begin{align}
+  F_{\eta} = \left( \begin{matrix}
+    0 & -\frac{1}{2} {}^{O}R_{I, t-1} \Delta t^{2} & 0 & 0 \\
+%
+    -J_{l}^{-1} \left( {}^{O}{\bf r}_{I} \right) J_{r} \left( \Delta \boldsymbol \phi_{t} \right) \Delta t & 0 & 0 & 0 \\
+%
+    0 & {}^{O}R_{I, t-1} \Delta t & 0 & 0 \\
+%
+    0 & 0 & I_{3} \Delta t & 0 \\
+%
+    0 & 0 & 0 & I_{3} \Delta t \\
+%
+    0 & 0 & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 \\
+%
+    0 & 0 & 0 & 0 \\
+  \end{matrix} \right),
+  \label{eq:covariance_update_feta}
+\end{align}
+%
+where the following shorthand notations are used:
+$\hat{ \boldsymbol \omega }_{t} = \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} - \boldsymbol \eta_{t}^{\omega}$,
+$\hat{ {\bf a} }_{t} = {\bf a}_{t} - {\bf b}_{t-1}^{a} - \boldsymbol \eta_{t}^{a}$,
+$A = \left( {}^{O}R_{I, t-1} \hat{ {\bf a} }_{t} \right)^{\wedge}$,
+${}^{O}{\bf r}_{I} = \left( \log \left( {}^{O}R_{I, t} \right) \right)^{\vee}$,
+${}^{I}{\bf r}_{L} = \left( \log \left( {}^{I}R_{L, t} \right) \right)^{\vee}$,
+$\Delta \boldsymbol \phi_{t} = \hat{ \boldsymbol \omega }_{t} \Delta t$.
+In addition, the zeros shown in equations~(\ref{eq:covariance_update_fx}) and~(\ref{eq:covariance_update_feta}) all represent $3 \times 3$ zero matrices in $\mathbb{R}^{3 \times 3}$.
+
+
+
+
+
+
+
+
+
+
+
+\section{Update with IEKF}
+
+After completing the update with IMU preintegration, the LiDAR point cloud distortion correction described in Section~\ref{subsec:deskew_scan_distortion} is applied.
+The LiDAR point cloud is then transformed into the IMU frame, and the residual vector and cost function are defined as in equations~(\ref{eq:residual_vector_lio_scan_matching}) and~(\ref{eq:cost_function_lio_scan_matching}).
+Next, the Jacobian of the residual is derived, and the cost function is minimized.
+However, since the LIO described in this chapter performs optimization using the state defined in equation~(\ref{eq:tight_coupling_lio_state}), the Jacobian required here differs from the one derived in Section~\ref{subsec:point_to_plane_jacobian}.
+
+The Jacobian to be computed for the LIO in this chapter is given as follows.
+%
+\begin{align}
+  \frac{ \partial r_{i} }{ \partial {\bf x} }
+  = \left(
+    \frac{ \partial r_{i} }{ \partial {}^{O}{\bf t}_{I} } ~
+    \frac{ \partial r_{i} }{ \partial {}^{O}R_{I} } ~
+    \frac{ \partial r_{i} }{ \partial {}^{O}{\bf v} } ~
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{\omega} } ~
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{a} } ~
+    \frac{ \partial r_{i} }{ \partial {\bf g} } ~
+    \frac{ \partial r_{i} }{ \partial {}^{I}{\bf t}_{L} } ~
+    \frac{ \partial r_{i} }{ \partial {}^{I}R_{L} }
+  \right)^{\top} \in \mathbb{R}^{1 \times 24}.
+  \label{eq:residual_jecobian_tight}
+\end{align}
+%
+The detailed derivations of each Jacobian are omitted here, but their results are given below (the derivation of the Jacobian with respect to the angular velocity bias is presented in Section~\ref{sec:回転および角速度バイアスに関するヤコビアンの導出}).
+%
+\begin{align}
+  \begin{gathered}
+    \frac{ \partial r_{i} }{ \partial {}^{O}{\bf t}_{I} } = -{\bf n}_{i}^{\top}, \\
+%
+    \frac{ \partial r_{i} }{ \partial {}^{O}R_{I} } = {\bf n}_{i}^{\top} \left( {}^{O}R_{I} {}^{I}{\bf p}_{i} \right)^{\wedge}, \\
+%
+    \frac{ \partial r_{i} }{ \partial {}^{O}{\bf v} } = -\Delta t {\bf n}_{i}^{\top}, \\
+%
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{\omega} } = {\bf n}_{i}^{\top} \left( {}^{O}R_{I} {}^{I}{\bf p}_{i} \right)^{\wedge} J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t, \\
+%
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{a} } = \frac{1}{2} \Delta t^{2} {\bf n}_{i}^{\top} {}^{O}R_{I, t-1}, \\
+%
+    \frac{ \partial r_{i} }{ \partial {\bf g} } = -\frac{1}{2} \Delta t^{2} {\bf n}_{i}^{\top}, \\
+%
+    \frac{ \partial r_{i} }{ \partial {}^{I}{\bf t}_{L} } = {\bf n}_{i}^{\top} {}^{O}R_{I}, \\
+%
+    \frac{ \partial r_{i} }{ \partial {}^{I}R_{L} } = {\bf n}_{i}^{\top} {}^{O}R_{I} \left( {}^{I}R_{L} {}^{L}{\bf p}_{i} \right)^{\wedge}, \\
+  \end{gathered}
+\end{align}
+%
+where ${}^{L}{\bf p}$ and ${}^{I}{\bf p}$ represent the same point expressed in the LiDAR and IMU frames, respectively, with ${}^{I}{\bf p} = {}^{I}T_{L} {}^{L}{\bf p}$.
+Also, $\Delta \boldsymbol \phi = \left( \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} \right) \Delta t$, which is recomputed whenever the state variable ${\bf b}_{t-1}^{\omega}$ is updated.
+
+Once the residuals and Jacobians have been obtained, the update is performed using the {\bf Iterated Extended Kalman Filter} (IEKF), which is achieved by iteratively updating the state according to the following equation.
+%
+\begin{align}
+  \begin{gathered}
+    {\bf r}^{k} = \left( r_{1}^{k} ~ \cdots ~ r_{N}^{k} \right)^{\top}, \\
+%
+    J^{k} = \left( J_{1}^{k} ~ \cdots ~ J_{N}^{k} \right)^{\top}, \\
+%
+    H^{k} = \left( \begin{matrix}
+      I_{3} & 0_{3 \times 3} & 0_{3 \times 15} & 0_{3 \times 3} \\
+%
+      0_{3 \times 3} & J_{l}^{-1} \left( \left( \log \left( \left( {}^{O}R_{I}^{1} \right)^{\top} {}^{O}R_{I}^{k} \right) \right)^{\vee} \right) & 0_{3 \times 15} & 0_{3 \times 3} \\
+%
+      0_{15 \times 3} & 0_{15 \times 3} & I_{15 \times 15} & 0_{3 \times 3} \\
+%
+      0_{3 \times 3} & 0_{3 \times 3} & 0_{3 \times 3} & J_{l}^{-1} \left( \left( \log \left( \left( {}^{I}R_{L}^{1} \right)^{\top} {}^{I}R_{L}^{k} \right) \right)^{\vee} \right)
+    \end{matrix} \right), \\
+%
+    \bar{ \Sigma }^{k} = \left( H^{k} \right)^{-1} \Sigma \left( \left( H^{k} \right)^{-1} \right)^{\top}, \\
+%
+    K^{k} = \left( \left( J^{k} \right)^{\top} R^{-1} J^{k} + \left( \bar{ \Sigma }^{k} \right)^{-1} \right)^{-1} \left( J^{k} \right)^{\top} R^{-1}, \\
+%
+    {\bf x}^{k+1} = {\bf x}^{k} \boxplus \left( -K^{k} {\bf r}^{k} - \left( I_{24} - K^{k} J^{k} \right) \left( H^{k} \right)^{-1} \left( {\bf x}^{k} \boxminus {\bf x}^{1} \right) \right),
+  \end{gathered}
+  \label{eq:iterated_extended_kalman_filter}
+\end{align}
+%
+where $R = {\rm diag} \left( \sigma^{2}, \cdots, \sigma^{2} \right) \in \mathbb{R}^{N \times N}$, with $\sigma^{2} \in \mathbb{R}$ denoting the variance of the residuals.
+The states marked with the superscript $1$ denote the initial values used for the iterative computation.
+When the update step in the $k$-th iteration falls below a predefined threshold and convergence is determined, the state and covariance matrix are updated as follows.
+%
+\begin{align}
+  \begin{gathered}
+    {\bf x}_{t} = {\bf x}^{k}, \\
+%
+    \Sigma_{t} = \left( I_{24} - K^{k} J^{k} \right) \bar{ \Sigma }^{k}.
+  \end{gathered}
+\end{align}
+%
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{Practical Considerations}
+
+In the loose-coupling LIO described in the previous chapter, parameters such as gravitational acceleration and the relative pose between the LiDAR and IMU were not included in the state to be estimated.
+In contrast, tight-coupling approaches allow these parameters to be jointly optimized.
+Unlike loose coupling, where estimation is performed in two separate stages, tight coupling eliminates such redundancy and enables unified estimation of all parameters.
+
+That said, including these additional parameters in the estimation does not always lead to dramatic performance improvements.
+However, in many cases, tight coupling tends to yield more accurate results.
+It should also be noted that even without optimizing for gravity or the LiDAR-IMU extrinsics, a tight-coupled LIO can still function sufficiently well, meaning these parameters are not necessarily required to be optimized.
+
+Although not covered in this book, recent work has proposed methods that combine LiDAR, cameras, and IMU in a joint optimization framework.
+In such approaches, accurately estimating the relative pose between the LiDAR and camera is of critical importance.
+Since these extrinsic parameters are often difficult to determine with sufficient accuracy through offline calibration alone, jointly optimizing them within the tight-coupling framework is a practical and effective approach.
+
+Another interesting property arises in the IEKF.
+Equation~(\ref{eq:residual_jecobian_tight}) shows the Jacobians of the residuals, which include somewhat complex terms.
+For instance, the Jacobians with respect to the velocity vector and IMU measurement biases must be derived using the chain rule, taking IMU preintegration into account.
+While these Jacobians can be explicitly computed and used in the implementation, it is noteworthy that the system can still function as a tight-coupled LIO even if all of these Jacobians are simply set to ${\bf 0}_{3}$.
+This is because the correction terms propagate through the Kalman gain $K$ in equation~(\ref{eq:iterated_extended_kalman_filter}), thereby updating even those states without explicitly derived Jacobians.
+Consequently, when the Jacobian computations are cumbersome, or when one wishes to avoid re-computation based on IMU preintegration, the system can still operate effectively without them.
+
+Finally, tight-coupled LIO can also be implemented within a factor graph framework, where IMU preintegration factors are incorporated.
+This approach has been adopted in LIO-SAM~\cite{liosam2020shan} and GLIM~\cite{KoideRAS2024}, enabling not only state estimation but also map smoothing by leveraging past trajectories.
+Nonetheless, in practice, IEKF-based sequential implementations are often more computationally efficient (though systems such as LIO-SAM and GLIM are capable of running at sufficient real-time rates).
+
+
+
+
+
+
+
+
+
+
+
+% \section{Derivation of Jacobians with Respect to Rotation and Gyroscope Bias}
+\section{Derivation of Jacobians w.r.t. Rotation and Gyroscope Bias}
+\label{sec:回転および角速度バイアスに関するヤコビアンの導出}
+
+Equations~(\ref{eq:covariance_update_fx}) and~(\ref{eq:covariance_update_feta}) show the Jacobians used for updating the covariance matrix.
+However, since the Jacobians with respect to rotation are complicated to derive, we provide a supplementary explanation here.
+
+First, we derive the Jacobian of ${}^{O}{\bf t}_{I, t}$ with respect to ${}^{O}R_{I, t-1}$.
+This can be obtained by considering the perturbed ${}^{O}R_{I, t-1}$, namely $\exp \left( \delta \boldsymbol \phi^{\wedge} \right) {}^{O}R_{I, t-1}$, and examining the difference in ${}^{O}{\bf t}_{I, t}$.
+For simplicity of notation, let ${}^{O}{\bf t}_{I, t} \left( \delta \boldsymbol \phi \right)$ denote ${}^{O}{\bf t}_{I, t}$ that includes $\exp \left( \delta \boldsymbol \phi^{\wedge} \right) {}^{O}R_{I, t-1}$.
+By considering the difference between ${}^{O}{\bf t}_{I, t} \left( \delta \boldsymbol \phi \right)$ and ${}^{O}{\bf t}_{I, t}$ in equation~(\ref{eq:discrete_imu_preintegration_tight}), we obtain $J$ such that ${}^{O}{\bf t}_{I, t} \left( \delta \boldsymbol \phi \right) - {}^{O}{\bf t}_{I, t} = J \delta \boldsymbol \phi$.
+%
+\begin{align}
+  \begin{split}
+    {}^{O}{\bf t}_{I, t} \left( \delta \boldsymbol \phi \right) - {}^{O}{\bf t}_{I, t}
+    = &
+    \frac{1}{2} \left( \exp \left( \delta \boldsymbol \phi^{\wedge} \right) - I_{3} \right) {}^{O}R_{I, t-1} \hat{ {\bf a} }_{t} \Delta t^{2}, \\
+    = &
+    \frac{1}{2} \delta \boldsymbol \phi^{\wedge} {}^{O}R_{I, t-1} \hat{ {\bf a} }_{t} \Delta t^{2}, \\
+    = & - \frac{1}{2} \left( {}^{O}R_{I, t-1} \hat{ {\bf a} }_{t} \right)^{\wedge} \Delta t^{2} \delta \boldsymbol \phi.
+  \end{split}
+\end{align}
+%
+Thus, $J = - \frac{1}{2} \left( {}^{O}R_{I, t-1} \hat{ {\bf a} } \right)^{\wedge} \Delta t^{2}$.
+The Jacobian of ${}^{O}{\bf v}_{t}$ with respect to ${}^{O}R_{I, t-1}$ can be derived in the same manner.
+
+Next, we consider the Jacobian of ${}^{O}R_{I, t}$.
+To begin, we restate the rotation update as follows.
+%
+\begin{align}
+  R_{t} = R_{t-1} \exp \left( \left( \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} - \boldsymbol \eta_{t}^{\omega} \right)^{\wedge} \Delta t \right).
+\end{align}
+%
+The covariance matrix with respect to $R_{t}$ is defined for the corresponding rotation vector $\left( \log \left( R_{t} \right) \right)^{\vee}$.
+Therefore, it is necessary to consider the derivatives of $\left( \log \left( R_{t} \right) \right)^{\vee}$ with respect to $R_{t-1}$ and ${\bf b}_{t-1}^{\omega}$.
+
+First, let us consider the Jacobian with respect to $R_{t-1}$, which can be computed using the following chain rule.
+%
+\begin{align}
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial R_{t-1} }
+  =
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial R_{t} }
+  \frac{ \partial R_{t} }{ \partial R_{t-1} }.
+  \label{eq:dlogRt_dRt-1}
+\end{align}
+%
+First, to compute $\partial \left( \log \left( R_{t} \right) \right)^{\vee} / \partial R_{t}$, we consider the Jacobian that satisfies the following equation.
+%
+\begin{align}
+  \left( \log \left( \exp \left( \delta \boldsymbol \phi^{\wedge} \right) R_{t} \right) \right)^{\vee} - \left( \log \left( R_{t} \right) \right)^{\vee} = J \delta \boldsymbol \phi.
+\end{align}
+%
+By considering the BCH expansion of the first term on the left-hand side, we obtain the first-order approximation
+$\left( \log \left( \exp \left( \delta \boldsymbol \phi^{\wedge} \right) R_{t} \right) \right)^{\vee} \simeq \left( \log \left( R_{t} \right) \right)^{\vee} + J_{l}^{-1} \left( \left( \log \left( R_{t} \right) \right)^{\vee} \right) \delta \boldsymbol \phi$,
+and thus the Jacobian that satisfies the above equation is given as follows.
+%
+\begin{align}
+  J_{l}^{-1} \left( \left( \log \left( R_{t} \right) \right)^{\vee} \right).
+  \label{eq:dlogRt_dRt}
+\end{align}
+%
+
+Next, to compute $\partial R_{t} / \partial R_{t-1}$, we consider $J$ that satisfies the following equation.
+%
+\begin{align}
+  \left( R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \right)^{-1} \exp \left( \delta \boldsymbol \phi^{\wedge} \right) R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right)
+  =
+  I_{3} + \left( J \delta \boldsymbol \phi \right)^{\wedge},
+  \label{eq:dRt_dRt-1}
+\end{align}
+%
+where $\hat{ \boldsymbol \omega }_{t} = \boldsymbol \omega_{t} - {\bf b}_{t-1}^{\omega} - \boldsymbol \eta_{t}^{\omega}$.
+Expanding the left-hand side of equation~(\ref{eq:dRt_dRt-1}) yields the following.
+%
+\begin{align}
+  \begin{split}
+    & \exp \left( -\left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1} \exp \left( \delta \boldsymbol \phi^{\wedge} \right) R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \\
+    = &
+    \exp \left( \left( \operatorname{Ad}_{ \exp \left( -\left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1} } \delta \boldsymbol \phi \right)^{\wedge} \right), \\
+    \simeq & I_{3} + \left( \operatorname{Ad}_{ \exp \left( -\left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1} } \delta \boldsymbol \phi \right)^{\wedge}.
+  \end{split}
+\end{align}
+%
+Thus, $J = \operatorname{Ad}_{ \exp \left( -\left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1} }$, which, by using equation~(\ref{eq:adjoint}), becomes $\exp \left( -\left( \hat{ \boldsymbol{\omega} }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1}$.
+Since $\exp \left( -\left( \hat{ \boldsymbol{\omega} }_{t} \right)^{\wedge} \Delta t \right) R_{t-1}^{-1}$ is equal to $R_{t}^{-1}$, this reduces to $R_{t}^{\top}$.
+
+From the above, equation~(\ref{eq:dlogRt_dRt-1}) becomes the following.
+%
+\begin{align}
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial R_{t-1} }
+  =
+  J_{l}^{-1} \left( \left( \log \left( R_{t} \right) \right)^{\vee} \right) R_{t}^{\top}.
+\end{align}
+%
+
+Next, we consider the Jacobian with respect to ${\bf b}_{t-1}^{\omega}$, which can also be computed using the chain rule as follows.
+%
+\begin{align}
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial {\bf b}_{t-1}^{\omega} }
+  =
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial R_{t} }
+  \frac{ \partial R_{t} }{ \partial {\bf b}_{t-1}^{\omega} }.
+  \label{eq:dlogRt_dbomegat-1}
+\end{align}
+%
+Since $\partial \left( \log \left( R_{t} \right) \right)^{\vee} / \partial R_{t}$ is given in equation (\ref{eq:dlogRt_dRt}), we now consider $\partial R_{t} / \partial {\bf b}_{t-1}^{\omega}$.
+
+To compute $\partial R_{t} / \partial {\bf b}_{t-1}^{\omega}$, we consider $J$ that satisfies the following equation.
+%
+\begin{align}
+  \left( R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \right)^{-1} R_{t-1} \exp \left( \left( \hat{ \boldsymbol \omega }_{t} - \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t \right)
+  = 
+  I_{3} + \left( J \delta {\bf b}^{\omega} \right)^{\wedge}.
+  \label{eq:dRt_dbt-1}
+\end{align}
+%
+The left-hand side of equation (\ref{eq:dRt_dbt-1}) becomes $\exp \left( \left( - \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \exp \left( \left( \hat{ \boldsymbol \omega }_{t} - \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t \right)$.
+Using the BCH expansion, the left-hand side of equation (\ref{eq:dRt_dbt-1}) can be approximated to first order as follows.
+%
+\begin{align}
+  \begin{split}
+    \exp \left( \left( - \hat{ \boldsymbol \omega }_{t} \right)^{\wedge} \Delta t \right) \exp \left( \left( \hat{ \boldsymbol \omega }_{t} - \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t \right)
+%
+    \simeq &
+%
+    \exp \left( - \left( J_{r} \left( \hat{ \boldsymbol \omega } \Delta t \right) \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t \right), \\
+%
+    \simeq & 
+%
+    I_{3} - \left( J_{r} \left( \hat{ \boldsymbol \omega } \Delta t \right) \delta {\bf b}^{\omega} \right)^{\wedge} \Delta t,
+  \end{split}
+\end{align}
+%
+where $J_{r} \left( \cdot \right)$ denotes the right Jacobian on ${\rm SO}(3)$, which is given as follows.
+%
+\begin{align}
+  J_{r} \left( \boldsymbol \phi \right)
+  =
+  I_{3} -
+  \frac{ 1 - \cos \theta }{ \theta^{2} } \boldsymbol \phi^{\wedge} +
+  \frac{ \theta - \sin \theta }{ \theta^{3} } \left( \boldsymbol \phi^{\wedge} \right)^{2},
+\end{align}
+%
+Therefore, the $J$ that satisfies equation~(\ref{eq:dRt_dbt-1}) is $- J_{r} \left( \hat{ \boldsymbol \omega } \Delta t \right) \Delta t$.
+
+From this, equation~(\ref{eq:dlogRt_dbomegat-1}) becomes the following.
+%
+\begin{align}
+  \frac{ \partial \left( \log \left( R_{t} \right) \right)^{\vee} }{ \partial {\bf b}_{t-1}^{\omega} }
+  =
+  - J_{l}^{-1} \left( \left( \log \left( R_{t} \right) \right)^{\vee} \right)
+  J_{r} \left( \hat{ \boldsymbol \omega }_{t} \Delta t \right) \Delta t.
+\end{align}
+
+In addition, the Jacobian of the residual $r_{i}$ with respect to the gyroscope bias ${\bf b}^{\omega}$, as shown in equation~(\ref{eq:residual_jecobian_tight}), can be computed using the chain rule as follows.
+%
+\begin{align}
+  \frac{ \partial r_{i} }{ \partial {\bf b}^{\omega} }
+  =
+  \frac{ \partial r_{i} }{ \partial {\bf r}_{i} }
+  \frac{ \partial {\bf r}_{i} }{ \partial {}^{O}{\bf t}_{I} }
+  \frac{ \partial {}^{O}{\bf t}_{I} }{ \partial {}^{O}R_{I} }
+  \frac{ \partial {}^{O}R_{I} }{ \partial {\bf b}^{\omega} }
+  +
+  \frac{ \partial r_{i} }{ \partial {\bf r}_{i} }
+  \frac{ \partial {\bf r}_{i} }{ \partial {}^{O}R_{I} }
+  \frac{ \partial {}^{O}R_{I} }{ \partial {\bf b}^{\omega} }.
+  \label{eq:dr_dbomega}
+\end{align}
+%
+The Jacobians with respect to ${}^{O}R_{I}$ and ${\bf b}^{\omega}$ are given as follows.
+%
+\begin{align}
+  \begin{gathered}
+    \frac{ \partial {}^{O}{\bf t}_{I} }{ \partial {}^{O}R_{I} }
+    =
+    -\frac{1}{2} \left( {}^{O}R_{I} \hat{ {\bf a} }_{t} \right)^{\wedge} \Delta t^{2}, \\
+%
+    \frac{ \partial {}^{O}R_{I} }{ \partial {\bf b}^{\omega} }
+    =
+    J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t.
+  \end{gathered}
+\end{align}
+%
+Based on these results, equation~(\ref{eq:dr_dbomega}) can be written as follows.
+%
+\begin{align}
+  \begin{split}
+    \frac{ \partial r_{i} }{ \partial {\bf b}^{\omega} }
+    = &
+    {\bf n}_{i}^{\top}
+    \left( -I_{3} \right)
+    \left( -\frac{1}{2} \left( {}^{O}R_{I} \hat{ {\bf a} }_{t} \right)^{\wedge} \Delta t^{2} \right)
+    \left( J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t \right)
+    +
+    {\bf n}_{i}^{\top}
+    \left( {}^{O}R_{I} {}^{I}{\bf p}_{i} \right)^{\wedge}
+    \left( J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t \right), \\
+    \simeq &
+    {\bf n}_{i}^{\top}
+    \left( {}^{O}R_{I} {}^{I}{\bf p}_{i} \right)^{\wedge}
+    J_{r} \left( \Delta \boldsymbol \phi \right) \Delta t,
+  \end{split}
+\end{align}
+%
+where the first term on the right-hand side contains $\Delta t^{3}$ and is therefore neglected as a higher-order infinitesimal.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
