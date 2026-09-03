@@ -225,3 +225,54 @@ class TestAutonomousExplorerE2E(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestConfirmedTargetObjectId(unittest.TestCase):
+    """确认标记必须落在本帧的目标候选节点上，而不是 label 碰巧沾边的物体。"""
+
+    def _observation(self) -> LiveObservation:
+        return LiveObservation(
+            bundle_id="bundle_1",
+            timestamp=1.0,
+            heading_sector=0,
+            pose={"x": 0.0, "y": 0.0, "yaw_deg": 0.0},
+            scene_objects=[
+                # VLM 的 scene_objects_light 先给了远处另一个桶，label 与目标
+                # 存在包含关系 -> label 猜测会命中它。
+                {"frame_object_id": "scene_obj_001", "label": "垃圾桶",
+                 "category": "object", "bbox_2d": [0.1, 0.1, 0.2, 0.3],
+                 "score": 0.6},
+                {"frame_object_id": "target_obj_001", "label": "蓝色垃圾桶 深蓝色网格桶",
+                 "category": "target", "bbox_2d": [0.5, 0.4, 0.7, 0.8],
+                 "score": 0.9},
+            ],
+        )
+
+    def test_confirmation_uses_the_frame_target_candidate(self):
+        explorer = _explorer(MockObservationScene(scenes=[
+            MockSceneStep(objects=["垃圾桶"], target_present=True,
+                          target_score=0.9),
+        ]))
+        observation = self._observation()
+        spatial_update = explorer.semantic_graph.update_observation(
+            observation_id=observation.bundle_id,
+            heading_sector=observation.heading_sector,
+            scene_objects=observation.scene_objects,
+            scene_relations=[],
+            pose=observation.pose,
+            timestamp=observation.timestamp,
+            target_candidate=True,
+        )
+        mapping = spatial_update["frame_object_ids"]
+        self.assertIn("target_obj_001", mapping)
+        object_id = explorer._confirmed_target_object_id(observation, spatial_update)
+        self.assertEqual(object_id, mapping["target_obj_001"])
+        # label 猜测会命中另一个桶，精确映射不会。
+        self.assertNotEqual(object_id, mapping["scene_obj_001"])
+        self.assertEqual(explorer._target_object_id(), mapping["scene_obj_001"])
+        explorer.semantic_graph.mark_target_confirmed(
+            object_id=object_id, observation_id=observation.bundle_id)
+        objects = explorer.semantic_graph.object_map.objects
+        self.assertTrue(objects[object_id].provenance.get("target_confirmed"))
+        self.assertNotIn(
+            "target_confirmed", objects[mapping["scene_obj_001"]].provenance)

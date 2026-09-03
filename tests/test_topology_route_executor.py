@@ -117,6 +117,48 @@ class TestTopologyRouteExecutor(unittest.TestCase):
         if goal.goal_type == GOAL_ROTATE_VIEW:
             self.assertGreater(goal.relative_dyaw, 0.0)
 
+    def _same_place_goal(self, bearing_deg: float, yaw_deg: float):
+        graph = _graph()
+        current = graph.current_place().place_id
+        frontier = TopologicalFrontier(
+            frontier_id="F01", parent_place_id=current, bearing_deg=bearing_deg
+        )
+        route = TopologicalRoute(
+            route_id="r-align",
+            place_path=[current],
+            edge_path=[],
+            target_frontier_id=frontier.frontier_id,
+            total_cost=0.0,
+        )
+        return TopologyRouteExecutor().next_goal(
+            route=route,
+            current_place_id=current,
+            place_graph=graph,
+            current_yaw_deg=yaw_deg,
+            frontier=frontier,
+        )
+
+    def test_residual_bearing_error_advances_instead_of_oscillating(self) -> None:
+        """搜索 search_20260902_172911 的回归：|delta| 落到 15° 内就必须前进。
+
+        BEV frontier 每帧重算，目标角跟着机器狗朝向跑，残差每个 cycle 反号并
+        按 ~0.8 衰减。旧的 5° 窗要等到残差降到 5° 才闭合：实测 cycle 4 起 -30°、
+        16.1°、-14.6°、12.3°、-12.2°、7.9°、-7.0°、8.3°、-8.2°，直到 cycle 15
+        才第一次 advance，20 步预算里 11 步是纯摆头。15° 窗在 -14.6° 就闭合。
+        """
+        for delta in (7.85, -7.0, 8.27, -8.15, 12.3, -14.55):
+            goal = self._same_place_goal(bearing_deg=delta, yaw_deg=0.0)
+            self.assertEqual(goal.goal_type, GOAL_RELATIVE_MOVE, msg=f"delta={delta}")
+            self.assertGreater(goal.relative_dx, 0.0)
+            self.assertIn("advance", goal.semantic_reason or "")
+
+    def test_large_bearing_error_still_rotates_first(self) -> None:
+        """对准窗放宽不等于取消对准：20° 以上仍先转向（cycle 6 实测 -20.32°）。"""
+        goal = self._same_place_goal(bearing_deg=-20.32, yaw_deg=0.0)
+        self.assertEqual(goal.goal_type, GOAL_ROTATE_VIEW)
+        self.assertLess(goal.relative_dyaw, 0.0)
+        self.assertGreaterEqual(goal.relative_dyaw, -30.0)
+
 
 if __name__ == "__main__":
     unittest.main()

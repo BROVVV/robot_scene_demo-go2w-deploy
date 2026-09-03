@@ -20,10 +20,13 @@ from app.navigation.robot_backend import NavigationStatus, PoseQuality
 
 
 class _FakeMotion:
-    def __init__(self) -> None:
+    def __init__(self, rotation_gain: float = 1.0) -> None:
         self.steps: list[str] = []
         self.odom = [0.0, 0.0, 0.0]
         self.fail_steps: set[str] = set()
+        # Measured Go2-W behaviour is ~29 deg for a commanded 30 deg turn; a
+        # gain lets tests exercise the residual-closing branch.
+        self.rotation_gain = rotation_gain
 
     def execute(self, step: str) -> tuple[bool, str, dict]:
         self.steps.append(step)
@@ -34,7 +37,7 @@ class _FakeMotion:
         elif step.startswith("b"):
             self.odom[0] -= float(step[1:] or 0.10)
         else:
-            degrees = float(step[1:])
+            degrees = float(step[1:]) * self.rotation_gain
             if step.startswith("r"):
                 degrees = -degrees
             self.odom[2] += degrees * 3.141592653589793 / 180.0
@@ -71,15 +74,98 @@ class TestGo2WExperimentalBackend(unittest.TestCase):
         self.assertEqual(pose.quality, PoseQuality.RELATIVE)
         self.assertEqual(pose.frame_id, "odom")
 
-    def test_rotate_view_clamps_to_max_turn(self) -> None:
+    def test_small_turn_still_uses_single_primitive(self) -> None:
+        """计划书 §5.4：±30° 目标仍然只执行一个 primitive。"""
         motion = _FakeMotion()
         backend = _backend(motion, max_turn_deg_per_action=30.0)
         goal = ExplorationGoal(goal_id="g1", goal_type=GOAL_ROTATE_VIEW,
-                               relative_dyaw=90.0)
+                               relative_dyaw=30.0)
         result = backend.execute_goal(goal).result
         self.assertTrue(result.succeeded)
         self.assertEqual(motion.steps, ["l30"])
+        self.assertEqual(result.requested_motion["segment_count"], 1)
         self.assertIn("yaw_delta_deg", result.observed_motion)
+
+    def test_logical_sixty_degree_turn_runs_two_primitives(self) -> None:
+        """计划书 §5.4：+60° 目标执行两段 30°，累计实测同号且误差 ≤ 8°。"""
+        motion = _FakeMotion(rotation_gain=29.0 / 30.0)
+        backend = _backend(motion, max_turn_deg_per_action=30.0)
+        result = backend.execute_goal(ExplorationGoal(
+            goal_id="g-l60", goal_type=GOAL_ROTATE_VIEW, relative_dyaw=60.0,
+        )).result
+        self.assertTrue(result.succeeded)
+        self.assertEqual(motion.steps, ["l30", "l30"])
+        self.assertEqual(result.requested_motion["segment_count"], 2)
+        self.assertEqual(result.requested_motion["requested_total_deg"], 60.0)
+        observed = result.observed_motion["observed_total_deg"]
+        self.assertGreater(observed, 0.0)
+        self.assertLessEqual(abs(60.0 - observed), 8.0)
+        self.assertEqual(len(result.provenance["segments"]), 2)
+
+    def test_logical_minus_sixty_never_succeeds_on_one_r30(self) -> None:
+        """计划书 §2.2 的回归：-60° 不能只发一个 r30 就宣告成功。"""
+        motion = _FakeMotion(rotation_gain=28.5 / 30.0)
+        backend = _backend(motion, max_turn_deg_per_action=30.0)
+        result = backend.execute_goal(ExplorationGoal(
+            goal_id="g-r60", goal_type=GOAL_ROTATE_VIEW, relative_dyaw=-60.0,
+        )).result
+        self.assertNotEqual(motion.steps, ["r30"])
+        self.assertEqual(motion.steps[:2], ["r30", "r30"])
+        self.assertTrue(result.succeeded)
+        observed = result.observed_motion["observed_total_deg"]
+        self.assertLess(observed, 0.0)
+        self.assertLessEqual(abs(-60.0 - observed), 8.0)
+
+    def test_second_segment_uses_remaining_not_full_step(self) -> None:
+        """计划书 §5.3.8：第一段转过头时第二段只补剩余角度。"""
+        motion = _FakeMotion(rotation_gain=40.0 / 30.0)
+        backend = _backend(motion, max_turn_deg_per_action=30.0)
+        result = backend.execute_goal(ExplorationGoal(
+            goal_id="g-over", goal_type=GOAL_ROTATE_VIEW, relative_dyaw=60.0,
+        )).result
+        # First primitive overshoots to +40 deg, so the second one asks for the
+        # 20 deg residual instead of another mechanical 30 deg.
+        self.assertEqual(motion.steps[0], "l30")
+        self.assertEqual(motion.steps[1], "l20")
+        self.assertEqual(
+            result.provenance["segments"][1]["requested_deg"], 20.0
+        )
+        self.assertTrue(result.succeeded)
+        self.assertLessEqual(
+            abs(60.0 - result.observed_motion["observed_total_deg"]), 8.0
+        )
+
+    def test_first_failed_segment_blocks_the_second(self) -> None:
+        """计划书 §5.3.6：第一段失败后不再执行第二段，逻辑目标不成功。"""
+        stopped: list[bool] = []
+        motion = _FakeMotion()
+        motion.fail_steps.add("r30")
+        backend = Go2WExperimentalBackend(
+            execute_step=motion.execute,
+            odometry=motion.odometry,
+            stop=lambda: stopped.append(True),
+            config=Go2WBackendConfig(max_turn_deg_per_action=30.0),
+        )
+        result = backend.execute_goal(ExplorationGoal(
+            goal_id="g-fail", goal_type=GOAL_ROTATE_VIEW, relative_dyaw=-60.0,
+        )).result
+        self.assertEqual(result.status, NavigationStatus.FAILED)
+        self.assertEqual(motion.steps, ["r30"])
+        self.assertEqual(stopped, [True])
+        self.assertEqual(len(result.provenance["segments"]), 1)
+        self.assertFalse(result.provenance["segments"][0]["success"])
+
+    def test_rpc_success_without_rotation_is_not_confirmed(self) -> None:
+        """计划书 §5.3.9：RPC 成功但里程计没转够时返回 ROTATION_NOT_CONFIRMED。"""
+        motion = _FakeMotion(rotation_gain=0.0)
+        backend = _backend(motion, max_turn_deg_per_action=30.0)
+        result = backend.execute_goal(ExplorationGoal(
+            goal_id="g-noyaw", goal_type=GOAL_ROTATE_VIEW, relative_dyaw=60.0,
+        )).result
+        self.assertEqual(result.status, NavigationStatus.FAILED)
+        self.assertIn("ROTATION_NOT_CONFIRMED", result.message)
+        self.assertEqual(result.observed_motion["observed_total_deg"], 0.0)
+        self.assertEqual(result.observed_motion["remaining_deg"], 60.0)
 
     def test_rotate_right_uses_r_step(self) -> None:
         motion = _FakeMotion()
@@ -247,6 +333,59 @@ class TestGo2WExperimentalBackend(unittest.TestCase):
         self.assertIn(
             "duplicate_motion_action_server_processes", health.degraded
         )
+
+    def test_remote_action_server_process_is_authoritative(self) -> None:
+        """WebUI on the robot, single action server on the control host."""
+        motion = _FakeMotion()
+        backend = Go2WExperimentalBackend(
+            execute_step=motion.execute,
+            odometry=motion.odometry,
+            health_probe=lambda: {
+                "motion_action_available": True,
+                "motion_action_server_count": 1,
+                "motion_action_server_process_count": 0,
+                "odom_publisher_count": 1,
+                "wheel_odom_process_count": 0,
+            },
+        )
+        health = backend.health()
+        self.assertTrue(health.ready)
+        self.assertNotIn(
+            "motion_action_server_process_missing", health.degraded
+        )
+
+    def test_local_action_server_missing_without_graph_server_fails(self) -> None:
+        motion = _FakeMotion()
+        backend = Go2WExperimentalBackend(
+            execute_step=motion.execute,
+            odometry=motion.odometry,
+            health_probe=lambda: {
+                "motion_action_available": True,
+                "motion_action_server_count": 0,
+                "motion_action_server_process_count": 0,
+            },
+        )
+        health = backend.health()
+        self.assertFalse(health.ready)
+        self.assertIn("motion_action_server_missing", health.degraded)
+        self.assertIn(
+            "motion_action_server_process_missing", health.degraded
+        )
+
+    def test_action_process_probe_failure_fails_closed(self) -> None:
+        motion = _FakeMotion()
+        backend = Go2WExperimentalBackend(
+            execute_step=motion.execute,
+            odometry=motion.odometry,
+            health_probe=lambda: {
+                "motion_action_available": True,
+                "motion_action_server_count": 1,
+                "motion_action_server_process_count": None,
+            },
+        )
+        health = backend.health()
+        self.assertFalse(health.ready)
+        self.assertIn("motion_action_process_probe_failed", health.degraded)
 
     def test_duplicate_odom_publishers_fail_health_closed(self) -> None:
         motion = _FakeMotion()
