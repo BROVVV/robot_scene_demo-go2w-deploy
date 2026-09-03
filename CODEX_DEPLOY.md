@@ -15,8 +15,8 @@ x86_64 工作站恢复项目的软件能力，同时保持真机运动默认关�
 ## 一键安装
 
 ```bash
-git clone https://github.com/BROVVV/robot_scene_demo.git
-cd robot_scene_demo
+git clone https://github.com/BROVVV/robot_scene_demo-go2w-deploy.git
+cd robot_scene_demo-go2w-deploy
 bash scripts/bootstrap_fresh_machine.sh --profile=full
 ```
 
