@@ -34,7 +34,16 @@ from .robot_backend import (
 
 @dataclass
 class Go2WBackendConfig:
+    # Hard safety limit for ONE physical turn primitive.  A logical goal larger
+    # than this is split into several primitives and closed on measured yaw
+    # (计划书 §5.1); the limit itself is never raised to reach the goal.
     max_turn_deg_per_action: float = 30.0
+    # Do not issue a primitive for a residual smaller than this - the platform
+    # cannot execute it reliably.
+    min_turn_segment_deg: float = 5.0
+    # A logical rotation goal is confirmed only when the accumulated measured
+    # yaw is within this tolerance (计划书 §5.4).
+    turn_confirm_tolerance_deg: float = 8.0
     forward_step_m: float = 0.20
     max_forward_step_m: float = 0.30
     allow_lateral: bool = False
@@ -220,9 +229,16 @@ class Go2WExperimentalBackend(RobotBackend):
                 else "duplicate_motion_action_servers"
             )
         process_count = details.get("motion_action_server_process_count")
+        # Same split topology as the wheel odom gate below: the WebUI search
+        # worker runs on the robot while the single canonical action server runs
+        # on the control host, where a local /proc scan finds nothing.  The ROS
+        # graph server-count is the authority there.  An unknown probe or extra
+        # local servers still fail closed.
+        remote_action_authority = process_count == 0 and server_count == 1
         if (
             "motion_action_server_process_count" in details
             and process_count != 1
+            and not remote_action_authority
             and not self.config.dry_run
         ):
             ready = False
@@ -250,9 +266,17 @@ class Go2WExperimentalBackend(RobotBackend):
                 else "duplicate_odom_publishers"
             )
         odom_processes = details.get("wheel_odom_process_count")
+        # The Go2-W WebUI may run on the robot while the single canonical
+        # wheel-odom publisher runs on the control host.  In that topology
+        # there is intentionally no local executable to count; the ROS graph
+        # publisher-count gate is the authority.  Still fail closed on an
+        # unknown process probe or on multiple local odom processes.
+        remote_odom_authority = (
+            odom_processes == 0 and odom_publishers == 1
+        )
         if (
             "wheel_odom_process_count" in details
-            and odom_processes != 1
+            and odom_processes not in {1, 0}
             and not self.config.dry_run
         ):
             ready = False
@@ -265,6 +289,15 @@ class Go2WExperimentalBackend(RobotBackend):
             )
             if marker not in degraded:
                 degraded.append(marker)
+        if (
+            "wheel_odom_process_count" in details
+            and odom_processes == 0
+            and not remote_odom_authority
+            and not self.config.dry_run
+        ):
+            ready = False
+            if "wheel_odom_process_missing" not in degraded:
+                degraded.append("wheel_odom_process_missing")
         if details.get("robot_mode_error"):
             ready = False
             degraded.append("robot_mode_error")
@@ -365,29 +398,112 @@ class Go2WExperimentalBackend(RobotBackend):
         )
 
     def _execute_turn(self, goal: ExplorationGoal, dyaw_deg: float) -> NavigationResult:
-        before = self._odometry()
-        clamped = max(
-            -abs(self.config.max_turn_deg_per_action),
-            min(abs(self.config.max_turn_deg_per_action), dyaw_deg),
-        )
-        degrees = max(1, int(round(abs(clamped))))
-        step = f"l{degrees}" if clamped >= 0.0 else f"r{degrees}"
+        """Execute a *logical* rotation goal as bounded 30° primitives.
+
+        计划书 §5：规划层的 ±60° 目标不再被静默限幅成一个 30° 动作。逻辑目标按
+        ``max_turn_deg_per_action`` 拆段，每段之间用 canonical fused odometry 闭环，
+        累计实测 yaw 决定逻辑目标是否成功。
+        """
+        requested_total = _wrap_deg(float(dyaw_deg))
+        limit = abs(self.config.max_turn_deg_per_action)
+        tolerance = abs(self.config.turn_confirm_tolerance_deg)
+        min_segment = abs(self.config.min_turn_segment_deg)
+        if abs(requested_total) < min_segment:
+            return navigation_result(
+                goal.goal_id, NavigationStatus.SUCCEEDED,
+                message="no rotation demanded",
+                requested_motion={
+                    "step": "turn_segmented",
+                    "requested_total_deg": round(requested_total, 3),
+                    "segment_count": 0,
+                },
+                observed_motion={"observed_total_deg": 0.0,
+                                 "remaining_deg": round(requested_total, 3)},
+                provenance={"backend": "go2w_experimental", "segments": []},
+            )
+
         started = self._now()
-        ok, reason, detail = self._execute_step(step)
+        observed_total = 0.0
+        segments: list[dict[str, Any]] = []
+        ok = True
+        reason = ""
+        detail: dict[str, Any] = {}
+        # One corrective segment beyond the nominal split absorbs per-primitive
+        # undershoot without ever exceeding the logical goal.
+        max_segments = int(math.ceil(abs(requested_total) / max(1.0, limit))) + 1
+        for _ in range(max_segments):
+            remaining = requested_total - observed_total
+            if abs(remaining) < min_segment:
+                break
+            segment_deg = max(-limit, min(limit, remaining))
+            degrees = max(1, int(round(abs(segment_deg))))
+            step = f"l{degrees}" if segment_deg >= 0.0 else f"r{degrees}"
+            before = self._odometry()
+            segment_ok, segment_reason, segment_detail = self._execute_step(step)
+            after = self._odometry()
+            segment_observed = _wrap_deg(math.degrees(after[2] - before[2]))
+            observed_total += segment_observed
+            segments.append({
+                "segment_index": len(segments) + 1,
+                "segment_step": step,
+                "requested_deg": round(segment_deg, 3),
+                "observed_deg": round(segment_observed, 3),
+                "success": bool(segment_ok),
+                "message": segment_reason,
+                "detail": segment_detail,
+            })
+            if not segment_ok:
+                # 计划书 §5.3.6：第一段失败后禁止继续执行下一段。
+                ok = False
+                reason = segment_reason or f"turn segment {len(segments)} failed"
+                detail = segment_detail
+                self.stop()
+                break
+
         elapsed = max(0.0, self._now() - started)
-        after = self._odometry()
-        observed_dyaw = _wrap_deg(math.degrees(after[2] - before[2]))
-        self._learn_correction(requested=clamped, observed=observed_dyaw, kind="rotation")
+        remaining = requested_total - observed_total
+        self._learn_correction(
+            requested=requested_total, observed=observed_total, kind="rotation"
+        )
+        if ok and abs(remaining) > tolerance:
+            ok = False
+            reason = (
+                f"ROTATION_NOT_CONFIRMED: requested {requested_total:.1f}° but "
+                f"odometry measured {observed_total:.1f}° "
+                f"(remaining {remaining:.1f}° > {tolerance:.1f}°)"
+            )
+            detail = {**detail, "error_type": "ROTATION_NOT_CONFIRMED"}
+            self.stop()
         status = _motion_status(ok, reason, detail)
+        last = segments[-1] if segments else {}
         return navigation_result(
             goal.goal_id, status,
-            message=reason or f"turn {step}",
+            message=reason or (
+                f"turn {requested_total:+.0f}° completed in {len(segments)} "
+                f"segment(s), measured {observed_total:+.1f}°"
+            ),
             requested_motion={
-                "step": step, "relative_yaw_deg": round(clamped, 3),
+                "step": "turn_segmented",
+                "requested_total_deg": round(requested_total, 3),
+                "relative_yaw_deg": round(requested_total, 3),
+                "segment_count": len(segments),
+                "segment_limit_deg": round(limit, 3),
+                "segment_index": last.get("segment_index", 0),
+                "segment_step": last.get("segment_step", ""),
+                "segment_steps": [item["segment_step"] for item in segments],
             },
-            observed_motion={"yaw_delta_deg": round(observed_dyaw, 3)},
+            observed_motion={
+                "observed_total_deg": round(observed_total, 3),
+                "remaining_deg": round(remaining, 3),
+                # Backwards-compatible alias for existing consumers.
+                "yaw_delta_deg": round(observed_total, 3),
+            },
             elapsed_sec=round(elapsed, 3),
-            provenance={"backend": "go2w_experimental", "detail": detail},
+            provenance={
+                "backend": "go2w_experimental",
+                "detail": detail,
+                "segments": segments,
+            },
         )
 
     def _execute_backward(

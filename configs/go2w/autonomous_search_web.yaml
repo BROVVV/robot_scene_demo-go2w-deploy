@@ -72,7 +72,10 @@ spatial:
 
   place_graph:
     merge_distance_m: 0.35
-    relocation_min_displacement_m: 0.10
+    # A Place is a relocation, not every primitive/action.  Wheel/fused odom
+    # is the primary evidence; this prevents turn-only LIO drift from
+    # manufacturing P2/P3.
+    relocation_min_displacement_m: 0.50
 
   entity_map:
     base_merge_distance_m: 0.35

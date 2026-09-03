@@ -40,6 +40,8 @@ class RGBDFrame:
 
     device_timestamp_ms: float | None = None
     host_timestamp: float | None = None
+    # 计划书 §11.1：host_timestamp | receive_time
+    timestamp_quality: str = "host_timestamp"
 
     health: dict[str, Any] = field(default_factory=dict)
     provenance: dict[str, Any] = field(default_factory=dict)
@@ -65,6 +67,7 @@ class RGBDFrame:
             depth_aligned_to_color=bool(value.get("depth_aligned_to_color", True)),
             device_timestamp_ms=value.get("device_timestamp_ms"),
             host_timestamp=value.get("host_timestamp"),
+            timestamp_quality=str(value.get("timestamp_quality") or "host_timestamp"),
             health=dict(value.get("health") or {}),
             provenance=dict(value.get("provenance") or {}),
         )

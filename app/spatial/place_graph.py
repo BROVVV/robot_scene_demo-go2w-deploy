@@ -132,6 +132,24 @@ class PlaceGraph:
         observed_displacement_m: float | None,
     ) -> tuple[str, bool, bool]:
         current = self.places[self._current_place_id]
+        # Independent wheel motion is the primary relocation evidence.  A
+        # turn-only cycle may contain a badly drifting LIO pose; never let
+        # that pose create P2/P3 while the wheels report no translation.
+        if observed_displacement_m is not None:
+            if observed_displacement_m < self.relocation_min_displacement_m:
+                return current.place_id, False, False
+            if pose is None:
+                new_id = self._new_place(pose=None, from_place=self._current_place_id)
+                return new_id, True, False
+            nearest_id, distance = self.nearest_place_id(pose)
+            if nearest_id is not None and distance <= self.merge_distance_m and nearest_id != current.place_id:
+                return nearest_id, False, True
+            # When LIO still claims that the robot is at the current place but
+            # wheel odometry observed a real translation, create a topological
+            # place without trusting that inconsistent metric pose.
+            place_pose = None if nearest_id == current.place_id else pose
+            new_id = self._new_place(pose=place_pose, from_place=self._current_place_id)
+            return new_id, True, False
         if pose is not None:
             # Global nearest-place association: revisiting an old place should
             # reuse that place, not spawn a duplicate.

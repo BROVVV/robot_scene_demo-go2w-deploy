@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Go2-W 自主语义搜索控制台</title>
-  <link rel="stylesheet" href="/static/style.css?v=persistent-history-20260821" />
+  <link rel="stylesheet" href="/static/style.css?v=go2w-fix-20260901" />
 </head>
 <body>
   <header class="topbar">
@@ -83,6 +83,8 @@
             <div><span>Anchor</span><b id="st-anchor">--</b></div>
             <div><span>Robot action</span><b id="st-action">IDLE</b></div>
             <div><span>Pose quality</span><b id="st-pose">--</b></div>
+            <div><span>语义状态</span><b id="st-semantic">--</b></div>
+            <div class="semantic-detail" id="st-semantic-detail">--</div>
           </div>
           <div class="cell-title" style="margin-top:8px">目标证据</div>
           <div id="st-evidence" class="evidence">--</div>
@@ -136,8 +138,11 @@
         </div>
 
         <div class="cell cell-slam3d">
-          <div class="cell-title">Pandar 实时三维建图
+          <div class="cell-title">Pandar 固定世界三维建图
             <span class="sub" id="slam3d-meta">等待 /go2w/slam/map_3d…</span>
+            <label class="viewport-hint" title="当前 scan 只是调试图层，永远不写进永久地图">
+              <input type="checkbox" id="slam3d-preview-toggle"> 当前 scan 调试层
+            </label>
             <span class="viewport-hint" title="拖拽旋转 / 滚轮缩放 / 双击复位">拖拽旋转 · 滚轮缩放 · 双击复位</span>
           </div>
           <div class="slam3d-wrap">
@@ -145,6 +150,7 @@
             <div id="slam3d-state" class="slam3d-state">正在连接实时点云…</div>
             <div class="slam3d-axis"><i class="axis-x">X</i><i class="axis-y">Y</i><i class="axis-z">Z</i></div>
           </div>
+          <div class="slam3d-capacity" id="slam3d-capacity">容量：等待地图…</div>
           <div class="slam3d-safety">mapping_assist · candidate_unconfirmed · 不接管 /go2w/odom/fused</div>
         </div>
 
@@ -251,9 +257,9 @@
     </section>
   </main>
 
-  <script src="/static/search_map.js?v=plain-slam-web3d-20260831"></script>
-  <script src="/static/slam_map_3d.js?v=plain-slam-web3d-20260831"></script>
-  <script src="/static/search_ui.js?v=plain-slam-web3d-20260831"></script>
-  <script src="/static/app.js?v=plain-slam-web3d-20260831"></script>
+  <script src="/static/search_map.js?v=go2w-fix-20260901"></script>
+  <script src="/static/slam_map_3d.js?v=go2w-fix-20260901"></script>
+  <script src="/static/search_ui.js?v=go2w-fix-20260901"></script>
+  <script src="/static/app.js?v=go2w-fix-20260901"></script>
 </body>
 </html>

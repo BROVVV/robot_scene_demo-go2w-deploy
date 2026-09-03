@@ -268,12 +268,17 @@ def _apply_mock_motion(pose: list[float], goal: ExplorationGoal,
     before = (pose[0], pose[1], pose[2])
     if goal.goal_type in {"ROTATE_VIEW", "INSPECT_ANCHOR", "REVISIT_NODE"}:
         dyaw = float(goal.relative_dyaw if goal.relative_dyaw is not None else 0.0)
-        dyaw = max(
-            -abs(config.max_turn_deg_per_action),
-            min(abs(config.max_turn_deg_per_action), dyaw),
-        )
+        # 计划书 §5：a logical turn goal larger than one primitive is executed as
+        # several bounded primitives, so the mock completes the whole goal too.
+        limit = abs(config.max_turn_deg_per_action) or 30.0
+        segments = max(1, int(math.ceil(abs(dyaw) / limit))) if dyaw else 0
         pose[2] += math.radians(dyaw)
-        return {"yaw_delta_deg": round(dyaw, 3)}
+        return {
+            "yaw_delta_deg": round(dyaw, 3),
+            "observed_total_deg": round(dyaw, 3),
+            "remaining_deg": 0.0,
+            "segment_count": segments,
+        }
     if goal.goal_type == "RELATIVE_MOVE":
         dx = float(goal.relative_dx if goal.relative_dx is not None else 0.0)
         dx = max(0.0, min(config.forward_step_m, dx))

@@ -6,6 +6,12 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from app.perception.target_state import (
+    TARGET_ABSENT,
+    TARGET_PRESENT,
+    normalize_target_state,
+)
+
 
 SCALE_METRIC = "metric"
 SCALE_RELATIVE = "relative"
@@ -144,6 +150,20 @@ class LiveObservation:
 
     pose: dict[str, Any] | None = None
     heading_sector: int | None = None
+    # 计划书 §6.2/§15：导航朝向是运动状态（当前 capture pose），语义朝向是
+    # 产生该语义的旧帧朝向，两者必须分开。
+    navigation_heading_sector: int | None = None
+    semantic_heading_sector: int | None = None
+    # 计划书 §3.3：语义 freshness / frame binding 元信息。
+    semantic_source_frame_id: str | None = None
+    semantic_capture_timestamp: float | None = None
+    semantic_completed_timestamp: float | None = None
+    semantic_age_ms: float | None = None
+    semantic_status: str = "unavailable"
+    semantic_quality: str = "unavailable"
+    semantic_error_code: str | None = None
+    semantic_error_detail: str | None = None
+    semantic_source_pose: dict[str, Any] | None = None
     sensor_health: dict[str, Any] = field(default_factory=dict)
 
     provenance: dict[str, Any] = field(default_factory=dict)
@@ -161,7 +181,17 @@ class LiveObservation:
 
     @property
     def target_present(self) -> bool:
-        return bool((self.target_match or {}).get("target_present"))
+        # Backwards-compatible boolean view.  POSSIBLE is deliberately not
+        # positive evidence and must not terminate a search.
+        return self.target_state == TARGET_PRESENT
+
+    @property
+    def target_state(self) -> str:
+        value = self.target_match or {}
+        explicit = value.get("target_state") or value.get("state")
+        if explicit is not None:
+            return normalize_target_state(explicit)
+        return TARGET_PRESENT if bool(value.get("target_present")) else TARGET_ABSENT
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -181,8 +211,20 @@ class LiveObservation:
             "scene_objects": self.scene_objects,
             "scene_relations": self.scene_relations,
             "target_match": self.target_match,
+            "target_state": self.target_state,
             "pose": self.pose,
             "heading_sector": self.heading_sector,
+            "navigation_heading_sector": self.navigation_heading_sector,
+            "semantic_heading_sector": self.semantic_heading_sector,
+            "semantic_source_frame_id": self.semantic_source_frame_id,
+            "semantic_capture_timestamp": self.semantic_capture_timestamp,
+            "semantic_completed_timestamp": self.semantic_completed_timestamp,
+            "semantic_age_ms": self.semantic_age_ms,
+            "semantic_status": self.semantic_status,
+            "semantic_quality": self.semantic_quality,
+            "semantic_error_code": self.semantic_error_code,
+            "semantic_error_detail": self.semantic_error_detail,
+            "semantic_source_pose": self.semantic_source_pose,
             "sensor_health": self.sensor_health,
             "provenance": self.provenance,
         }
@@ -208,6 +250,17 @@ class LiveObservation:
             target_match=value.get("target_match"),
             pose=value.get("pose"),
             heading_sector=value.get("heading_sector"),
+            navigation_heading_sector=value.get("navigation_heading_sector"),
+            semantic_heading_sector=value.get("semantic_heading_sector"),
+            semantic_source_frame_id=value.get("semantic_source_frame_id"),
+            semantic_capture_timestamp=value.get("semantic_capture_timestamp"),
+            semantic_completed_timestamp=value.get("semantic_completed_timestamp"),
+            semantic_age_ms=value.get("semantic_age_ms"),
+            semantic_status=str(value.get("semantic_status") or "unavailable"),
+            semantic_quality=str(value.get("semantic_quality") or "unavailable"),
+            semantic_error_code=value.get("semantic_error_code"),
+            semantic_error_detail=value.get("semantic_error_detail"),
+            semantic_source_pose=value.get("semantic_source_pose"),
             sensor_health=dict(value.get("sensor_health") or {}),
             provenance=dict(value.get("provenance") or {}),
         )

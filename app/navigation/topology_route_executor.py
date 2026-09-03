@@ -147,6 +147,14 @@ class TopologyRouteExecutor:
 
     max_turn_deg: float = 30.0
     forward_step_m: float = 0.3
+    # Frontier bearings are recomputed from every BEV frame, so the target angle
+    # moves with the robot's own heading and the residual flips sign every cycle
+    # while decaying by ~0.8.  Measured search_20260902_172911: cycle 4 starts at
+    # -30 deg and the residual only drops under 5 deg on cycle 15, so 11 of a
+    # 20-step budget go to pure head-swinging before the first advance.  A 15 deg
+    # window closes on cycle 8 (-14.6 deg) instead, and one 0.3 m step at 15 deg
+    # is off by under 0.08 m laterally.
+    frontier_align_deg: float = 15.0
 
     def next_goal(
         self,
@@ -166,7 +174,7 @@ class TopologyRouteExecutor:
                 frontier = frontier or self._find_frontier(place_graph, route.target_frontier_id)
                 bearing = frontier.bearing_deg if frontier is not None else current_yaw_deg
                 delta = (bearing - current_yaw_deg + 180.0) % 360.0 - 180.0
-                if abs(delta) > 5.0:
+                if abs(delta) > self.frontier_align_deg:
                     return ExplorationGoal(
                         goal_id=f"route_turn_{route.route_id}",
                         goal_type=GOAL_ROTATE_VIEW,

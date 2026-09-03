@@ -32,6 +32,8 @@ struct MotionStateSnapshot {
   double yaw_rate{0.0};
   double raw_yaw{0.0};
   double unwrapped_yaw{0.0};
+  double position_x{0.0};
+  double position_y{0.0};
   std::array<double, 4> wheel_q{};
   std::array<double, 4> wheel_dq{};
 };
@@ -46,7 +48,9 @@ struct MotionEvidence {
 class MotionStateMonitor {
  public:
   MotionStateMonitor(rclcpp::Node *node, const std::string &sport_topic,
-                     const std::string &low_topic);
+                     const std::string &low_topic,
+                     bool require_low_state = true,
+                     double wheel_radius_m = 0.089);
   ~MotionStateMonitor();
 
   MotionStateSnapshot Snapshot() const;
@@ -73,11 +77,19 @@ class MotionStateMonitor {
   YawUnwrapper yaw_unwrapper_;
   bool distance_active_{false};
   double estimated_distance_{0.0};
+  double wheel_radius_m_{0.089};
   std::chrono::steady_clock::time_point previous_distance_time_{};
   double previous_speed_{0.0};
+  bool previous_wheel_q_valid_{false};
+  std::array<double, 4> previous_wheel_q_{};
   bool evidence_active_{false};
   std::vector<std::array<double, 4>> evidence_q_;
   std::vector<std::array<double, 4>> evidence_dq_;
+  std::vector<double> evidence_yaw_;
+  std::vector<double> evidence_position_x_;
+  std::vector<double> evidence_position_y_;
+  std::vector<double> evidence_speed_;
+  bool require_low_state_{true};
   rclcpp::Node::SharedPtr state_node_;
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> state_executor_;
   std::thread state_thread_;

@@ -11,11 +11,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import math
+import subprocess
 import threading
 import time
 from typing import Any, Callable
 
-from app.live_robot.semantic_observer import SemanticObservation, _from_payload
+from app.live_robot.semantic_observer import (
+    SEMANTIC_STATUS_FRESH_FULL,
+    SEMANTIC_STATUS_FRESH_QUICK,
+    SemanticObservation,
+    _from_payload,
+)
 
 
 @dataclass
@@ -54,6 +60,7 @@ class AsyncSemanticObservationManager:
         visual_change_enabled: bool = True,
         visual_change_threshold: float | None = None,
         now: Callable[[], float] = time.time,
+        event_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._analyze = analyze
         self.enabled = bool(enabled)
@@ -65,6 +72,7 @@ class AsyncSemanticObservationManager:
         self.visual_change_enabled = bool(visual_change_enabled)
         self.visual_change_threshold = visual_change_threshold
         self._now = now
+        self._event_sink = event_sink
         self._lock = threading.Lock()
         self._latest: SemanticObservation | None = None
         self._latest_sequence = 0
@@ -73,6 +81,7 @@ class AsyncSemanticObservationManager:
         self._sequence = 0
         self._completed: list[SemanticObservation] = []
         self._last_error: str | None = None
+        self._last_error_code: str | None = None
         self._last_signature: Any = None
         self._last_profile_hash: str | None = None
         self._last_submit_ts: float | None = None
@@ -121,16 +130,28 @@ class AsyncSemanticObservationManager:
             if self._inflight >= self.max_inflight:
                 # Coalescing: keep only the newest frame worth analysing.
                 self._pending = request
+                self._emit_locked({
+                    "event": "semantic_request_discarded_obsolete",
+                    "frame_id": str(frame_id),
+                    "reason": "coalesced_pending",
+                })
                 return False
             self._sequence += 1
             request.sequence = self._sequence
             self._inflight += 1
             self._last_submit_ts = self._now()
             self._last_signature = scene_signature
+            sequence = request.sequence
+        self._emit({
+            "event": "semantic_request_started",
+            "frame_id": str(frame_id),
+            "sequence": sequence,
+            "capture_timestamp": float(capture_timestamp),
+        })
         thread = threading.Thread(
             target=self._run_analyze,
             args=(request,),
-            name=f"async-semantic-{request.sequence}",
+            name=f"async-semantic-{sequence}",
             daemon=True,
         )
         with self._lock:
@@ -156,10 +177,27 @@ class AsyncSemanticObservationManager:
         with self._lock:
             return self._last_error
 
+    def last_error_code(self) -> str | None:
+        with self._lock:
+            return self._last_error_code
+
     def close(self) -> None:
         with self._lock:
             self.enabled = False
             self._pending = None
+
+    # -- lifecycle events (计划书 §16) --------------------------------------
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        if self._event_sink is not None:
+            try:
+                self._event_sink(event)
+            except Exception:  # noqa: BLE001 - logging must never break search
+                pass
+
+    def _emit_locked(self, event: dict[str, Any]) -> None:
+        # Caller holds self._lock; route through the same guarded sink.
+        self._emit(event)
 
     # -- internals -----------------------------------------------------------
 
@@ -171,10 +209,9 @@ class AsyncSemanticObservationManager:
         scene_signature: Any,
     ) -> bool:
         if self._latest is None:
-            # Initial warm-up is handled synchronously by the caller; this
-            # manager should not start a duplicate background request before
-            # the first semantic exists.
-            return False
+            # 计划书 §3.4：首帧不再同步阻塞——首个 Full Semantic 也提交后台
+            # single-flight，当前轮用 Quick 快路径结果继续。
+            return True
         now = float(self._now())
         latest = self._latest
         age = now - float(latest.timestamp_sec)
@@ -203,6 +240,7 @@ class AsyncSemanticObservationManager:
         )
 
     def _run_analyze(self, request: AsyncSemanticRequest) -> None:
+        started = self._now()
         try:
             payload = self._analyze(
                 request.image_path,
@@ -211,11 +249,39 @@ class AsyncSemanticObservationManager:
                 frame_id=request.frame_id,
                 robot_pose=request.robot_pose,
             )
-            self._on_result(request, payload)
-        except Exception as exc:  # noqa: BLE001 - background must not kill robot
+            self._on_result(request, payload, started)
+        except subprocess.TimeoutExpired as exc:
             with self._lock:
                 self._last_error = f"{type(exc).__name__}: {exc}"
-            self._emit_failure(request, exc)
+                self._last_error_code = "FULL_SEMANTIC_TIMEOUT"
+            self._emit({
+                "event": "semantic_timeout",
+                "frame_id": str(request.frame_id),
+                "sequence": request.sequence,
+                "latency_ms": round(max(0.0, self._now() - started) * 1000.0, 3),
+                "status": "timeout",
+                "object_count": 0,
+                "error": str(exc),
+            })
+        except Exception as exc:  # noqa: BLE001 - background must not kill robot
+            error_code = str(getattr(exc, "code", "") or "FULL_SEMANTIC_ERROR")
+            is_timeout = bool(
+                "TIMEOUT" in error_code
+                or isinstance(exc, TimeoutError)
+            )
+            with self._lock:
+                self._last_error = f"{type(exc).__name__}: {exc}"
+                self._last_error_code = error_code
+            self._emit({
+                "event": "semantic_timeout" if is_timeout else "semantic_error",
+                "frame_id": str(request.frame_id),
+                "sequence": request.sequence,
+                "latency_ms": round(max(0.0, self._now() - started) * 1000.0, 3),
+                "status": "timeout" if is_timeout else "error",
+                "object_count": 0,
+                "error": f"{type(exc).__name__}: {exc}",
+                "error_code": error_code,
+            })
         finally:
             with self._lock:
                 self._inflight = max(0, self._inflight - 1)
@@ -231,9 +297,13 @@ class AsyncSemanticObservationManager:
                     scene_signature=pending.scene_signature,
                 )
 
-    def _on_result(self, request: AsyncSemanticRequest, payload: dict[str, Any]) -> None:
+    def _on_result(self, request: AsyncSemanticRequest, payload: dict[str, Any],
+                   started: float | None = None) -> None:
         yaw = float((request.robot_pose or {}).get("yaw_deg", 0.0))
         sector = int(round(yaw / self.heading_sector_deg))
+        now = float(self._now())
+        if started is None:
+            started = now
         try:
             semantic = _from_payload(
                 payload,
@@ -244,19 +314,67 @@ class AsyncSemanticObservationManager:
         except Exception:  # noqa: BLE001 - malformed result is not fatal
             with self._lock:
                 self._last_error = "semantic payload normalization failed"
+                self._last_error_code = "VLM_PARSE_ERROR"
+            self._emit({
+                "event": "semantic_error",
+                "frame_id": str(request.frame_id),
+                "sequence": request.sequence,
+                "latency_ms": round(max(0.0, now - started) * 1000.0, 3),
+                "status": "error",
+                "object_count": 0,
+                "error": "semantic payload normalization failed",
+            })
             return
+        # 计划书 §3.2 强制不变量：只有真正成功的 Full Semantic 才能进入 latest；
+        # 失败/超时/降级空结果绝不覆盖 latest_success。
+        if semantic.semantic_status not in {SEMANTIC_STATUS_FRESH_FULL, SEMANTIC_STATUS_FRESH_QUICK}:
+            with self._lock:
+                self._last_error = (
+                    f"semantic payload rejected (status={semantic.semantic_status})"
+                )
+                self._last_error_code = semantic.semantic_error_code or "SEMANTIC_NOT_FRESH"
+            self._emit({
+                "event": "semantic_discarded",
+                "frame_id": str(request.frame_id),
+                "sequence": request.sequence,
+                "latency_ms": round(max(0.0, now - started) * 1000.0, 3),
+                "status": semantic.semantic_status,
+                "object_count": len(semantic.objects or []),
+                "error": semantic.semantic_error_detail,
+            })
+            return
+        semantic.semantic_source_frame_id = str(request.frame_id)
+        semantic.semantic_capture_timestamp = float(request.capture_timestamp)
+        semantic.semantic_completed_timestamp = now
+        semantic.semantic_age_ms = 0.0
+        semantic.semantic_source_pose = (
+            dict(request.robot_pose) if request.robot_pose else None
+        )
         with self._lock:
             if request.sequence <= self._latest_sequence:
                 # Stale result; do not overwrite newer semantic state.
+                self._emit({
+                    "event": "semantic_discarded",
+                    "frame_id": str(request.frame_id),
+                    "sequence": request.sequence,
+                    "latency_ms": round(max(0.0, now - started) * 1000.0, 3),
+                    "status": "stale_result",
+                    "object_count": len(semantic.objects or []),
+                    "error": "newer semantic result already applied",
+                })
                 return
             self._latest = semantic
             self._latest_sequence = request.sequence
             self._completed.append(semantic)
-
-    def _emit_failure(self, request: AsyncSemanticRequest, exc: Exception) -> None:
-        # Keep the last valid state and allow the next suitable frame to retry.
-        # A hook can be added later to write a JSON event from the caller.
-        pass
+        self._emit({
+            "event": "semantic_result_applied",
+            "frame_id": str(request.frame_id),
+            "sequence": request.sequence,
+            "latency_ms": round(max(0.0, now - started) * 1000.0, 3),
+            "status": semantic.semantic_status,
+            "object_count": len(semantic.objects or []),
+            "source": semantic.source,
+        })
 
 
 def _translation_delta(

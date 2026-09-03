@@ -9,7 +9,18 @@ set -uo pipefail
 
 GO2W_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 GO2W_PROJECT_ROOT="$(cd -- "$GO2W_SCRIPT_DIR/../.." && pwd)"
-GO2W_ROS_SETUP="${GO2W_ROS_SETUP:-/opt/ros/humble/setup.bash}"
+# Jetson 真机：humble 为移植版（DDS 栈崩溃），foxy 为官方 apt 包（稳定）。
+# Prefer an explicitly selected ROS installation.  Otherwise select the
+# installation that actually exists on this machine: the Jetson deployment
+# uses Foxy, while the x86_64 host uses the official Humble installation.
+GO2W_ROS_SETUP="${GO2W_ROS_SETUP:-}"
+if [[ -z "$GO2W_ROS_SETUP" ]]; then
+  if [[ -f /opt/ros/foxy/setup.bash ]]; then
+    GO2W_ROS_SETUP=/opt/ros/foxy/setup.bash
+  elif [[ -f /opt/ros/humble/setup.bash ]]; then
+    GO2W_ROS_SETUP=/opt/ros/humble/setup.bash
+  fi
+fi
 GO2W_WORKSPACE_SETUP="${GO2W_WORKSPACE_SETUP:-$GO2W_PROJECT_ROOT/ros2_ws/install/setup.bash}"
 GO2W_CONTROL_ROOT="${GO2W_CONTROL_ROOT:-$GO2W_PROJECT_ROOT/unitree_go2w_control}"
 GO2W_UNITREE_ROOT="${GO2W_UNITREE_ROOT:-$HOME/unitree_ros2}"
@@ -41,12 +52,14 @@ fi
 # intentional: CycloneDDS rejects a name+address pair when the NIC has
 # multiple addresses.
 if [[ -z "${GO2W_HOST_IP:-}" ]]; then
+  # 网卡不存在时 ip 会返回非零；调用方多半开了 pipefail，这里不能让整段静默退出，
+  # 必须走到下面那条明确的 ERROR。
   GO2W_HOST_IP="$(ip -4 -o address show dev "$GO2W_INTERFACE" 2>/dev/null \
-    | awk '$4 ~ /^192[.]168[.]123[.][0-9]+\// {sub("/.*", "", $4); print $4; exit}')"
+    | awk '$4 ~ /^192[.]168[.]123[.][0-9]+\// {sub("/.*", "", $4); print $4; exit}' || true)"
 fi
 if [[ -z "${GO2W_HOST_IP:-}" ]]; then
   GO2W_HOST_IP="$(ip route get 192.168.123.18 2>/dev/null \
-    | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}')"
+    | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}' || true)"
 fi
 if [[ ! "${GO2W_HOST_IP:-}" =~ ^192[.]168[.]123[.][0-9]+$ ]]; then
   printf 'ERROR: cannot resolve a 192.168.123.x host address on %s (got: %s)\n' \
@@ -56,9 +69,10 @@ fi
 
 if [[ -z "${GO2W_UNITREE_SETUP}" ]]; then
   for candidate in \
+    "$HOME/cyclonedds_ws/install/setup.bash" \
+    "$GO2W_UNITREE_ROOT/cyclonedds_ws/install/setup.bash" \
     "$GO2W_PROJECT_ROOT/external/unitree_ros2/cyclonedds_ws/install/setup.bash" \
     "$GO2W_PROJECT_ROOT/external/unitree_ros2/cyclonedds_ws/install_system/setup.bash" \
-    "$GO2W_UNITREE_ROOT/cyclonedds_ws/install/setup.bash" \
     "$HOME/robot/unitree_ros2/cyclonedds_ws/install/setup.bash" \
     "/home/brov/robot/unitree_ros2/cyclonedds_ws/install/setup.bash"; do
     if [[ -f "$candidate" ]]; then

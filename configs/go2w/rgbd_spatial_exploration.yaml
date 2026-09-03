@@ -21,7 +21,7 @@ spatial:
 
 place_graph:
   merge_distance_m: 0.25
-  relocation_min_displacement_m: 0.10
+  relocation_min_displacement_m: 0.50
 
 local_scan:
   max_rotations: 3

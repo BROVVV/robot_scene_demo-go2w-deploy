@@ -39,6 +39,7 @@ class MotionActionServer : public rclcpp::Node {
     std::string arm_service;
     std::string emergency_stop_service;
     bool require_arm{true};
+    bool require_low_state{true};
     bool dry_run{false};
     double arm_timeout_sec{60.0};
     double state_timeout_sec{0.5};

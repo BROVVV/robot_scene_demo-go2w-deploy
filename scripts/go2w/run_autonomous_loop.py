@@ -36,6 +36,7 @@ from app.live_robot.step_search_runner import (
     StepSearchRunner,
     VerificationResult,
 )
+from app.live_robot.autonomous_explorer import PerceptionFailure
 from app.detectors.siliconflow_vision_protocol import (
     SiliconFlowDaemonClient,
     VLMRequest,
@@ -95,7 +96,7 @@ from geometry_msgs.msg import Vector3Stamped
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from rclpy.qos import QoSProfile
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from std_msgs.msg import Bool, Float32
 from std_srvs.srv import SetBool, Trigger
 from unitree_go.msg import LowState, SportModeState
@@ -485,12 +486,33 @@ class AutonomousLoop(Node):
             "total_m": 0.0,
             "max_total_m": 0.36,
         }
-        qos = QoSProfile(depth=20, reliability=2)  # BEST_EFFORT
+        # The current Go2-W DCU publishes SportModeState/LowState reliably.
+        # Keep those authoritative state streams reliable; using the generic
+        # sensor BEST_EFFORT profile can discover the topic yet receive no
+        # samples on this DDS deployment.  Safety/clearance topics remain
+        # sensor-data QoS below.
+        state_qos = QoSProfile(
+            depth=20, reliability=QoSReliabilityPolicy.RELIABLE
+        )
+        qos = QoSProfile(depth=20, reliability=QoSReliabilityPolicy.BEST_EFFORT)
+        # On the Jetson, ROS 2 discovery stays local-only and the SDK-only
+        # sport-state capture is relayed into this topic.  Keep the original
+        # DCU topic as well so the same runner remains usable on the x86 host
+        # and on deployments where direct Unitree DDS discovery is enabled.
         self.create_subscription(SportModeState, "/lf/sportmodestate",
-                                 self._on_sport, qos)
-        self.create_subscription(LowState, "/lf/lowstate", self._on_low, qos)
+                                 self._on_sport, state_qos)
+        self.create_subscription(
+            SportModeState,
+            "/go2w/motion/local_sportmodestate",
+            self._on_sport,
+            state_qos,
+        )
+        self.create_subscription(LowState, "/lf/lowstate", self._on_low, state_qos)
         self.create_subscription(Odometry, self._odom_topic, self._on_odom,
-                                 QoSProfile(depth=50, reliability=2))
+                                 QoSProfile(
+                                     depth=50,
+                                     reliability=QoSReliabilityPolicy.RELIABLE,
+                                 ))
         self.create_subscription(Float32, "/go2w/safety/front_clearance",
                                  self._on_clearance, qos)
         self.create_subscription(Float32, "/go2w/safety/left_clearance",
@@ -2183,20 +2205,45 @@ class AutonomousLoop(Node):
                 key, _, value = line.partition("=")
                 values[key.strip()] = value.strip().strip("'\"")
         env = os.environ.copy()
-        env["PYTHONPATH"] = values.get(
+        grounded_pythonpath = values.get(
             "GROUNDED_SAM_PYTHONPATH",
             str(PROJECT_ROOT / "external/Grounded-SAM-2") + ":"
             + str(PROJECT_ROOT / "external/Grounded-SAM-2/grounding_dino"),
         )
+        # The detector is launched by absolute path, so Python does not put
+        # the repository root on sys.path. Keep the external detector paths,
+        # but always prepend this deployment's project root so imports such as
+        # ``app.perception.target_state`` work on a robot checkout.
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(PROJECT_ROOT), grounded_pythonpath) if part
+        )
         env["GROUNDED_SAM_ROOT"] = values.get(
             "GROUNDED_SAM_ROOT", str(PROJECT_ROOT / "external/Grounded-SAM-2")
         )
-        env.setdefault(
-            "SILICONFLOW_PYTHON",
-            os.environ.get("GO2W_CONDA_PYTHON")
-            or str(PROJECT_ROOT / ".venv/bin/python")
-            or sys.executable,
-        )
+        # A deployment may not have the historical project-local ``.venv``
+        # symlink (the robot uses ``.runtime_venv``).  Do not pass a merely
+        # non-empty but nonexistent path to the detector subprocess.
+        python_candidates = [
+            values.get("SILICONFLOW_PYTHON"),
+            os.environ.get("SILICONFLOW_PYTHON"),
+            os.environ.get("GO2W_CONDA_PYTHON"),
+            str(PROJECT_ROOT / ".runtime_venv/bin/python"),
+            str(PROJECT_ROOT / ".venv/bin/python"),
+            sys.executable,
+        ]
+        resolved_python = None
+        for candidate in python_candidates:
+            if candidate and Path(candidate).is_file():
+                env["SILICONFLOW_PYTHON"] = candidate
+                resolved_python = candidate
+                break
+        # A copied developer .env can leave a non-empty but nonexistent
+        # GROUNDED_SAM_PYTHON path. Sanitize it just like
+        # SILICONFLOW_PYTHON so the child detector cannot fail before making
+        # an API request on the robot.
+        grounded_python = env.get("GROUNDED_SAM_PYTHON")
+        if grounded_python and not Path(grounded_python).is_file() and resolved_python:
+            env["GROUNDED_SAM_PYTHON"] = resolved_python
         return env
 
     def _latest_bundle_image(self, spool_root: str,
@@ -2295,11 +2342,18 @@ class AutonomousLoop(Node):
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("detector timed out") from exc
+            raise PerceptionFailure(
+                "grounded_sam detector timed out",
+                code="GROUNDED_SAM_TIMEOUT",
+                recoverable=True,
+                detail=str(exc),
+            ) from exc
         if completed.returncode != 0:
-            raise RuntimeError(
+            raise PerceptionFailure(
                 f"detector failed rc={completed.returncode}: "
-                f"{completed.stderr[-400:]}"
+                f"{completed.stderr[-400:]}",
+                code="DETECTOR_ERROR",
+                recoverable=True,
             )
         output_path = PROJECT_ROOT / "runtime/go2w/detection_result.json"
         payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -2349,13 +2403,28 @@ class AutonomousLoop(Node):
             return None
 
     def _detect_llm(self, image_path: str, env: dict[str, str]) -> list[dict]:
+        # 验收 D 注入开关（默认关闭）：GO2W_QUICK_TIMEOUT_INJECT_ONCE=1 时
+        # 第一次 Quick 调用模拟一次可恢复超时，验证 explorer retry 后继续。
+        if os.environ.get("GO2W_QUICK_TIMEOUT_INJECT_ONCE", "") == "1" \
+                and not getattr(self, "_quick_timeout_injected", False):
+            self._quick_timeout_injected = True
+            self.get_logger().warning(
+                "GO2W_QUICK_TIMEOUT_INJECT_ONCE: simulating one Quick VLM timeout"
+            )
+            raise PerceptionFailure(
+                "SiliconFlow vision API timed out (injected for acceptance D)",
+                code="QUICK_VLM_TIMEOUT",
+                recoverable=True,
+                detail="GO2W_QUICK_TIMEOUT_INJECT_ONCE=1",
+            )
+        quick_timeout = float(get_settings().vlm_runtime_quick_timeout_seconds)
         daemon_payload = self._daemon_vlm_request(
             "quick",
             image_path,
             self._target,
             model=getattr(self, "_llm_model", ""),
             frame_id=str(getattr(self, "_latest_frame_id", "")),
-            timeout=20.0,
+            timeout=quick_timeout,
         )
         if daemon_payload is not None:
             self._last_llm_detection_payload = daemon_payload
@@ -2386,15 +2455,22 @@ class AutonomousLoop(Node):
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=float(get_settings().vlm_runtime_quick_timeout_seconds),
+                timeout=quick_timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("SiliconFlow vision API timed out") from exc
+            raise PerceptionFailure(
+                "SiliconFlow vision API timed out",
+                code="QUICK_VLM_TIMEOUT",
+                recoverable=True,
+                detail=str(exc),
+            ) from exc
         if completed.returncode != 0:
-            raise RuntimeError(
+            raise PerceptionFailure(
                 f"SiliconFlow vision worker failed rc={completed.returncode}: "
-                f"{completed.stderr[-600:]}"
+                f"{completed.stderr[-600:]}",
+                code="QUICK_VLM_ERROR",
+                recoverable=True,
             )
         payload = json.loads(output_path.read_text(encoding="utf-8"))
         self._last_llm_detection_payload = payload
@@ -2458,11 +2534,18 @@ class AutonomousLoop(Node):
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("SiliconFlow verification timed out") from exc
+            raise PerceptionFailure(
+                "SiliconFlow verification timed out",
+                code="VERIFY_TIMEOUT",
+                recoverable=True,
+                detail=str(exc),
+            ) from exc
         if completed.returncode != 0:
-            raise RuntimeError(
+            raise PerceptionFailure(
                 f"SiliconFlow verification worker failed rc={completed.returncode}: "
-                f"{completed.stderr[-600:]}"
+                f"{completed.stderr[-600:]}",
+                code="VERIFY_ERROR",
+                recoverable=True,
             )
         payload = json.loads(output_path.read_text(encoding="utf-8"))
         return {
@@ -2750,7 +2833,7 @@ def main() -> None:
         default=1.40,
         help="calibrated duration multiplier for distance-qualified reverse steps",
     )
-    parser.add_argument("--max-yaw-rate", type=float, default=0.15)
+    parser.add_argument("--max-yaw-rate", type=float, default=1.0)
     parser.add_argument("--min-clearance", type=float, default=0.30)
     parser.add_argument(
         "--mode",

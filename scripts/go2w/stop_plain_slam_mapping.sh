@@ -31,6 +31,7 @@ stop_pid_file() {
 stop_pid_file rviz_plain_slam
 stop_pid_file plain_slam_bag
 stop_pid_file plain_slam_go2w
+stop_pid_file plain_slam_web_cloud_relay
 
 # Bridge + plain_slam node processes (falls back to pgrep when the launcher
 # pid file is stale).

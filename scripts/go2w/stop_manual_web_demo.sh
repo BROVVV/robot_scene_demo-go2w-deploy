@@ -13,6 +13,7 @@ mkdir -p "${runtime_root}"
 
 web_pid="$(cat "${runtime_root}/web.pid" 2>/dev/null || true)"
 worker_pid="$(cat "${runtime_root}/worker.pid" 2>/dev/null || true)"
+camera_capture_pid="$(cat "${runtime_root}/camera_http_capture.pid" 2>/dev/null || true)"
 
 # 1. Graceful Web server shutdown: the FastAPI lifespan exit stops the ROS
 #    worker (disable control -> cancel/estop active goal -> worker shutdown).
@@ -34,5 +35,12 @@ if [[ -n "${worker_pid}" ]] && kill -0 "${worker_pid}" 2>/dev/null; then
   fi
 fi
 
-rm -f "${runtime_root}/web.pid" "${runtime_root}/worker.pid"
+# 3. Stop the optional robot-local HTTP camera capture owned by the WebUI.
+if [[ -n "${camera_capture_pid}" ]] && kill -0 "${camera_capture_pid}" 2>/dev/null; then
+  kill -TERM "${camera_capture_pid}" 2>/dev/null || true
+  sleep 1
+  kill -KILL "${camera_capture_pid}" 2>/dev/null || true
+fi
+
+rm -f "${runtime_root}/web.pid" "${runtime_root}/worker.pid" "${runtime_root}/camera_http_capture.pid"
 printf 'Manual web demo stopped. Camera bridge and other ROS nodes untouched.\n'

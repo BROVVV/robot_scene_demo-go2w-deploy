@@ -179,15 +179,55 @@ PlainSlamSpatialProvider:      get_map=true get_pose=true quality=METRIC_LIDAR
      - `test_ros2_command_exporter.py::...test_builds_cmd_vel_commands_from_route_steps`：期望 distance_m=0.8，实际 0.3（外部对运动步长的安全限制改动，测试未同步）。
      - `test_streamlit_video_mode.py`、`test_go2w_live_ui_status.py` 等：streamlit_app.py 在项目根、测试相对路径解析失败（环境性）。
      - `test_task_examples_evaluator.py` 等示例类。
-   - 建议：定位 slice3 B 组挂起者（分组二分），确认后视情况跳过并记录。
+   - **已收尾（2026-08-31 后续会话）**：全量单进程跑完 **767 passed / 7 failed / 1 skipped（886s）**，**挂起问题不再复现**。7 个失败全部为上述已知环境/外部差异类（streamlit×4、ros2_command_exporter、task_examples_evaluator、task_planner 的 LLM 解析路径非确定性），与 plain_slam 无关，无需跳过。
 2. **map_3d 证据保存**：静止时无新位姿关键帧 → `/go2w/slam/map_3d` 数据稀疏，`save_plain_slam_map.sh` 会跳过 PCD。机器狗移动/有新关键帧后再保存一次即可。
 3. **机器狗本地运行时 smoke**：机器狗 Foxy 本地 rclpy 曾有 CycloneDDS 段错误历史（`/opt/ros/humble`=Foxy 副本混乱所致，外部已修环境 overlay）；代码已同步+构建通过。若需在机器狗本地跑节点，先验证 `python3 -c "import rclpy; rclpy.init()"` 不再崩溃。
-4. **探索干跑**（完整版）：`run_semantic_exploration.py --spatial-v2 --spatial-provider plain_slam --dry-run-motion --allow-degraded` 依赖 LLM/相机/运动后端；核心 spatial 数据链已用 `acceptance_plain_slam_provider.py` 验证（get_map/get_pose/frontiers 全通）。
+4. **探索干跑**（完整版）：`run_semantic_exploration.py --spatial-v2 --spatial-provider plain_slam --dry-run-motion --allow-degraded` 依赖 LLM/相机/运动后端；核心 spatial 数据链已用 `acceptance_plain_slam_provider.py` 验证（get_map/get_pose/frontiers 全通）。**已通过 WebUI API 实跑验证**（`spatial provider = plain_slam`、LLM 场景分析正常、readiness=True）。
 5. **小范围运动验证**（用户已授权，但**当前 mapping-only 保持运行，未发任何运动指令**）：
    - 前置：运动栈运行（`unitree_go2w_control` 的 go2w_motion_control + wheel odom + lease holder，`/go2w/motion` action server 在线，`/go2w/odom/fused` 正常发布）。
    - 流程建议：静止建图基线 → 原地转向 ≤30° → 低速直行 ≤1.5m → 观察 map_2d 增长、`/go2w/odom/fused` 运动执行正常、plain_slam 影子里程计不介入。
    - 严格遵守：不提高授权、随时可急停、操作者在场。
 6. **最终交付报告 + delivery_check**（本会话的交付 gate）：需整理「修改文件清单 + 构建结果 + 测试结果 + 一键启动命令 + 已知降级项」并提交 evidence（file/text/run 类均可，页面类不适用）。
+
+---
+
+## 6.1 后续会话新增交付（2026-08-31 晚，WebUI 实时三维建图 + 自主搜索）
+
+### 已完成
+1. **WebUI 实时三维建图（全新链路，与语义拓扑并存）**：
+   - `scripts/go2w/plain_slam_web_bridge.py`：只读 ROS sidecar（系统 python + rclpy），订阅 `/go2w/slam/map_3d`（RELIABLE/TRANSIENT_LOCAL）与 `/go2w/slam/aligned_scan`（BEST_EFFORT），体素降采样（0.12m）累积有界（40k voxel）后原子写 JSON 快照；**只订阅不发布，不含运动权限字段**。
+   - `app/spatial/pointcloud_web_codec.py`：无依赖 PointCloud2 解码（支持 padding/row_step）+ `BoundedVoxelCloud`。
+   - `app/manual_web_demo/slam_map_snapshot.py`：FastAPI 侧读原子快照（fresh ≤3s、强制 `motion_authorized=false`）。
+   - `app/manual_web_demo/web_server.py`：新增 `GET /api/slam/map3d`（no-store）。
+   - `app/manual_web_demo/templates/index.html` + `static/slam_map_3d.js` + `style.css`：新增「Pandar 实时三维建图」面板（canvas 旋转/缩放/双击复位、深度分桶渲染、LIVE/STALE 指示灯 + `light-slam`）。
+   - `app/manual_web_demo/config.py`：`slam_map_snapshot` 配置（`GO2W_SLAM_MAP_SNAPSHOT` 环境变量）。
+   - `scripts/go2w/start_autonomous_search_web.sh`：新增 `--with-plain-slam`（复用健康 SLAM 图、不双开）、自动拉起 web bridge、`AUTONOMOUS_SEARCH_SPATIAL_PROVIDER=plain_slam`。
+   - `configs/go2w/autonomous_search_web.yaml`：`spatial.provider: plain_slam`、`search.spatial_provider: plain_slam`、`rtabmap: false`。
+2. **搜索默认走 plain_slam 空间提供者**：`app/manual_web_demo/search_models.py`（默认 `spatial_provider=plain_slam`）、`search_routes.py`（`run_in_executor` 防事件循环阻塞、`/semantic-map` 兼容新旧字段）、`scripts/go2w/autonomous_search_worker.py`（`--spatial-provider` 透传）。
+3. **真机验证（宿主机）**：/api/slam/map3d 持续 fresh（8292 点、age 0.24s、frame pslam_odom）；搜索会话 readiness=True，worker 日志 `spatial provider = plain_slam`。
+4. **运动栈就绪（未发运动指令）**：wheel odom（/go2w/odom/fused 19.9Hz）+ start_motion_control.sh（lease sdk_direct、/go2w/motion action server、/go2w/arm、/go2w/emergency_stop）全部在线。
+5. **修复宿主机 Noetic 污染**：`unitree_go2w_control/scripts/setup_go2w_ros2.sh` 增加 `/opt/ros/noetic` 路径剔除（否则 .venv python 解析到 ROS1 std_msgs，lease_status_bridge 崩溃 `_TYPE_SUPPORT`）。机器狗无 noetic，行为不变。
+6. **代码同步**：宿主仓库全量 rsync 到机器狗 `/home/unitree/robotscene`（排除 build/install/.venv/outputs 等）。
+
+### 一键启动（当前已按此运行）
+```bash
+# 宿主机终端 1（SLAM，若未运行）：
+bash scripts/go2w/start_plain_slam_mapping.sh
+# 宿主机终端 2（感知，只读相机）：
+bash scripts/go2w/start_live_perception.sh
+# 宿主机终端 3（运动栈，就绪不发指令）：
+bash scripts/go2w/start_motion_control.sh
+# 宿主机终端 4（WebUI，运动授权模式 + 3D）：
+GO2W_AREA_CLEARED=I_HAVE_CLEARED_THE_AREA \
+  bash scripts/go2w/start_autonomous_search_web.sh --enable-autonomous-motion --with-plain-slam
+# 浏览器打开 http://127.0.0.1:8765
+```
+
+### 已知降级项（交付时如实声明）
+- `/go2w/slam/map_3d` 静止时无新关键帧 → WebUI 3D 由 aligned_scan 累积补足（设计如此，`MAP3D_STALE` 属正常）。
+- Pandar 外参仍 `candidate_unconfirmed`；3D 视图仅 mapping_assist 显示，`motion_authorized=false` 恒定。
+- 运动授权由启动参数决定（`--enable-autonomous-motion`），前端无开关；真实运动需操作者在场 + 遥控急停。
+- `search_worker_available` 在未发起搜索时为 false（按需 spawn，degraded 项，不阻塞 readiness）。
 
 ---
 

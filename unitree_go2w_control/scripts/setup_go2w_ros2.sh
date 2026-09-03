@@ -31,7 +31,19 @@ fi
   _go2w_setup_fail "cannot resolve a 192.168.123.x host address on $GO2W_ROBOT_INTERFACE"
 export GO2W_ROBOT_HOST_IP
 
-[[ -f /opt/ros/humble/setup.bash ]] || _go2w_setup_fail "ROS 2 Humble missing"
+GO2W_ROS_SETUP="${GO2W_ROS_SETUP:-}"
+if [[ -z "$GO2W_ROS_SETUP" ]]; then
+  # Jetson 真机：foxy 为官方 apt 包（humble 是移植版，DDS 栈不稳定）；
+  # 工作站（22.04）：humble 官方。自动探测。
+  if [[ -f /opt/ros/foxy/setup.bash ]]; then
+    GO2W_ROS_SETUP=/opt/ros/foxy/setup.bash
+  elif [[ -f /opt/ros/humble/setup.bash ]]; then
+    GO2W_ROS_SETUP=/opt/ros/humble/setup.bash
+  fi
+fi
+if [[ ! -f "$GO2W_ROS_SETUP" ]]; then
+  _go2w_setup_fail "ROS 2 setup missing: ${GO2W_ROS_SETUP:-<none>} (set GO2W_ROS_SETUP)"
+fi
 [[ -f "$GO2W_UNITREE_ROOT/cyclonedds_ws/install/setup.bash" ]] || \
   _go2w_setup_fail "Unitree message workspace missing"
 [[ -f "$GO2W_CONTROL_ROOT/ros2_ws/install/setup.bash" ]] || \
@@ -47,12 +59,17 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH
 
 set +u
 # shellcheck source=/dev/null
-source /opt/ros/humble/setup.bash
+source "$GO2W_ROS_SETUP"
 # shellcheck source=/dev/null
 source "$GO2W_UNITREE_ROOT/cyclonedds_ws/install/setup.bash"
 # shellcheck source=/dev/null
 source "$GO2W_CONTROL_ROOT/ros2_ws/install/setup.bash"
 set -u
+
+# Some ROS 2 setup files preserve legacy ROS 1 variables when this script is
+# sourced from a mixed Noetic/ROS 2 shell. Clear them after all ROS 2 overlays
+# have been sourced so rclpy and DDS do not resolve the ROS 1 environment.
+unset ROS_ETC_DIR ROS_MASTER_URI ROS_PACKAGE_PATH ROS_ROOT
 
 export GO2W_CONTROL_PYTHON="${GO2W_CONTROL_PYTHON:-$GO2W_CONTROL_ROOT/.venv/bin/python}"
 export PYTHONPATH="$GO2W_CONTROL_ROOT/vendor/unitree_sdk2_python${PYTHONPATH:+:$PYTHONPATH}"
@@ -76,17 +93,37 @@ _GO2W_STRIP_NOETIC() {
 export PYTHONPATH="$(_GO2W_STRIP_NOETIC PYTHONPATH)"
 export LD_LIBRARY_PATH="$(_GO2W_STRIP_NOETIC LD_LIBRARY_PATH)"
 unset -f _GO2W_STRIP_NOETIC
+# 注意：不能在此全局前置 ~/cyclonedds_0.10.2/lib —— ROS 层
+# rmw_cyclonedds_cpp 0.7.11 与 libddsc 0.10.2 不兼容（rmw_create_node 失败）。
+# SDK 进程（hold_sport_lease，依赖 python cyclonedds 0.10.2 的 ddsi_sertype_v0
+# 符号）由 go2w_motion_control.launch.py 单独注入该库路径。
 
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export ROS_DOMAIN_ID=0
-export ROS_LOCALHOST_ONLY=0
 _GO2W_CYCLONE_FILE="/tmp/go2w_cyclonedds_${UID}.xml"
-{
-  printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
-  printf '%s\n' '<CycloneDDS xmlns="https://cdds.io/config"><Domain id="any"><General><Interfaces>'
-  printf '  <NetworkInterface address="%s" priority="default" multicast="default"/>\n' "$GO2W_ROBOT_HOST_IP"
-  printf '%s\n' '</Interfaces><AllowMulticast>true</AllowMulticast></General><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>'
-} >"$_GO2W_CYCLONE_FILE"
+if [[ "$(uname -m)" == "aarch64" ]]; then
+  # Jetson 真机（arm64）：foxy CycloneDDS 0.7.0 不识别 <Interfaces> 元素，
+  # 因此使用无 Interfaces、无组播、127.0.0.1 静态 peer 的兼容配置。保留
+  # ROS_LOCALHOST_ONLY=1，防止 Foxy 在没有 Interfaces 元素时随机选 eth0；
+  # 显式 loopback peer 保证新参与者之间的 action/service 数据面可用。SDK
+  # 独立进程只读采集 DCU 状态，再由本机 ROS relay 转发，避免在同一进程中
+  # 混用 Unitree SDK 与 Foxy CycloneDDS。
+  export ROS_LOCALHOST_ONLY="${GO2W_ROS_LOCALHOST_ONLY:-1}"
+  {
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
+    printf '%s\n' '<CycloneDDS xmlns="https://cdds.io/config"><Domain id="any"><General><AllowMulticast>false</AllowMulticast></General><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex><Peers><Peer Address="127.0.0.1"/></Peers></Discovery></Domain></CycloneDDS>'
+  } >"$_GO2W_CYCLONE_FILE"
+else
+  # 工作站（x86_64，Ubuntu 22.04 官方 humble，CycloneDDS 0.10）：多播直连
+  # 狗主控 DDS 域（/lf/sportmodestate、/lf/lowstate 等），用 name 形式绑定网卡。
+  export ROS_LOCALHOST_ONLY=0
+  {
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
+    printf '%s\n' '<CycloneDDS xmlns="https://cdds.io/config"><Domain id="any"><General><Interfaces>'
+    printf '  <NetworkInterface name="%s" priority="default" multicast="default"/>\n' "$GO2W_ROBOT_INTERFACE"
+    printf '%s\n' '</Interfaces><AllowMulticast>true</AllowMulticast></General><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>'
+  } >"$_GO2W_CYCLONE_FILE"
+fi
 chmod 600 "$_GO2W_CYCLONE_FILE"
 export CYCLONEDDS_URI="file://$_GO2W_CYCLONE_FILE"
 

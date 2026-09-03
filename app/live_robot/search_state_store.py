@@ -77,6 +77,7 @@ STATUS_FINISHED = "FINISHED"
 BUDGET_COMPLETION_RESULTS = frozenset({
     "MAX_STEPS_REACHED",
     "MAX_PLANNING_CYCLES_REACHED",
+    "BUDGET_EXHAUSTED",
 })
 
 
@@ -132,6 +133,7 @@ def _empty_snapshot() -> dict[str, Any]:
             "objects": [],
             "detections": [],
             "target_present": False,
+            "target_state": "ABSENT",
             "heading_sector": None,
             "pose": None,
             "image_ref": None,
@@ -150,6 +152,7 @@ def _empty_snapshot() -> dict[str, Any]:
         },
         "target_match": {
             "level": "none",
+            "target_state": "ABSENT",
             "target_confirmed": False,
             "explicit_anchor_found": False,
             "anchor_labels": [],
@@ -415,7 +418,16 @@ class SearchStateStore:
         observation["objects"] = list(payload.get("scene_objects") or payload.get("objects") or [])
         observation["detections"] = list(payload.get("detections") or [])
         observation["target_present"] = bool(payload.get("target_present", False))
+        observation["target_state"] = str(
+            payload.get("target_state")
+            or ("PRESENT" if observation["target_present"] else "ABSENT")
+        )
         observation["heading_sector"] = payload.get("heading_sector")
+        observation["navigation_heading_sector"] = payload.get("navigation_heading_sector")
+        observation["semantic_status"] = payload.get("semantic_status")
+        observation["semantic_quality"] = payload.get("semantic_quality")
+        observation["semantic_source_frame_id"] = payload.get("semantic_source_frame_id")
+        observation["semantic_age_ms"] = payload.get("semantic_age_ms")
         observation["pose"] = payload.get("pose")
         observation["image_ref"] = payload.get("image_ref")
         observation["depth_ref"] = payload.get("depth_ref")
@@ -458,6 +470,7 @@ class SearchStateStore:
         payload = event.payload
         match = self._snapshot["target_match"]
         match["level"] = payload.get("target_match_level") or match["level"]
+        match["target_state"] = str(payload.get("target_state") or match["target_state"])
         match["target_score"] = float(payload.get("target_score", match["target_score"]))
         match["explicit_anchor_found"] = bool(
             payload.get("explicit_anchor_found", match["explicit_anchor_found"])
@@ -684,6 +697,11 @@ class SearchStateStore:
                     if edge.get("from", "").startswith("P")
                     or edge.get("to", "").startswith("P")
                 ],
+                # Keep the dedicated PlaceGraph endpoint a projection of the
+                # same canonical current place as the semantic graph.  Without
+                # this field /api/search/place-graph reported null while the
+                # semantic graph correctly reported P1.
+                "current_place_id": graph.get("current_place_id"),
             }
             self._snapshot["spatial"]["semantic_objects"] = copy.deepcopy(
                 graph.get("objects") or []
@@ -737,7 +755,8 @@ class SearchStateStore:
                 detail = search_error(
                     payload.get("message") or payload.get("reason") or
                     payload.get("error_type") or "搜索异常",
-                    code=payload.get("error_type"),
+                    code=payload.get("code") or payload.get("cause") or
+                    payload.get("error_type"),
                     source=str(payload.get("source") or "autonomous_explorer"),
                     stage=str(payload.get("phase") or self._snapshot.get("phase") or "RUNNING"),
                     detail=payload.get("detail"),

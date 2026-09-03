@@ -19,6 +19,23 @@ from app.perception.rgbd_source import RGBDFrame, RGBDFrameUnavailable
 _DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 urllib.request.install_opener(_DIRECT_OPENER)
 
+# host_timestamp 合法性窗口（Unix 秒；2026 年 ≈ 1.78e9）。
+_HOST_TIMESTAMP_MIN_S = 1.4e9
+_HOST_TIMESTAMP_MAX_S = 2.2e9
+
+
+def _resolve_capture_timestamp(
+    host_timestamp: Any, *, default: float
+) -> tuple[float, str]:
+    """计划书 §11.1：优先使用服务端采集时间；非法/缺失回退接收时间。"""
+    try:
+        value = float(host_timestamp)
+    except (TypeError, ValueError):
+        value = 0.0
+    if _HOST_TIMESTAMP_MIN_S <= value <= _HOST_TIMESTAMP_MAX_S:
+        return value, "host_timestamp"
+    return float(default), "receive_time"
+
 
 class RealSenseHTTPRGBDSource:
     """Reads atomic RGB-D frames from the D435 HTTP stream service.
@@ -85,9 +102,15 @@ class RealSenseHTTPRGBDSource:
         if age > self.max_age_seconds:
             raise RGBDFrameUnavailable(f"RGB-D frame stale: age={age:.2f}s")
         intrinsics = meta.get("intrinsics") or {}
+        host_ts = meta.get("host_timestamp")
+        # 计划书 §11.1：host_timestamp 必须是合法 Unix 秒；非法则回退接收时间
+        # 并显式标记 timestamp_quality="receive_time"。
+        timestamp, timestamp_quality = _resolve_capture_timestamp(
+            host_ts, default=time.time()
+        )
         frame = RGBDFrame(
             frame_id=str(meta["frame_id"]),
-            timestamp=float(meta.get("host_timestamp") or time.time()),
+            timestamp=timestamp,
             color_ref=self._url(str(meta.get("color_url") or "")),
             depth_ref=self._url(str(meta.get("depth_url") or "")),
             width=int(meta.get("width") or 0),
@@ -99,7 +122,8 @@ class RealSenseHTTPRGBDSource:
             depth_unit_m=float(meta.get("depth_unit_m", 0.001)),
             depth_aligned_to_color=bool(meta.get("depth_aligned_to_color", True)),
             device_timestamp_ms=meta.get("device_timestamp_ms"),
-            host_timestamp=meta.get("host_timestamp"),
+            host_timestamp=host_ts,
+            timestamp_quality=timestamp_quality,
             health=dict(meta.get("health") or {}),
             provenance={"source": "realsense_http_atomic", "base_url": self.base_url},
         )

@@ -5,8 +5,11 @@ go2w_motion_action_server:
 
     sport_request_topic: "/api/sport/request"
     sport_response_topic: "/api/sport/response"
-    sport_state_topic: "/lf/sportmodestate"
-    low_state_topic: "/lf/lowstate"
+    # On the Jetson Foxy ROS participant is localhost-only to avoid its
+    # network SPDP crash. sport_state_sdk_capture.py reads the DCU bare-DDS
+    # stream and local_sport_state_ros_relay.py republishes it here.
+    sport_state_topic: "/go2w/motion/local_sportmodestate"
+    low_state_topic: "/go2w/motion/local_lowstate"
     lease_id_topic: "/go2w/sport_lease/id"
     lease_alive_topic: "/go2w/sport_lease/alive"
     motion_name_topic: "/go2w/motion_mode/name"
@@ -14,11 +17,17 @@ go2w_motion_action_server:
     # Robot motion is never republished to /api/sport/request.
     sdk_command_socket: "/tmp/go2w_sdk_motion.sock"
 
-    action_name: "/go2w/motion"
-    arm_service: "/go2w/arm"
-    emergency_stop_service: "/go2w/emergency_stop"
+    # The public names are owned by motion_network_proxy.py. Keeping the
+    # safety server private to the robot-local ROS participant prevents a
+    # second DDS action/service endpoint from competing with the proxy.
+    action_name: "/go2w/local_motion"
+    arm_service: "/go2w/local_arm"
+    emergency_stop_service: "/go2w/local_emergency_stop"
 
     require_arm: true
+    # Go2-W exposes SportModeState but does not publish usable /lf/lowstate.
+    # Keep it optional; when present, wheel encoder evidence remains enabled.
+    require_low_state: true
     arm_timeout_sec: 60.0
     dry_run: false
 
@@ -57,7 +66,11 @@ go2w_motion_action_server:
     command_change_threshold: 0.01
 
     turn_kp: 0.8
-    turn_tolerance_deg: 1.0
+    # The measured Go2-W yaw sample/command loop has about 1 deg of crossing
+    # jitter. Keep the controller's documented 2 deg convergence tolerance so
+    # a harmless one-degree crossing is settled instead of aborted, while the
+    # final action acceptance remains 5 deg and the Stage-C closure gate is 10.
+    turn_tolerance_deg: 2.0
     turn_slow_zone_deg: 20.0
     turn_stable_samples: 5
     maximum_overshoot_deg: 8.0

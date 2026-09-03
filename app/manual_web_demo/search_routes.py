@@ -110,6 +110,23 @@ def create_search_router(
         if not isinstance(raw, dict):
             raw = {}
         req = SearchStartRequest.from_dict(raw)
+        # §10.2：LIO 造出假平移、全局地图已冻结时禁止自主平移搜索。
+        # 这里只拦地图健康这一项，遥控建图和三维显示仍然只读可用。
+        if readiness_provider is not None:
+            readiness = readiness_provider()
+            checks = readiness.get("checks") or {}
+            if checks.get("slam_map_not_drifting", True) is False:
+                detail = search_error(
+                    "mapping frozen: "
+                    + str(readiness.get("mapping_health_reason")
+                          or readiness.get("mapping_health") or ""),
+                    source="search_api", stage="START",
+                )
+                return JSONResponse(
+                    {"ok": False, "error": detail["message"],
+                     "error_detail": detail},
+                    status_code=409,
+                )
         # Task understanding may call the configured LLM and can take
         # seconds (or hit a provider timeout).  Never run it on the ASGI
         # event-loop thread: a synchronous call here makes every fetch,
@@ -183,6 +200,11 @@ def create_search_router(
         graph = spatial.get("semantic_graph") or spatial.get("spatial_map") or {}
         return {
             "schema_version": graph.get("schema_version", "semantic_navigation_graph_v1"),
+            # Keep the canonical Place visible at the endpoint boundary as
+            # well as inside ``graph``.  Both fields are projections of the
+            # same SearchStateStore graph; clients must never resolve a
+            # second current place locally.
+            "current_place_id": graph.get("current_place_id"),
             "graph": graph,
             "semantic_objects": spatial.get("semantic_objects") or [],
             "places": (spatial.get("place_graph") or {}).get("places") or [],

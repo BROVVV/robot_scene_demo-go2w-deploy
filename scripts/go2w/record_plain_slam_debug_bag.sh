@@ -24,6 +24,9 @@ exec ros2 bag record -o "${bag_dir}" \
   /go2w/slam/imu_pose_raw \
   /go2w/slam/imu_odom_raw \
   /go2w/slam/odom_base \
+  /go2w/odom/fused \
+  /tf \
+  /tf_static \
   /go2w/slam/aligned_scan \
   /go2w/slam/deskewed_scan \
   /go2w/slam/lio_map_cloud \

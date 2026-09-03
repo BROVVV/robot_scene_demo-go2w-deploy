@@ -120,6 +120,13 @@ class SemanticNavigationGraph:
             "place_id": place_id,
             "created_place": created,
             "new_object_ids": new_object_ids,
+            # frame 侧 id -> 持久 object_id。目标确认必须精确定位本帧的目标
+            # 候选；靠 label 猜会命中插入顺序里第一个无关对象。
+            "frame_object_ids": {
+                item.source_object_id: item.persistent_object_id
+                for item in update_result.associations
+                if item.source_object_id
+            },
             "map": self.to_dict(),
         }
 
@@ -165,7 +172,7 @@ class SemanticNavigationGraph:
             nodes.append({
                 "node_id": frontier["frontier_id"],
                 "node_type": "FRONTIER",
-                "label": frontier["frontier_id"],
+                "label": frontier.get("label") or frontier["frontier_id"],
                 "pose": {
                     "x": frontier.get("position", [0.0, 0.0])[0],
                     "y": frontier.get("position", [0.0, 0.0])[1],
@@ -281,6 +288,22 @@ class SemanticNavigationGraph:
                 "confidence": float(relation.get("confidence", 0.0) or 0.0),
                 "traversable": False,
             })
+        # The store is the identity authority for object relations.  Its
+        # frame-object -> persistent-object association is available even when
+        # the raw relation endpoint is from a previous frame, so project the
+        # accepted persistent edges into the unified navigation graph too.
+        for relation in self.relation_store.relations.values():
+            self._upsert_edge({
+                "edge_id": relation.edge_id,
+                "from": relation.source_object_id,
+                "to": relation.target_object_id,
+                "relation": relation.relation.upper(),
+                "provenance": "persistent_object_relation",
+                "traversable": False,
+                "confidence": relation.confidence,
+                "status": relation.status,
+                "observation_count": relation.observation_count,
+            })
 
     def _refresh_frontiers(
         self,
@@ -293,10 +316,13 @@ class SemanticNavigationGraph:
         for sector in range(self.heading_sectors):
             if str(sector) in covered:
                 continue
-            frontier_id = f"F{sector + 1:02d}"
+            # 计划书 §12：frontier node_id 必须全局唯一；短标签 Fxx 仅用于显示。
+            frontier_id = f"frontier:{place_id}:{sector:02d}"
+            short_label = f"F{sector + 1:02d}"
             if frontier_id not in self.frontiers:
                 self.frontiers[frontier_id] = {
                     "frontier_id": frontier_id,
+                    "label": short_label,
                     "position": _frontier_position(pose, sector, self.heading_sectors),
                     "source_place": place_id,
                     "bearing_deg": sector * 360.0 / self.heading_sectors,

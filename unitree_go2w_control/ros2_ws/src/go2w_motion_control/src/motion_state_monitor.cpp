@@ -11,7 +11,10 @@ namespace go2w_motion_control {
 
 MotionStateMonitor::MotionStateMonitor(rclcpp::Node *node,
                                        const std::string &sport_topic,
-                                       const std::string &low_topic) {
+                                       const std::string &low_topic,
+                                       bool require_low_state,
+                                       double wheel_radius_m)
+    : wheel_radius_m_(wheel_radius_m), require_low_state_(require_low_state) {
   // Keep high-rate state subscriptions off the Action/Service executor.  The
   // latter is deliberately single-threaded to avoid a Foxy rclcpp_action
   // readiness race.  A dedicated state-only executor lets a blocking safety
@@ -70,6 +73,20 @@ void MotionStateMonitor::OnSportState(
   state_.yaw_rate = msg->yaw_speed;
   state_.raw_yaw = raw_yaw;
   state_.unwrapped_yaw = yaw_unwrapper_.Update(raw_yaw);
+  state_.position_x = static_cast<double>(msg->position[0]);
+  state_.position_y = static_cast<double>(msg->position[1]);
+  if (state_.sport_sequence == 1) {
+    RCLCPP_INFO(state_node_->get_logger(),
+                "received SportModeState: mode=%u error_code=%u",
+                static_cast<unsigned>(state_.mode), state_.error_code);
+  }
+  if (evidence_active_) {
+    evidence_yaw_.push_back(state_.unwrapped_yaw);
+    evidence_position_x_.push_back(state_.position_x);
+    evidence_position_y_.push_back(state_.position_y);
+    evidence_speed_.push_back(
+        std::hypot(state_.velocity_x, state_.velocity_y));
+  }
 
   if (distance_active_) {
     const double speed = std::hypot(state_.velocity_x, state_.velocity_y);
@@ -92,6 +109,9 @@ void MotionStateMonitor::OnLowState(
   state_.low_state_received = true;
   state_.low_receive_time = std::chrono::steady_clock::now();
   ++state_.low_sequence;
+  if (state_.low_sequence == 1) {
+    RCLCPP_INFO(state_node_->get_logger(), "received LowState");
+  }
   std::array<double, 4> q{};
   std::array<double, 4> dq{};
   for (size_t index = 0; index < 4; ++index) {
@@ -100,6 +120,23 @@ void MotionStateMonitor::OnLowState(
   }
   state_.wheel_q = q;
   state_.wheel_dq = dq;
+  if (distance_active_) {
+    if (previous_wheel_q_valid_) {
+      double mean_delta = 0.0;
+      for (size_t index = 0; index < q.size(); ++index) {
+        mean_delta += q[index] - previous_wheel_q_[index];
+      }
+      mean_delta /= static_cast<double>(q.size());
+      // SportModeState.velocity is zero on this Go2-W firmware even while
+      // Move(1008) is active.  Once LowState is relayed locally, use the
+      // four-wheel encoder increment as the action's distance estimate.
+      if (std::isfinite(mean_delta)) {
+        estimated_distance_ += std::abs(mean_delta) * wheel_radius_m_;
+      }
+    }
+    previous_wheel_q_ = q;
+    previous_wheel_q_valid_ = true;
+  }
   if (evidence_active_) {
     evidence_q_.push_back(q);
     evidence_dq_.push_back(dq);
@@ -114,14 +151,19 @@ MotionStateSnapshot MotionStateMonitor::Snapshot() const {
 
 bool MotionStateMonitor::StateFresh(double timeout_sec) const {
   const auto snapshot = Snapshot();
-  if (!snapshot.sport_state_received || !snapshot.low_state_received) {
+  if (!snapshot.sport_state_received ||
+      (require_low_state_ && !snapshot.low_state_received)) {
     return false;
   }
   const auto now = std::chrono::steady_clock::now();
-  return std::chrono::duration<double>(now - snapshot.sport_receive_time)
-                 .count() <= timeout_sec &&
-         std::chrono::duration<double>(now - snapshot.low_receive_time)
-                 .count() <= timeout_sec;
+  if (std::chrono::duration<double>(now - snapshot.sport_receive_time)
+          .count() > timeout_sec) {
+    return false;
+  }
+  return !require_low_state_ ||
+         (snapshot.low_state_received &&
+          std::chrono::duration<double>(now - snapshot.low_receive_time)
+                  .count() <= timeout_sec);
 }
 
 bool MotionStateMonitor::IsStationary(const MotionStateSnapshot &snapshot,
@@ -130,8 +172,9 @@ bool MotionStateMonitor::IsStationary(const MotionStateSnapshot &snapshot,
   return std::abs(snapshot.velocity_x) < max_vx &&
          std::abs(snapshot.velocity_y) < max_vy &&
          std::abs(snapshot.yaw_rate) < max_yaw_rate &&
-         std::all_of(snapshot.wheel_dq.begin(), snapshot.wheel_dq.end(),
-                     [](double value) { return std::abs(value) < 0.2; });
+         (!require_low_state_ ||
+          std::all_of(snapshot.wheel_dq.begin(), snapshot.wheel_dq.end(),
+                      [](double value) { return std::abs(value) < 0.2; }));
 }
 
 bool MotionStateMonitor::WaitForFreshState(double timeout_sec,
@@ -141,11 +184,13 @@ bool MotionStateMonitor::WaitForFreshState(double timeout_sec,
   std::unique_lock<std::mutex> lock(mutex_);
   while (std::chrono::steady_clock::now() < deadline) {
     const auto now = std::chrono::steady_clock::now();
-    if (state_.sport_state_received && state_.low_state_received &&
+    if (state_.sport_state_received &&
+        (!require_low_state_ || state_.low_state_received) &&
         std::chrono::duration<double>(now - state_.sport_receive_time).count() <=
             state_timeout_sec &&
-        std::chrono::duration<double>(now - state_.low_receive_time).count() <=
-            state_timeout_sec) {
+        (!require_low_state_ ||
+         std::chrono::duration<double>(now - state_.low_receive_time).count() <=
+             state_timeout_sec)) {
       return true;
     }
     changed_.wait_for(lock, 50ms);
@@ -170,19 +215,22 @@ bool MotionStateMonitor::WaitForStationary(
     }
     previous_sequence = state_.sport_sequence;
     const auto now = std::chrono::steady_clock::now();
-    const bool fresh = state_.sport_state_received && state_.low_state_received &&
+    const bool fresh = state_.sport_state_received &&
+        (!require_low_state_ || state_.low_state_received) &&
         std::chrono::duration<double>(now - state_.sport_receive_time).count() <=
             state_timeout_sec &&
-        std::chrono::duration<double>(now - state_.low_receive_time).count() <=
-            state_timeout_sec;
+        (!state_.low_state_received ||
+         std::chrono::duration<double>(now - state_.low_receive_time).count() <=
+             state_timeout_sec);
     const bool stationary = std::abs(state_.velocity_x) < max_vx &&
                             std::abs(state_.velocity_y) < max_vy &&
                             std::abs(state_.yaw_rate) < max_yaw_rate &&
-                            std::all_of(
-                                state_.wheel_dq.begin(), state_.wheel_dq.end(),
-                                [](double value) {
-                                  return std::abs(value) < 0.2;
-                                });
+                            (!require_low_state_ ||
+                             std::all_of(
+                                 state_.wheel_dq.begin(), state_.wheel_dq.end(),
+                                 [](double value) {
+                                   return std::abs(value) < 0.2;
+                                 }));
     if (fresh && stationary) {
       if (++stable >= stable_samples) {
         return true;
@@ -199,6 +247,8 @@ void MotionStateMonitor::ResetDistance() {
   estimated_distance_ = 0.0;
   previous_distance_time_ = {};
   previous_speed_ = 0.0;
+  previous_wheel_q_valid_ = false;
+  previous_wheel_q_.fill(0.0);
   distance_active_ = true;
 }
 
@@ -211,6 +261,10 @@ void MotionStateMonitor::BeginEvidence() {
   std::lock_guard<std::mutex> lock(mutex_);
   evidence_q_.clear();
   evidence_dq_.clear();
+  evidence_yaw_.clear();
+  evidence_position_x_.clear();
+  evidence_position_y_.clear();
+  evidence_speed_.clear();
   evidence_active_ = true;
 }
 
@@ -218,7 +272,30 @@ MotionEvidence MotionStateMonitor::Evidence() const {
   std::lock_guard<std::mutex> lock(mutex_);
   MotionEvidence result;
   result.sample_count = evidence_q_.size();
-  if (evidence_q_.empty() || evidence_dq_.empty()) {
+  if (!require_low_state_ || evidence_q_.empty() || evidence_dq_.empty()) {
+    // Go2-W publishes SportModeState but, unlike the legged Go2, does not
+    // provide a usable /lf/lowstate stream.  Keep motion evidence fail-safe:
+    // require an observable yaw/position change and/or non-zero reported
+    // speed from the authoritative sport state instead of accepting RPC
+    // success alone.
+    result.sample_count = evidence_yaw_.size();
+    if (evidence_yaw_.size() < 2) return result;
+    const auto yaw_bounds = std::minmax_element(evidence_yaw_.begin(),
+                                                evidence_yaw_.end());
+    const auto x_bounds = std::minmax_element(evidence_position_x_.begin(),
+                                              evidence_position_x_.end());
+    const auto y_bounds = std::minmax_element(evidence_position_y_.begin(),
+                                              evidence_position_y_.end());
+    const double yaw_range = *yaw_bounds.second - *yaw_bounds.first;
+    const double position_range = std::hypot(
+        *x_bounds.second - *x_bounds.first,
+        *y_bounds.second - *y_bounds.first);
+    const double max_speed = evidence_speed_.empty()
+                                 ? 0.0
+                                 : *std::max_element(evidence_speed_.begin(),
+                                                     evidence_speed_.end());
+    result.strong = yaw_range >= 0.15 || position_range >= 0.05 ||
+                    (max_speed >= 0.03 && evidence_speed_.size() >= 3);
     return result;
   }
   std::array<double, 4> minimum{};

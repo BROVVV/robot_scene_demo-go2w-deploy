@@ -39,6 +39,7 @@ from app.live_robot.search_event import (
     SEARCH_STATE_CHANGED,
     SEMANTIC_OBJECT_LOCALIZED,
     SEMANTIC_REGION_CREATED,
+    SEMANTIC_STATUS,
     SESSION_CREATED,
     SESSION_STARTED,
     SPATIAL_MAP_UPDATED,
@@ -62,11 +63,16 @@ _MAP_RELEVANT = frozenset({"observation", "memory_update", "navigation_result"})
 # whether the whole task ultimately failed.
 _RECOVERABLE_EVENTS = {
     "perception_failure": ("PERCEPTION_ERROR", "perception"),
+    "perception_retry": ("PERCEPTION_ERROR", "perception_retry"),
     "observer_error": ("PERCEPTION_ERROR", "observer"),
     "observer_retry": ("PERCEPTION_ERROR", "observer_retry"),
     "matcher_error": ("SEARCH_ERROR", "matcher"),
     "verification_error": ("LLM_ERROR", "verifier"),
-    "candidate_generator_error": ("SEARCH_ERROR", "candidate_generator"),
+    # 计划书 §6.2：候选生成异常是 PLANNING_ERROR；第一次可恢复（重新规划），
+    # 终局判定由 session_finish 决定，绝不在这里映射成搜索穷尽。
+    "candidate_generator_error": ("PLANNING_ERROR", "candidate_generator"),
+    "candidates_empty": ("PLANNING_ERROR", "candidates_empty"),
+    "planner_returned_no_goal": ("PLANNING_ERROR", "planner"),
 }
 
 
@@ -168,7 +174,13 @@ class ExplorerSearchAdapter:
                     "scene_objects": payload.get("scene_objects") or [],
                     "scene_relations": payload.get("scene_relations") or [],
                     "target_present": payload.get("target_present", False),
+                    "target_state": payload.get("target_state") or "ABSENT",
                     "heading_sector": payload.get("heading_sector"),
+                    "navigation_heading_sector": payload.get("navigation_heading_sector"),
+                    "semantic_status": payload.get("semantic_status"),
+                    "semantic_quality": payload.get("semantic_quality"),
+                    "semantic_source_frame_id": payload.get("semantic_source_frame_id"),
+                    "semantic_age_ms": payload.get("semantic_age_ms"),
                     "pose": payload.get("pose"),
                     "image_ref": payload.get("image_ref"),
                     "depth_ref": payload.get("depth_ref"),
@@ -187,10 +199,24 @@ class ExplorerSearchAdapter:
                 }),
                 *self._map_events(event, payload, state),
             ]
+        if name == "semantic_status":
+            # 计划书 §13：语义健康状态单独透传（Quick VLM / Full Semantic /
+            # frame / age / objects / spatial quality）。
+            return [
+                self._emit(SEMANTIC_STATUS, payload={
+                    key: payload.get(key)
+                    for key in (
+                        "frame_id", "semantic_status", "semantic_quality",
+                        "semantic_source_frame_id", "semantic_age_ms",
+                        "semantic_object_count", "semantic_error_code",
+                    )
+                })
+            ]
         if name == "match":
             return [
                 self._emit(TARGET_MATCH_UPDATED, payload={
                     "has_candidate": payload.get("has_candidate", False),
+                    "target_state": payload.get("target_state") or "ABSENT",
                     "target_match_level": payload.get("target_match_level") or "none",
                     "target_score": payload.get("target_score", 0.0),
                     "anchor_labels": payload.get("anchor_labels") or [],
@@ -333,10 +359,29 @@ class ExplorerSearchAdapter:
             return [self._emit(PAUSED, payload={"phase": "PAUSED"})]
         if name == "resumed":
             return [self._emit(RESUMED, payload={"phase": "OBSERVE"})]
+        if name == "waiting_for_map":
+            # 计划书 §6.3：等地图是显式的等待状态，机器狗已停稳。
+            return [
+                self._emit(SEARCH_STATE_CHANGED, payload={
+                    "phase": "WAITING_FOR_MAP",
+                    "phase_detail": str(
+                        payload.get("detail_zh")
+                        or "地图暂时不新鲜，机器狗停稳等待新地图后重新规划"
+                    ),
+                    "waiting_cycles": payload.get("waiting_cycles"),
+                    "reason": payload.get("reason") or "",
+                })
+            ]
         if name == "search_exhausted":
             return [
                 self._emit(SEARCH_EXHAUSTED, payload={
                     "reason": payload.get("reason") or "",
+                    # 计划书 §6.5：穷尽必须列出已扫描方向数与 frontier 统计。
+                    "scanned_sector_count": payload.get("scanned_sector_count"),
+                    "reachable_frontier_count": payload.get("reachable_frontier_count"),
+                    "visited_frontier_count": payload.get("visited_frontier_count"),
+                    "unreachable_frontier_count": payload.get("unreachable_frontier_count"),
+                    "map_fresh": payload.get("map_fresh"),
                     "phase": "SEARCH_EXHAUSTED",
                 })
             ]
@@ -360,10 +405,25 @@ class ExplorerSearchAdapter:
             if result == "OPERATOR_STOP":
                 events.append(self._emit(OPERATOR_STOP, payload={"phase": "OPERATOR_STOP"}))
             elif result in {"TIMEOUT", "BACKEND_FAILURE",
-                            "PERCEPTION_FAILURE"}:
+                            "PERCEPTION_FAILURE", "PLANNING_ERROR",
+                            "MAP_UNAVAILABLE"}:
+                # 计划书 §8.5：最终失败信息必须精准（cause/attempts 等）。
+                perception_detail = dict(payload.get("error_detail") or {})
                 events.append(self._emit(ERROR, payload={
                     "error_type": _finish_to_error_type(result),
-                    "message": payload.get("reason") or result,
+                    "code": perception_detail.get("code") or payload.get("cause"),
+                    "message": (
+                        perception_detail.get("message")
+                        or payload.get("error")
+                        or payload.get("reason")
+                        or result
+                    ),
+                    "cause": payload.get("cause") or perception_detail.get("code"),
+                    "attempts": payload.get("attempts"),
+                    "last_success_age_s": payload.get("last_success_age_s"),
+                    "recoverable": payload.get("recoverable"),
+                    "detail": perception_detail.get("detail"),
+                    "error_detail": perception_detail,
                     "phase": "FAILED",
                 }))
             events.append(self._emit(SEARCH_FINISHED, payload=finish_payload))
@@ -485,4 +545,6 @@ def _finish_to_error_type(result: str) -> str:
         return "BACKEND_ERROR"
     if result == "PERCEPTION_FAILURE":
         return "PERCEPTION_ERROR"
+    if result in {"PLANNING_ERROR", "MAP_UNAVAILABLE"}:
+        return "PLANNING_ERROR"
     return "SEARCH_ERROR"

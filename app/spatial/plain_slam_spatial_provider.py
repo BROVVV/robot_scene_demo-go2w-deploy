@@ -27,6 +27,7 @@ from app.spatial.models import (
     SPATIAL_QUALITY_CAMERA_LOCAL,
     SPATIAL_QUALITY_METRIC_LIDAR,
     SPATIAL_QUALITY_RELATIVE_RGBD,
+    SpatialFrameMismatch,
     FrontierCandidate,
     SpatialMapSnapshot,
     SpatialPose,
@@ -127,7 +128,14 @@ class PlainSlamSpatialProvider:
             try:
                 import rclpy
 
-                rclpy.spin_once(self._node, timeout_sec=0.05)
+                # odom is high-rate while map_2d is low-rate.  A single
+                # callback can therefore repeatedly consume odom and leave
+                # the occupancy-grid callback queued, making the provider
+                # appear metric-unavailable at an observation boundary.
+                # Drain a short bounded batch so one refresh services both
+                # streams without creating a background executor/thread.
+                for _ in range(8):
+                    rclpy.spin_once(self._node, timeout_sec=0.01)
             except Exception as exc:  # noqa: BLE001
                 self._last_error = str(exc)
 
@@ -151,6 +159,23 @@ class PlainSlamSpatialProvider:
         return SPATIAL_QUALITY_CAMERA_LOCAL
 
     def set_pose(self, pose: SpatialPose | None) -> None:
+        """Set the robot pose in the plain_slam world frame.
+
+        计划书 §9.3 / 不变量 3：plain_slam 的世界坐标系是 ``pslam_odom``。
+        wheel odom（frame ``odom``）等其它 frame 的数值严禁直接写入本
+        provider（只能用于相对运动/当前 yaw/运动验证）。frame 不一致时抛出
+        :class:`SpatialFrameMismatch`，由调用方 transform 或降级，绝不静默混算。
+        """
+        if pose is not None and pose.frame_id != self.map_frame:
+            self._last_error = (
+                f"SPATIAL_FRAME_MISMATCH: pose_frame={pose.frame_id} "
+                f"map_frame={self.map_frame}"
+            )
+            raise SpatialFrameMismatch(
+                pose_frame=pose.frame_id,
+                map_frame=self.map_frame,
+                detail="wheel odom must not be injected into pslam_odom",
+            )
         self.fallback.set_pose(pose)
         if pose is not None and self._pose is None:
             self._pose = pose
@@ -170,9 +195,11 @@ class PlainSlamSpatialProvider:
     def get_frontiers(self) -> list[FrontierCandidate]:
         if self._map_is_fresh():
             pose = self.get_pose()
-            frontiers = self.frontier_extractor.extract(self._map, pose)
-            if frontiers:
-                return frontiers
+            # 只有 pslam_odom 的 pose 才能与 pslam 地图混算（不变量 3）。
+            if pose is not None and pose.frame_id == self.map_frame:
+                frontiers = self.frontier_extractor.extract(self._map, pose)
+                if frontiers:
+                    return frontiers
         return self.fallback.get_frontiers()
 
     def camera_point_to_spatial(
@@ -193,6 +220,17 @@ class PlainSlamSpatialProvider:
         pose = pose or self.get_pose()
         if pose is None:
             return None
+        if pose.frame_id != self.map_frame:
+            # 严禁 frame A 数值 + frame B 地图直接运算（不变量 3）。
+            self._last_error = (
+                f"SPATIAL_FRAME_MISMATCH: pose_frame={pose.frame_id} "
+                f"map_frame={self.map_frame}"
+            )
+            raise SpatialFrameMismatch(
+                pose_frame=pose.frame_id,
+                map_frame=self.map_frame,
+                detail="camera_point_to_spatial requires pslam_odom pose",
+            )
         self._transform_source = "nominal_extrinsic"
         return camera_point_to_map(
             xyz_camera,

@@ -11,6 +11,24 @@ from typing import Any, Callable
 from app.video.object_tracker import VideoObjectTracker
 from app.video.observed_scene_graph_builder import ObservedSceneGraphBuilder
 from app.video.schemas import FrameObject, FrameObservation, FrameRelation, SceneGraph
+from app.perception.target_state import (
+    TARGET_ABSENT,
+    normalize_target_state,
+    target_state_from_payload,
+)
+
+# 语义结果状态机（计划书 §3.2/§3.3）：只有 fresh_* 才能被当作“当前帧的真实
+# 场景事实”；timeout/error/pending/stale/unavailable 一律解释为“语义不可用”，
+# 绝不能解释成“本场景确认没有物体”。
+SEMANTIC_STATUS_FRESH_FULL = "fresh_full"
+SEMANTIC_STATUS_FRESH_QUICK = "fresh_quick_scene"
+SEMANTIC_STATUS_PENDING = "pending"
+SEMANTIC_STATUS_STALE = "stale"
+SEMANTIC_STATUS_TIMEOUT = "timeout"
+SEMANTIC_STATUS_ERROR = "error"
+SEMANTIC_STATUS_UNAVAILABLE = "unavailable"
+
+SEMANTIC_FRESH_STATUSES = {SEMANTIC_STATUS_FRESH_FULL, SEMANTIC_STATUS_FRESH_QUICK}
 
 
 @dataclass
@@ -25,6 +43,17 @@ class SemanticObservation:
     heading_sector: int | None = None
     scene_graph: SceneGraph | None = None
     cache_hit: bool = False
+    # ---- 计划书 §3.3：语义 freshness / frame binding 元信息 ------------------
+    semantic_source_frame_id: str | None = None
+    semantic_capture_timestamp: float | None = None
+    semantic_completed_timestamp: float | None = None
+    semantic_age_ms: float | None = None
+    semantic_status: str = SEMANTIC_STATUS_FRESH_FULL
+    semantic_quality: str = "full"
+    semantic_error_code: str | None = None
+    semantic_error_detail: str | None = None
+    semantic_source_pose: dict[str, Any] | None = None
+    target_state: str = TARGET_ABSENT
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -78,14 +107,34 @@ class LiveSemanticObserver:
         )
         if fresh and not force:
             cached = self._cached
+            age_ms = max(
+                0.0,
+                (now - float(self.last_semantic_observation_timestamp or now)) * 1000.0,
+            )
             return SemanticObservation(
-                **{**cached.__dict__, "cache_hit": True, "stale": False}
+                **{
+                    **cached.__dict__,
+                    "cache_hit": True,
+                    "stale": False,
+                    "semantic_age_ms": age_ms,
+                    "semantic_status": (
+                        SEMANTIC_STATUS_STALE
+                        if age_ms >= self.ttl_seconds * 1000.0
+                        else SEMANTIC_STATUS_FRESH_FULL
+                    ),
+                }
             )
         if self.analyze is None:
             payload = frame_or_bundle if isinstance(frame_or_bundle, dict) else {}
         else:
             payload = self.analyze(frame_or_bundle, target_profile)
         observation = _from_payload(payload, robot_pose=robot_pose, sector=sector, now=now)
+        observation.semantic_completed_timestamp = now
+        observation.semantic_age_ms = 0.0
+        if observation.semantic_source_frame_id is None:
+            observation.semantic_source_frame_id = str(
+                payload.get("frame_id") if isinstance(payload, dict) else observation.frame_id
+            )
         self._cached = observation
         self.last_semantic_observation_timestamp = now
         self.last_heading_sector = sector
@@ -136,6 +185,13 @@ def semantic_payload_from_quick_target_absence(
         ),
         "semantic_reuse_reason": "quick_target_decision_explicitly_absent_keep_objects",
         "target_decision": decision,
+        # 快路径结果：只代表“当前帧的粗粒度场景”，不代表全场景语义完成。
+        "semantic_status": SEMANTIC_STATUS_FRESH_QUICK,
+        "semantic_quality": "quick_scene_light",
+        "semantic_source_frame_id": frame_id,
+        "semantic_capture_timestamp": time.time(),
+        "semantic_completed_timestamp": time.time(),
+        "semantic_age_ms": 0.0,
     }
 
 
@@ -198,6 +254,31 @@ def _from_payload(payload: dict[str, Any], *, robot_pose: dict[str, Any] | None,
         relations=[item.to_dict() for item in relations],
         source=str(payload.get("source") or "existing_scene_analysis"),
         stale=False, heading_sector=sector, scene_graph=graph,
+        semantic_source_frame_id=str(
+            payload.get("semantic_source_frame_id")
+            or payload.get("source_frame_id")
+            or frame_id_text
+        ),
+        semantic_capture_timestamp=_opt_float(
+            payload.get("semantic_capture_timestamp")
+            or payload.get("capture_timestamp")
+        ),
+        semantic_completed_timestamp=_opt_float(
+            payload.get("semantic_completed_timestamp")
+            or payload.get("completed_timestamp")
+        ),
+        semantic_age_ms=_opt_float(payload.get("semantic_age_ms")),
+        semantic_status=str(
+            payload.get("semantic_status")
+            or (SEMANTIC_STATUS_FRESH_FULL if not payload.get("semantic_error_code")
+                else SEMANTIC_STATUS_ERROR)
+        ),
+        semantic_quality=str(payload.get("semantic_quality") or "full"),
+        semantic_error_code=_opt_str(payload.get("semantic_error_code")),
+        semantic_error_detail=_opt_str(payload.get("semantic_error_detail")),
+        semantic_source_pose=payload.get("semantic_source_pose")
+        or (dict(robot_pose) if robot_pose is not None else None),
+        target_state=target_state_from_payload(payload),
     )
 
 
@@ -207,6 +288,7 @@ def semantic_observation_to_live(
     bundle_id: str,
     detections: list[dict[str, Any]],
     target_present: bool,
+    target_state: str | None = None,
     pose: dict[str, Any] | None,
     sensor_health: dict[str, Any] | None = None,
     timestamp: float | None = None,
@@ -218,6 +300,7 @@ def semantic_observation_to_live(
     spatial_quality: str = "RGB_ONLY",
     camera_xyz: list[float] | None = None,
     map_xyz: list[float] | None = None,
+    navigation_heading_sector: int | None = None,
 ) -> "LiveObservation":
     """Normalize a SemanticObservation into the explorer's LiveObservation.
 
@@ -247,10 +330,25 @@ def semantic_observation_to_live(
         scene_relations=list(semantic.relations),
         target_match={
             "target_present": bool(target_present),
+            "target_state": normalize_target_state(
+                target_state,
+                default=("PRESENT" if target_present else semantic.target_state),
+            ),
             "score": max((item.get("score", 0.0) for item in detections), default=0.0),
         },
         pose=pose,
         heading_sector=semantic.heading_sector,
+        navigation_heading_sector=navigation_heading_sector,
+        semantic_heading_sector=semantic.heading_sector,
+        semantic_source_frame_id=semantic.semantic_source_frame_id,
+        semantic_capture_timestamp=semantic.semantic_capture_timestamp,
+        semantic_completed_timestamp=semantic.semantic_completed_timestamp,
+        semantic_age_ms=semantic.semantic_age_ms,
+        semantic_status=semantic.semantic_status,
+        semantic_quality=semantic.semantic_quality,
+        semantic_error_code=semantic.semantic_error_code,
+        semantic_error_detail=semantic.semantic_error_detail,
+        semantic_source_pose=semantic.semantic_source_pose,
         sensor_health=dict(sensor_health or {}),
         provenance={"source": str(semantic.source)},
     )
@@ -261,6 +359,22 @@ def _numeric_frame_id(value: str) -> int:
         return int(value)
     except ValueError:
         return int(hashlib.sha1(value.encode("utf-8")).hexdigest()[:7], 16)
+
+
+def _opt_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _opt_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _bbox_horizontal(bbox: list[float] | None) -> str:

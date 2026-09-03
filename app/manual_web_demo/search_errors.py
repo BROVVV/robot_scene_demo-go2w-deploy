@@ -50,6 +50,11 @@ def search_error(
         (r"camera|d435|rgb-?d|frame.*stale|相机|深度", "perception", "相机 / RGB-D 异常",
          "搜索没有获得新鲜且可用的视觉或深度帧。", "检查 D435 供电、HTTP/ROS 图像流、帧年龄和标定服务。",
          "CAMERA_UNAVAILABLE", True),
+        (r"mapping frozen|地图已冻结|假平移|lio.*drift|建图.*冻结", "spatial", "全局地图已冻结",
+         "LIO 位姿与轮式里程计不一致（原地转向被判为米级假平移），永久地图已停止写入。",
+         "先停止运动，运行 scripts/go2w/reset_plain_slam_session.sh 重建 mapping session；"
+         "确认 mapping_health=HEALTHY 后再开始自主搜索。",
+         "MAPPING_FROZEN", True),
         (r"lidar|pandar|rtab|spatial|occupancy|定位|雷达", "spatial", "空间感知或定位异常",
          "激光雷达、RTAB-Map 或空间坐标链路不可用。", "检查点云时间戳、TF、RTAB-Map 状态和定位质量。",
          "SPATIAL_PROVIDER_UNAVAILABLE", True),

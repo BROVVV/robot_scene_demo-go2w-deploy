@@ -82,14 +82,14 @@ vlm_runtime:
   transport: daemon
   fallback_to_subprocess: true
   allow_api_concurrency: true
-  quick_max_tokens: 256
+  quick_max_tokens: 1024
   verify_max_tokens: 256
   semantic_max_tokens: 1536
-  quick_timeout_seconds: 20
+  quick_timeout_seconds: 65
   verify_timeout_seconds: 20
   semantic_timeout_seconds: 45
   semantic_background_enabled: true
-  semantic_initial_warmup_blocking: true
+  semantic_initial_warmup_blocking: false
   semantic_max_inflight: 1
   semantic_ttl_seconds: 12.0
   semantic_translation_refresh_m: 0.30

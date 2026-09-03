@@ -54,7 +54,7 @@ install(TARGETS
   plain_slam_health_monitor
   DESTINATION lib/${PROJECT_NAME})
 
-install(PROGRAMS scripts/imu_fallback_adapter.py
+install(PROGRAMS scripts/imu_fallback_adapter.py scripts/imu_timestamp_aligner.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch

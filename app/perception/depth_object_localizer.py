@@ -70,6 +70,28 @@ def _source_object_id(item: dict[str, Any]) -> str | None:
     return text or None
 
 
+def resolve_depth_frame(
+    semantic_frame_id: str | None,
+    current_frame: RGBDFrame | None,
+    cache: dict[str, Any] | None = None,
+) -> RGBDFrame | None:
+    """计划书 §5.2：为语义结果选择“同帧”深度帧做 3D 定位。
+
+    只允许：
+    * 语义 source frame == 当前 RGB-D 帧；或
+    * 从 RGB-D 缓存中取回语义 source frame 对应的原始深度帧。
+    找不到同帧深度 -> 返回 None，调用方必须降级为 SEMANTIC_2D_ONLY，
+    严禁用当前 depth 顶替旧帧语义（old bbox + current depth = 错误定位）。
+    """
+    if semantic_frame_id is None:
+        return current_frame
+    if current_frame is not None and str(current_frame.frame_id) == str(semantic_frame_id):
+        return current_frame
+    if cache is not None:
+        return cache.get(str(semantic_frame_id))
+    return None
+
+
 class DepthObjectLocalizer:
     """Localize detected objects in a depth image using robust median sampling."""
 

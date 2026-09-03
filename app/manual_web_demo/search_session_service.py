@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -30,6 +31,19 @@ from app.live_robot.search_event import (
     SearchEvent,
     make_event,
 )
+
+
+def _touch_slam_reset_marker() -> None:
+    """计划书 §10.3：新搜索 session 触发 plain_slam WebUI 桥清空旧累积点云。"""
+    marker = os.environ.get("GO2W_SLAM_RESET_MARKER", "")
+    if not marker:
+        return
+    try:
+        path = Path(marker)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    except OSError:
+        pass
 from app.live_robot.search_event_bus import SearchEventBus
 from app.live_robot.search_state_store import (
     STATUS_FAILED,
@@ -191,7 +205,13 @@ class SearchSessionService:
         if self._executor is None:
             return {"state": "stopped", "session_id": None}
         status = dict(self._executor.status() or {})
-        status["alive"] = bool(self._executor.alive())
+        alive = bool(self._executor.alive())
+        # A terminal worker is retired asynchronously after its final result.
+        # Do not expose its last RUNNING payload through /api/status while the
+        # session is already archived and no worker can accept commands.
+        if not alive:
+            return {"state": "stopped", "session_id": None, "alive": False}
+        status["alive"] = True
         return status
 
     # ------------------------------------------------------------------ #
@@ -514,6 +534,8 @@ class SearchSessionService:
                     "error_detail": self._store.snapshot().get("error") or
                                     rejected.payload.get("error_detail"),
                 }
+            # 计划书 §10.3：新 session 清空 WebUI 旧 3D 累积点云。
+            _touch_slam_reset_marker()
             try:
                 executor.start(params)
             except Exception as exc:  # noqa: BLE001
@@ -892,8 +914,14 @@ class SearchSessionService:
         session_id = str(marker.get("session_id") or state.get("session_id") or "")
         if not session_id:
             return
+        restored_status = str(state.get("status") or marker.get("status") or STATUS_IDLE)
+        # History is durable evidence, not a live worker lease.  A fresh web
+        # process must start with an empty IDLE slot after a terminal task;
+        # the archived session remains available through the history API.
+        if restored_status in TERMINAL_STATUSES or restored_status == STATUS_IDLE:
+            return
         self._session_id = session_id
-        self._status = str(state.get("status") or marker.get("status") or STATUS_IDLE)
+        self._status = restored_status
         self._started_at = state.get("started_at")
         task = dict(state.get("task") or marker.get("task") or {})
         self._task_context = None
@@ -924,6 +952,10 @@ class SearchSessionService:
             self._fail_interrupted_session_locked(
                 "WebUI 服务重启后无法安全接管原搜索 worker；原任务已标记为中断，重启前状态已完整保留。"
             )
+            # The interruption record above is archived.  Do not expose it as
+            # the current live session or reuse its map/target evidence.
+            self._reset_session_locked()
+            self._bus.clear()
 
     def _mark_status(self, status: str) -> None:
         with self._lock:

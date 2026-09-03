@@ -33,6 +33,29 @@ from std_msgs.msg import String
 from app.perception.realsense_http_rgbd_source import RealSenseHTTPRGBDSource
 
 
+# 计划书 §11.1：host_timestamp 合法性窗口（Unix 秒，2014~2038 之外视为无效）。
+_HOST_TIMESTAMP_MIN_S = 1.4e9
+_HOST_TIMESTAMP_MAX_S = 2.2e9
+
+
+def _capture_stamp_seconds(frame) -> tuple[float, str]:
+    """优先使用服务端采集时间 host_timestamp；非法/缺失才回退接收时间。
+
+    返回 (stamp_seconds, timestamp_quality)。
+    """
+    host_ts = frame.host_timestamp
+    try:
+        host_value = float(host_ts)
+    except (TypeError, ValueError):
+        host_value = 0.0
+    if (
+        host_value >= _HOST_TIMESTAMP_MIN_S
+        and host_value <= _HOST_TIMESTAMP_MAX_S
+    ):
+        return host_value, "host_timestamp"
+    return time.time(), "receive_time"
+
+
 class D435RGBDBridge(Node):
     def __init__(self, base_url: str, rate_hz: float = 10.0) -> None:
         super().__init__("go2w_d435_rgbd_bridge")
@@ -74,13 +97,28 @@ class D435RGBDBridge(Node):
             return
         depth_m = depth_mm.astype(np.float32) * float(frame.depth_unit_m or 0.001)
 
+        # 计划书 §11.1：用真实采集时间（host_timestamp）打 ROS 时间戳；
+        # 不可用时回退接收时间并显式标记 timestamp_quality。
+        stamp_seconds, timestamp_quality = _capture_stamp_seconds(frame)
         stamp = self.get_clock().now().to_msg()
+        stamp.sec = int(stamp_seconds)
+        stamp.nanosec = int(round((stamp_seconds - int(stamp_seconds)) * 1e9))
+        if stamp.nanosec >= 1_000_000_000:
+            stamp.sec += 1
+            stamp.nanosec -= 1_000_000_000
         color_msg = self.bridge.cv2_to_imgmsg(color, encoding="bgr8")
         color_msg.header.stamp = stamp
         color_msg.header.frame_id = "d435_color_optical_frame"
         depth_msg = self.bridge.cv2_to_imgmsg(depth_m, encoding="32FC1")
         depth_msg.header.stamp = stamp
-        depth_msg.header.frame_id = "d435_depth_optical_frame"
+        # 计划书 §11.2：aligned depth 实际处于 color camera geometry，因此
+        # frame_id 使用 color optical frame（depth↔color 无独立 TF 时不能
+        # 假装是 depth optical frame）。
+        depth_msg.header.frame_id = (
+            "d435_color_optical_frame"
+            if frame.depth_aligned_to_color
+            else "d435_depth_optical_frame"
+        )
 
         info = CameraInfo()
         info.header.stamp = stamp
@@ -105,7 +143,15 @@ class D435RGBDBridge(Node):
             compressed.data = encoded.tobytes()
             self.front_compressed_pub.publish(compressed)
         self.front_info_pub.publish(info)
-        self.health_pub.publish(String(data=f"frame={frame.frame_id} age={frame.health.get('age_s', 0.0)}"))
+        self.health_pub.publish(
+            String(
+                data=(
+                    f"frame={frame.frame_id} age={frame.health.get('age_s', 0.0)} "
+                    f"timestamp_quality={timestamp_quality} "
+                    f"depth_aligned_to_color={frame.depth_aligned_to_color}"
+                )
+            )
+        )
         self.get_logger().info(
             f"published D435 frame {frame.frame_id} color={frame.width}x{frame.height}"
         )

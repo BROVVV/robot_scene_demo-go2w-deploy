@@ -214,11 +214,20 @@ class DemoRuntime:
     # -- providers ------------------------------------------------------- #
     def _camera_fresh(self) -> bool:
         if self._last_camera_msg_time <= 0.0:
-            return False
-        return (
+            return self._file_camera_fresh()
+        memory_fresh = (
             time.monotonic() - self._last_camera_msg_time
             < self.config.camera_stale_seconds
         )
+        return memory_fresh or self._file_camera_fresh()
+
+    def _file_camera_fresh(self) -> bool:
+        """Accept the robot-local HTTP camera capture as a read-only source."""
+        try:
+            age = time.time() - self.config.latest_frame_path.stat().st_mtime
+        except OSError:
+            return False
+        return age >= 0.0 and age < self.config.camera_stale_seconds
 
     def _safety_snapshot(self) -> SafetySnapshot:
         status = self.worker.status()
@@ -265,17 +274,42 @@ class DemoRuntime:
 
     # -- snapshots -------------------------------------------------------- #
     def camera_snapshot(self) -> CameraStatus:
-        age = (
+        memory_age = (
             time.monotonic() - self._last_camera_msg_time
             if self._last_camera_msg_time > 0.0
             else None
         )
+        file_age = None
+        file_width = None
+        file_height = None
+        try:
+            file_age = time.time() - self.config.latest_frame_path.stat().st_mtime
+            status = json.loads(
+                self.config.camera_status_path.read_text(encoding="utf-8")
+            )
+            file_width = status.get("width")
+            file_height = status.get("height")
+        except (OSError, json.JSONDecodeError):
+            pass
+        memory_fresh = (
+            memory_age is not None
+            and memory_age < self.config.camera_stale_seconds
+        )
+        file_fresh = (
+            file_age is not None
+            and 0.0 <= file_age < self.config.camera_stale_seconds
+        )
+        age_candidates = [
+            age for age in (memory_age, file_age)
+            if age is not None and age >= 0.0
+        ]
+        age = min(age_candidates) if age_candidates else None
         return CameraStatus(
-            available=self._last_camera_msg_time > 0.0,
-            fresh=self._camera_fresh(),
+            available=memory_age is not None or file_age is not None,
+            fresh=memory_fresh or file_fresh,
             age_seconds=age,
-            width=self._camera_info.get("width"),
-            height=self._camera_info.get("height"),
+            width=self._camera_info.get("width") or file_width,
+            height=self._camera_info.get("height") or file_height,
         )
 
     def status_snapshot(self) -> dict[str, Any]:
@@ -318,14 +352,15 @@ class DemoRuntime:
     def search_readiness(self) -> dict[str, Any]:
         """ExperimentSearchReadiness (plan book §59): automatic checks only,
         no manual calibration may gate the WebUI.  Camera / worker / motion /
-        robot-mode / estop are blocking; LLM toggle and search worker are
-        informational (degraded-only) because they are user-toggleable."""
+        robot-mode / estop / SLAM drift are blocking; LLM toggle, search worker
+        and a not-yet-built map are informational (degraded-only)."""
         status = self.status_snapshot()
         camera = status.get("camera") or {}
         worker = status.get("worker") or {}
         motion = status.get("motion") or {}
         llm = status.get("llm") or {}
         search = status.get("search") or {}
+        slam = load_slam_map_snapshot(self.config.slam_map_snapshot_path)
         checks = {
             "camera_fresh": bool(camera.get("fresh", False)),
             "camera_available": bool(camera.get("available", False)),
@@ -337,6 +372,10 @@ class DemoRuntime:
                 and motion.get("robot_error_code") == 0
             ),
             "emergency_stop_available": bool(motion.get("available", False)),
+            # §10.2：LIO 正在造假平移时地图已冻结，这时候不许开自主搜索；
+            # 地图还没建起来只是降级信息，遥控建图必须仍然可用。
+            "slam_map_not_drifting": slam.get("mapping_health") != "DEGRADED_LIO_DRIFT",
+            "slam_map_live": bool(slam.get("available")) and bool(slam.get("fresh")),
             "llm_available": bool(llm.get("enabled", False)),
             "search_worker_available": bool(
                 search.get("state") not in (None, "stopped") or search.get("alive")
@@ -345,17 +384,26 @@ class DemoRuntime:
         blocking = (
             "camera_fresh", "camera_available", "ros_worker_alive",
             "motion_action_available", "robot_mode_ok",
-            "emergency_stop_available",
+            "emergency_stop_available", "slam_map_not_drifting",
         )
         blocked = [key for key in blocking if not checks[key]]
         degraded = [key for key in checks if not checks[key] and key not in blocking]
         ready = not blocked
+        reason = "" if ready else "readiness failed: " + "; ".join(blocked)
+        if not checks["slam_map_not_drifting"]:
+            reason += " · " + str(slam.get("health_reason") or "")
         return {
             "ready": ready,
             "checks": checks,
-            "blocking": list(blocking),
+            # Return only failed mandatory checks.  Returning the complete
+            # list here made a healthy WebUI appear blocked even when
+            # ``ready`` was true, which is especially confusing before an
+            # operator enables autonomous motion.
+            "blocking": blocked,
             "degraded": degraded,
-            "reason": "" if ready else "readiness failed: " + "; ".join(blocked),
+            "reason": reason,
+            "mapping_health": slam.get("mapping_health", "UNAVAILABLE"),
+            "mapping_health_reason": slam.get("health_reason", ""),
             "owner": self.owner.snapshot(),
         }
 

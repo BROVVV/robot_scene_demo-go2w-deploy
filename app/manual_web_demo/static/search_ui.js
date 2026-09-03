@@ -11,12 +11,14 @@
   var appState = {
     search: {},
     observation: {},
+    semantic: {},
     objects: {},
     targetMatch: {},
     selectedGoal: null,
     task: {},
     decisions: [],
     nextMotionCommand: null,
+    turnProgress: null,
     candidates: [],
     map: {},
     events: [],
@@ -78,6 +80,8 @@
     stAnchor: document.getElementById("st-anchor"),
     stAction: document.getElementById("st-action"),
     stPose: document.getElementById("st-pose"),
+    stSemantic: document.getElementById("st-semantic"),
+    stSemanticDetail: document.getElementById("st-semantic-detail"),
     stEvidence: document.getElementById("st-evidence"),
     taskUnderstanding: document.getElementById("task-understanding"),
     // observation
@@ -330,11 +334,22 @@
           objects: payload.scene_objects || payload.objects || [],
           detections: payload.detections || [],
           target_present: payload.target_present,
+          target_state: payload.target_state || (payload.target_present ? "PRESENT" : "ABSENT"),
           heading_sector: payload.heading_sector,
+          navigation_heading_sector: payload.navigation_heading_sector,
+          semantic_status: payload.semantic_status,
+          semantic_quality: payload.semantic_quality,
+          semantic_source_frame_id: payload.semantic_source_frame_id,
+          semantic_age_ms: payload.semantic_age_ms,
+          spatial_quality: payload.spatial_quality,
           pose: payload.pose,
           sensor_health: payload.sensor_health || {},
         };
         lastDetectionFrame = payload.detections || null;
+        break;
+      case "SEMANTIC_STATUS":
+        // 计划书 §13：语义健康状态（Quick VLM / Full Semantic / frame / age）。
+        appState.semantic = payload || {};
         break;
       case "OBJECTS_UPDATED":
         appState.objects.current = payload.current || [];
@@ -343,6 +358,7 @@
       case "TARGET_MATCH_UPDATED":
         appState.targetMatch = {
           level: payload.target_match_level || "none",
+          target_state: payload.target_state || "ABSENT",
           target_score: payload.target_score,
           anchor_labels: payload.anchor_labels || [],
           explicit_anchor_found: payload.explicit_anchor_found,
@@ -383,6 +399,7 @@
         appState.search.phase = "EXECUTE";
         appState.search.phase_detail = payload.phase_detail || "正在等待动作服务器执行并回传结果";
         appState.robotAction = "EXECUTING";
+        appState.turnProgress = null;
         if (payload.next_motion_command) appState.nextMotionCommand = payload.next_motion_command;
         break;
       case "DECISION_RECORDED":
@@ -399,8 +416,12 @@
         appState.robotAction = payload.status === "succeeded" ? "SUCCEEDED" : "FAILED";
         appState.search.phase = "WAIT_RESULT";
         appState.search.phase_detail = payload.phase_detail || payload.message || "动作已结束";
+        appState.turnProgress = turnProgressText(payload) || null;
         if (payload.status !== "succeeded" && /MOTION_(ACCEPT|RESULT)_TIMEOUT/.test(payload.message || "")) {
           showBanner("动作响应超时，已取消并安全停止；搜索将重新规划。原因：" + payload.message, "error");
+        }
+        if (payload.status !== "succeeded" && /ROTATION_NOT_CONFIRMED/.test(payload.message || "")) {
+          showBanner("转向未被里程计确认，逻辑目标判定失败：" + payload.message, "error");
         }
         break;
       case "REPLAN":
@@ -515,6 +536,8 @@
           showBanner("搜索成功：已找到目标！", "success");
         } else if (failed) {
           var reason = payload.error || payload.reason || payload.finish_reason || "FAILED";
+          if (payload.cause) reason += " · cause=" + payload.cause;
+          if (payload.attempts != null) reason += " · attempts=" + payload.attempts;
           var hint = "";
           if (/No module named|ModuleNotFoundError|ImportError/.test(reason)) {
             hint = "（worker 缺少依赖，请检查 outputs/autonomous_search/logs/search_worker.log；或用 --mock 离线演示）";
@@ -652,11 +675,21 @@
   // ------------------------------------------------------------------ //
   // Rendering                                                           //
   // ------------------------------------------------------------------ //
+  // 计划书 §7.3：物体列表、计数和拓扑图共用同一个"只有对象"的投影，
+  // 保证界面上的节点数就是画出来的节点数，绝不退回导航图。
+  function objectTopology(spatial) {
+    var graph = (spatial || {}).semantic_graph || null;
+    var raw = graph && graph.object_topology ? graph.object_topology : null;
+    if (window.TopologyLayout && window.TopologyLayout.objectOnly) {
+      return window.TopologyLayout.objectOnly(raw);
+    }
+    return raw;
+  }
+
   function renderObjects() {
     // 识别物体列表：与语义拓扑同源（spatial.semantic_graph.object_topology），
     // 从第一次识别到物体就开始显示，并随每次 memory_update 实时刷新。
-    var spatial = appState.spatial || {};
-    var ot = ((spatial.semantic_graph || {}).object_topology) || null;
+    var ot = objectTopology(appState.spatial);
     var nodes = ot && Array.isArray(ot.nodes) ? ot.nodes : [];
     if (els.obsObjectsMeta) {
       els.obsObjectsMeta.textContent = nodes.length ? nodes.length + " 个" : "";
@@ -705,7 +738,7 @@
       // Semantic topology projection: show only topology stats, never metric
       // map / place metrics (they belong to the spatial map view).
       var hasGraph = !!(spatial && spatial.semantic_graph && spatial.semantic_graph.object_topology);
-      var topology = (spatial && spatial.semantic_graph && spatial.semantic_graph.object_topology) || null;
+      var topology = objectTopology(spatial);
       var nodes = (topology && topology.nodes) || [];
       var edges = (topology && topology.edges) || [];
       var empty = (nodes.length === 0);
@@ -730,6 +763,7 @@
     var s = appState.search || {};
     els.stTarget.textContent = s.target || "--";
     var phaseText = s.phase || (s.status || "IDLE");
+    if (appState.turnProgress) phaseText += " · " + appState.turnProgress;
     if (s.phase_detail) phaseText += " · " + s.phase_detail;
     els.stPhase.textContent = phaseText;
     els.stCycle.textContent = String(s.cycle || 0);
@@ -759,12 +793,46 @@
       startBtn.disabled = activeStates.indexOf(s.status || "IDLE") >= 0;
     }
     var m = appState.targetMatch || {};
-    els.stMatch.textContent = m.level || "none";
+    els.stMatch.textContent = m.target_state && m.target_state !== "ABSENT"
+      ? m.target_state : (m.level || "none");
     els.stAnchor.textContent = (m.anchor_labels || []).length
       ? m.anchor_labels.join(", ") : (m.explicit_anchor_found ? "(found)" : "--");
     els.stAction.textContent = appState.robotAction || "IDLE";
     var obs = appState.observation || {};
     els.stPose.textContent = obs.pose ? "relative" : "--";
+    // 计划书 §13：语义健康状态（Quick VLM / Full Semantic / frame / age）。
+    var sem = appState.semantic || obs || {};
+    var semStatus = sem.semantic_status || "--";
+    var semText = semStatus;
+    if (semStatus === "fresh_full") semText = "Full 新鲜";
+    else if (semStatus === "fresh_quick_scene") semText = "轻量场景";
+    else if (semStatus === "pending") semText = "Full 后台运行中";
+    else if (semStatus === "stale") semText = "旧帧兜底";
+    else if (semStatus === "timeout") semText = "Full 超时";
+    else if (semStatus === "error") semText = "Full 错误";
+    else if (semStatus === "unavailable") semText = "语义不可用";
+    if (els.stSemantic) els.stSemantic.textContent = semText;
+    if (els.stSemanticDetail) {
+      var parts = [];
+      var sframe = sem.semantic_source_frame_id || sem.frame_id;
+      if (sframe) parts.push("source=" + sframe);
+      if (sem.semantic_age_ms != null) parts.push("age=" + Math.round(sem.semantic_age_ms) + "ms");
+      if (sem.semantic_object_count != null) parts.push("objects=" + sem.semantic_object_count);
+      if (sem.spatial_quality) parts.push("spatial=" + sem.spatial_quality);
+      if (sem.navigation_heading_sector != null) parts.push("nav_sector=" + sem.navigation_heading_sector);
+      if (semStatus === "timeout" || semStatus === "error" || semStatus === "unavailable") {
+        els.stSemanticDetail.className = "semantic-detail no";
+        els.stSemanticDetail.textContent = "Full Semantic unavailable · " +
+          (parts.join(" · ") || "使用轻量场景物体");
+      } else if (semStatus === "fresh_quick_scene") {
+        els.stSemanticDetail.className = "semantic-detail";
+        els.stSemanticDetail.textContent = "Using lightweight scene objects" +
+          (parts.length ? " · " + parts.join(" · ") : "");
+      } else {
+        els.stSemanticDetail.className = "semantic-detail";
+        els.stSemanticDetail.textContent = parts.join(" · ") || "--";
+      }
+    }
     els.scamCycle.textContent = "cycle " + (s.cycle || "--");
     // search light
     var status = s.status || "IDLE";
@@ -929,13 +997,37 @@
     }).join("");
   }
 
+  // 计划书 §5.3: a logical turn goal is executed as several bounded primitives.
+  // Show the logical goal, the segment progress and the accumulated measured
+  // yaw as one line instead of mixing the logical goal with one primitive.
+  function turnProgressText(payload) {
+    var req = payload.requested_motion || {};
+    var obs = payload.observed_motion || {};
+    var total = req.requested_total_deg;
+    if (total === undefined || total === null) return "";
+    var count = Number(req.segment_count || 0);
+    var index = Number(req.segment_index || 0);
+    var done = obs.observed_total_deg;
+    var text = (Number(total) >= 0 ? "左转" : "右转") +
+      Math.abs(Number(total)).toFixed(0) + "°";
+    if (count > 0) text += "（" + index + "/" + count + "";
+    if (done !== undefined && done !== null) {
+      text += (count > 0 ? "，" : "（") + "已完成" +
+        Math.abs(Number(done)).toFixed(1) + "°";
+    }
+    if (count > 0 || (done !== undefined && done !== null)) text += "）";
+    return text;
+  }
+
   function goalDetailText(g) {
     if (g.semantic_reason) return g.semantic_reason;
     switch (g.goal_type) {
       case "ROTATE_VIEW": {
         var dyaw = g.relative_dyaw;
         if (dyaw === undefined || dyaw === null) return "旋转观察";
-        return "旋转观察 " + Math.abs(Number(dyaw)).toFixed(0) + "° " + (dyaw > 0 ? "右侧" : "左侧");
+        // Positive relative_dyaw increases yaw, i.e. a LEFT turn.
+        return "旋转观察 " + (Number(dyaw) >= 0 ? "左转" : "右转") +
+          Math.abs(Number(dyaw)).toFixed(0) + "°";
       }
       case "RELATIVE_MOVE": {
         var dx = g.relative_dx;

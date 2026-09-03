@@ -28,6 +28,7 @@ runtime_dir="${project_root}/runtime/go2w/plain_slam"
 pid_root="${project_root}/runtime/go2w/pids"
 log_root="${project_root}/runtime/go2w/sessions"
 mkdir -p "${runtime_dir}" "${pid_root}" "${log_root}"
+web_relay_pidfile="${pid_root}/plain_slam_web_cloud_relay.pid"
 
 use_rviz=0
 start_hesai=1
@@ -132,8 +133,13 @@ fi
 # ---------------------------------------------------------------------------
 launch_log="${log_root}/plain_slam_go2w.launch.log"
 printf 'Launching plain_slam mapping (log: %s)...\n' "${launch_log}"
-nohup ros2 launch go2w_plain_slam_bridge plain_slam_go2w.launch.py \
-  >"${launch_log}" 2>&1 &
+# Detach the launch process into its own session.  A plain `nohup ... &`
+# inherits the invoking shell's process group; in the field launcher that
+# shell exits immediately after this readiness check and can take the ROS
+# launch tree down with it.  Keep the launcher PID in the pid file so the
+# existing stop script can still perform an orderly shutdown.
+setsid bash -c 'exec ros2 launch go2w_plain_slam_bridge plain_slam_go2w.launch.py' \
+  >"${launch_log}" 2>&1 < /dev/null &
 launch_pid=$!
 printf '%s\n' "${launch_pid}" >"${pid_root}/plain_slam_go2w.pid"
 
@@ -165,6 +171,33 @@ if [[ "${ready_ok}" == "1" ]]; then
   printf '[OK] plain_slam LIO: running\n'
   printf '[OK] Spatial mapping ready (mode=MAPPING_ASSIST)\n'
   printf '%s\n' '[INFO] /go2w/odom/fused remains motion authority'
+  # Display-only bridge: the raw aligned scan stays local to the mapping
+  # host; only the compact XYZ stream crosses to the machine-dog WebUI.
+  if [[ -f "${web_relay_pidfile}" ]]; then
+    old_relay_pid="$(<"${web_relay_pidfile}")"
+    old_relay_cmd=""
+    if [[ -r "/proc/${old_relay_pid}/cmdline" ]]; then
+      old_relay_cmd="$(tr '\0' ' ' <"/proc/${old_relay_pid}/cmdline" 2>/dev/null || true)"
+    fi
+    if [[ "${old_relay_cmd}" == *"plain_slam_web_cloud_relay.py"* ]]; then
+      kill "${old_relay_pid}" 2>/dev/null || true
+    fi
+    rm -f "${web_relay_pidfile}"
+  fi
+  setsid /usr/bin/python3 "${script_dir}/plain_slam_web_cloud_relay.py" \
+    --input-topic /go2w/slam/aligned_scan \
+    --output-topic "${GO2W_SLAM_WEB_SCAN_TOPIC:-/go2w/slam/web_scan}" \
+    --map-input-topic /go2w/slam/map_3d \
+    --map-output-topic "${GO2W_SLAM_WEB_MAP_TOPIC:-/go2w/slam/web_map}" \
+    --map-info-topic "${GO2W_SLAM_WEB_MAP_INFO_TOPIC:-/go2w/slam/web_map_info}" \
+    --map-frame pslam_map \
+    --map-voxel-size "${GO2W_SLAM_RELAY_MAP_VOXEL_SIZE:-0.12}" \
+    --max-map-output-points "${GO2W_SLAM_RELAY_MAX_MAP_POINTS:-60000}" \
+    >"${log_root}/plain_slam_web_cloud_relay.log" 2>&1 &
+  printf '%s\n' "$!" >"${web_relay_pidfile}"
+  printf '[OK] WebUI compact scan relay: %s\n' "${GO2W_SLAM_WEB_SCAN_TOPIC:-/go2w/slam/web_scan}"
+  printf '[OK] WebUI fixed-world map relay: %s (frame pslam_map)\n' \
+    "${GO2W_SLAM_WEB_MAP_TOPIC:-/go2w/slam/web_map}"
 else
   printf '%s\n' 'WARNING: /go2w/slam/ready not seen within 60s.' >&2
   printf 'See %s\n' "${launch_log}" >&2

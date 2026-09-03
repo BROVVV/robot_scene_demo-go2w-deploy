@@ -291,16 +291,15 @@
     this.data = mapData || this.data || {};
     this.spatial = spatialData || this.spatial || {};
 
-    // The WebUI is topology-only after the 2026-08-26 plan.  It must show the
-    // robot's actual navigation topology: PLACE, OBJECT, FRONTIER, NAV_EDGE,
-    // route, recovery and memory contributions.  Metric occupancy/spatial map
-    // rendering has been removed.
+    // 计划书 §7.2：语义拓扑页只投影"对象拓扑"。禁止优先把整张
+    // semantic_navigation_graph_v1 交给 renderObjectTopology()，否则 P1/F01
+    // 这些内部导航节点会漏到界面上。内部导航图仍然保留给规划器使用。
     var graph = this.spatial.semantic_graph || null;
-    var topology = graph || null;
-    if (!topology || !Array.isArray(topology.nodes) || topology.nodes.length === 0) {
-      topology = (graph && graph.object_topology) || null;
-    }
-    this.renderObjectTopology(topology, this.spatial.semantic_objects || []);
+    var topology = graph && graph.object_topology ? graph.object_topology : null;
+    this.renderObjectTopology(
+      objectTopologyOnly(topology),
+      this.spatial.semantic_objects || []
+    );
   };
 
   // ================================================================== //
@@ -492,6 +491,10 @@
     title.setAttribute("font-size", "10");
     title.setAttribute("font-weight", "bold");
     var titleText = String(node.node_id || "");
+    // 计划书 §12：frontier node_id 全局唯一，UI 标题显示短标签（F01 等）。
+    if (nodeType === "FRONTIER" && node.label) {
+      titleText = String(node.label);
+    }
     if (node.is_target_confirmed || node.is_target_candidate) {
       titleText = "★ " + titleText;
     }
@@ -1035,6 +1038,36 @@
   // ------------------------------------------------------------------ //
   // Semantic topology layout (deterministic, display-only)            //
   // ------------------------------------------------------------------ //
+
+  // 计划书 §7.3：前端最小契约检查。后端 object_topology_snapshot() 已经按对象
+  // 过滤，这里只做一层不信任上游的兜底：
+  //   - 节点只接受 node_type === "OBJECT"（绝不用 ID 前缀猜类型）；
+  //   - 边的 from/to 必须都在当前对象节点集合内；
+  //   - 拒绝 OBSERVED_FROM / FRONTIER_TO / MOVED_TO 这类导航关系；
+  //   - 没有关系时显示孤立对象节点，但绝不退回导航图。
+  var NON_OBJECT_RELATIONS = { OBSERVED_FROM: 1, FRONTIER_TO: 1, MOVED_TO: 1 };
+
+  function objectTopologyOnly(topology) {
+    if (!topology || !Array.isArray(topology.nodes)) return null;
+    var nodes = topology.nodes.filter(function (node) {
+      return node && node.node_type === "OBJECT" && node.node_id;
+    });
+    var objectIds = {};
+    nodes.forEach(function (node) { objectIds[node.node_id] = true; });
+    var rawEdges = Array.isArray(topology.edges) ? topology.edges : [];
+    var edges = rawEdges.filter(function (edge) {
+      if (!edge || !objectIds[edge.from] || !objectIds[edge.to]) return false;
+      return !NON_OBJECT_RELATIONS[String(edge.relation || "").toUpperCase()];
+    });
+    return {
+      schema_version: topology.schema_version || "semantic_object_topology_v1",
+      revision: topology.revision || 0,
+      nodes: nodes,
+      edges: edges,
+      stats: topology.stats || { node_count: nodes.length, edge_count: edges.length },
+    };
+  }
+
   function topologyFingerprint(nodes, edges) {
     var nodeIds = (nodes || []).map(function (n) { return n.node_id; }).sort();
     var edgeKeys = (edges || []).map(function (e) {
@@ -1386,6 +1419,7 @@
     fingerprint: topologyFingerprint,
     components: findConnectedComponents,
     relationLabel: edgeLabelZh,
+    objectOnly: objectTopologyOnly,
   };
 
   // Pure SVG viewport math (wheel zoom / drag pan) for headless tests.

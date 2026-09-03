@@ -4,9 +4,39 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd -- "${script_dir}/../.." && pwd)"
-conda_python="${SILICONFLOW_PYTHON:-${GO2W_CONDA_PYTHON:-/home/brov/miniconda3/envs/go2_robot_scene_demo/bin/python}}"
-if [[ ! -x "${conda_python}" && -x "${project_root}/.venv/bin/python" ]]; then
-  conda_python="${project_root}/.venv/bin/python"
+# Keep the provider credential in the daemon process, where the API client
+# actually lives.  The ROS worker can then use the Unix socket without
+# receiving the secret in its own environment.
+if [[ -f "${project_root}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${project_root}/.env"
+  set +a
+fi
+# httpx/OpenAI will prefer ALL_PROXY over HTTPS_PROXY.  The deployment's
+# forwarder exposes an HTTP CONNECT endpoint, while the inherited socks5h
+# alias is not understood by the pinned httpx runtime.
+if [[ "${ALL_PROXY:-}" == socks5h://* && \
+      -n "${HTTPS_PROXY:-${https_proxy:-}}" ]]; then
+  unset ALL_PROXY all_proxy
+fi
+conda_python=""
+for candidate in \
+  "${SILICONFLOW_PYTHON:-}" \
+  "${GO2W_CONDA_PYTHON:-}" \
+  "${project_root}/.runtime_venv/bin/python" \
+  "${project_root}/.venv/bin/python" \
+  /usr/bin/python3 \
+  /home/brov/miniconda3/envs/go2_robot_scene_demo/bin/python
+do
+  if [[ -x "$candidate" ]] && "$candidate" -c 'import openai' >/dev/null 2>&1; then
+    conda_python="$candidate"
+    break
+  fi
+done
+if [[ -z "$conda_python" ]]; then
+  echo "ERROR: no Python interpreter with the openai package was found" >&2
+  exit 2
 fi
 socket_path="${project_root}/runtime/go2w/siliconflow_vlm.sock"
 pid_file="${project_root}/runtime/go2w/pids/siliconflow_vlm.pid"
@@ -36,7 +66,10 @@ if [[ -f "${pid_file}" ]]; then
   rm -f "${pid_file}"
 fi
 
-nohup "${conda_python}" "${project_root}/app/detectors/siliconflow_vision_daemon.py" \
+# Start in its own session: the development launcher cleans up the caller's
+# process group after the shell exits, and a plain nohup is not sufficient for
+# a long-lived Unix-socket service in that environment.
+setsid "${conda_python}" "${project_root}/app/detectors/siliconflow_vision_daemon.py" \
   --socket "${socket_path}" \
   >"${project_root}/runtime/go2w/sessions/siliconflow_vlm_daemon.log" 2>&1 &
 echo $! > "${pid_file}"

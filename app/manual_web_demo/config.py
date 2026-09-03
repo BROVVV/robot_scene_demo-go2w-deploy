@@ -93,7 +93,7 @@ class ManualDemoSettings:
     pulse_vx: float = 0.12
     pulse_vx_backward: float = 0.10
     pulse_vy: float = 0.06
-    turn_yaw_rate: float = 0.15
+    turn_yaw_rate: float = 1.0
     hold_duration_sec: float = 30.0
 
     # Forward safety: the formal LiDAR gate is published on /go2w/safety/*.
@@ -208,7 +208,7 @@ def get_manual_demo_settings() -> ManualDemoSettings:
         pulse_vx=_env_float("MANUAL_DEMO_PULSE_VX", 0.12),
         pulse_vx_backward=_env_float("MANUAL_DEMO_PULSE_VX_BACKWARD", 0.10),
         pulse_vy=_env_float("MANUAL_DEMO_PULSE_VY", 0.06),
-        turn_yaw_rate=_env_float("MANUAL_DEMO_TURN_YAW_RATE", 0.15),
+        turn_yaw_rate=_env_float("MANUAL_DEMO_TURN_YAW_RATE", 1.0),
         hold_duration_sec=_env_float("MANUAL_DEMO_HOLD_DURATION_SEC", 30.0),
         min_front_clearance_m=_env_float(
             "MANUAL_DEMO_MIN_FRONT_CLEARANCE_M", 0.30

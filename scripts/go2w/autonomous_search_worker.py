@@ -31,11 +31,16 @@ from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+# Some robot deployments retain legacy top-level copies named
+# ``run_semantic_exploration.py`` and ``run_autonomous_loop.py``.  Remove and
+# reinsert both paths deliberately so the audited scripts/go2w implementation
+# is the unqualified-import winner inside this worker process.
+for _path in (str(PROJECT_ROOT), str(SCRIPT_DIR)):
+    while _path in sys.path:
+        sys.path.remove(_path)
+sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(1, str(PROJECT_ROOT))
 
 _STATE: dict[str, Any] = {
     "holder": None,
@@ -62,6 +67,19 @@ def emit(message: dict[str, Any]) -> None:
             sys.stdout.flush()
     except (BrokenPipeError, OSError):
         pass
+
+
+def _project_path(value: Any) -> str:
+    """Resolve a worker-owned file/directory argument under the repository.
+
+    The WebUI normally supplies relative ``outputs/...`` paths for historical
+    compatibility.  The worker is also used from service managers and IDEs,
+    however, where the inherited cwd is not guaranteed.  Resolving these
+    paths at the IPC boundary keeps all artifacts inside this checkout and
+    prevents ``/home/runtime``-style accidental paths.
+    """
+    path = Path(str(value))
+    return str(path if path.is_absolute() else PROJECT_ROOT / path)
 
 
 def make_event_hook() -> Any:
@@ -148,7 +166,18 @@ def build_argv(params: dict[str, Any]) -> list[str]:
     ):
         value = params.get(key)
         if value:
+            if key in {"spool_root", "output", "session_dir", "replay"}:
+                value = _project_path(value)
             argv += [flag, str(value)]
+    # The WebUI can be launched by systemd, an IDE, or an SSH shell whose
+    # current directory is not the repository.  The semantic runner resolves
+    # its frame spool through ``Path(...).resolve()``; passing the relative
+    # parser default here could therefore become ``/home/runtime`` (or another
+    # unrelated directory), producing a misleading permission error only when
+    # the real backend starts.  Make the worker boundary deterministic while
+    # still honoring an explicit operator/test override above.
+    if not params.get("spool_root"):
+        argv += ["--spool-root", str(PROJECT_ROOT / "runtime/go2w/spool")]
     if params.get("verify_min_confidence") is not None:
         argv += ["--verify-min-confidence", str(params["verify_min_confidence"])]
     if params.get("mock_target_after") is not None:
