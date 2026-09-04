@@ -131,6 +131,20 @@ fi
 # ---------------------------------------------------------------------------
 # 6. + 7. launch + readiness
 # ---------------------------------------------------------------------------
+# A new mapping session starts from an empty pose graph.  ClearSLAMDataDir()
+# only runs in the node constructor, so the old nodes must die *and* the cache
+# directory must go; otherwise the previous session's keyframe poses (and their
+# accumulated drift) are re-stacked into every map_3d message.
+# Path source: configs/go2w/plain_slam.yaml map_cache_dir -> generator ->
+# generated_{lio,slam}_3d_config.yaml map_cloud_dir (both nodes share it).
+# 必须连 launch 树一起杀。只杀 lio/slam 两个节点会把 imu_fallback_adapter、
+# pandar_slam_adapter、plain_slam_odom_adapter 等留下来，下一次启动就多出一份
+# /go2w/slam/imu 和 /go2w/slam/pandar_points 发布者：IMU 预积分把同一时刻的数据
+# 吃两遍三遍，机器狗静止不动 odom_base 也会飞到 1e10 m。
+pkill -f 'plain_slam_go2w.launch.py|lio_3d_node|slam_3d_node|imu_fallback_adapter|pandar_slam_adapter|plain_slam_odom_adapter|pointcloud_to_occupancy|plain_slam_health_monitor' 2>/dev/null || true
+sleep 2
+rm -rf /tmp/go2w_plain_slam
+
 launch_log="${log_root}/plain_slam_go2w.launch.log"
 printf 'Launching plain_slam mapping (log: %s)...\n' "${launch_log}"
 # Detach the launch process into its own session.  A plain `nohup ... &`

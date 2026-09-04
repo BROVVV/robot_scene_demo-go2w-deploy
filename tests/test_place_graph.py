@@ -29,10 +29,10 @@ def test_translation_creates_new_place():
     graph.register_observation(
         observation_id="obs_0", heading_sector=0, objects=[], pose=SpatialPose(x=0, y=0)
     )
-    # 0.5m is beyond the default 0.35m merge radius -> a new Place.
+    # 0.8m is beyond the default 0.6m merge radius -> a new Place.
     place_id, created = graph.register_observation(
         observation_id="obs_1", heading_sector=0, objects=[],
-        pose=SpatialPose(x=0.5, y=0.0),
+        pose=SpatialPose(x=0.8, y=0.0),
     )
     assert created is True
     assert place_id == "P2"

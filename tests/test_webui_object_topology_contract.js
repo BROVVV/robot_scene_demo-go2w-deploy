@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 "use strict";
 /*
- * 计划书 §11.2 拓扑契约测试。
+ * 拓扑契约测试。
  *
  * 构造同时含 P1、F01、obj_001、obj_002 的完整导航图（semantic_navigation_graph_v1），
- * 断言 WebUI 的语义拓扑投影只剩对象节点和对象之间的关系。
+ * 断言 WebUI 的语义拓扑投影保留对象节点 + PLACE 中转站及其挂接边（OBSERVED_FROM /
+ * CONNECTED_TO），并剔除 FRONTIER 节点与 FRONTIER_TO / MOVED_TO 纯导航关系。
+ * PLACE 必须留下：去掉它，不同视角看到的物体之间没有任何边，拓扑必然碎片化。
  *
  * Run with:  node tests/test_webui_object_topology_contract.js
  */
@@ -93,22 +95,24 @@ assertEqual(projected.edges[0].relation, "near", "relation is near");
 assertEqual(projected.schema_version, "semantic_object_topology_v1",
             "schema_version preserved");
 
-console.log("case 2: a leaked full navigation graph is still projected to objects");
+console.log("case 2: a leaked full navigation graph keeps objects + place, drops frontiers");
 const guarded = objectOnly(navigationGraph);
 const guardedIds = ids(guarded);
+// 排序后大写 P 的 ASCII 小于小写 o，所以 P1 在最前面。
 assertEqual(JSON.stringify(guardedIds),
-            JSON.stringify(["obj_001", "obj_002"]), "nodes = obj_001, obj_002");
-assert(guardedIds.indexOf("P1") < 0, "P1 absent");
+            JSON.stringify(["P1", "obj_001", "obj_002"]),
+            "nodes = P1, obj_001, obj_002");
+assert(guardedIds.indexOf("P1") >= 0, "P1 kept as the cross-view hub");
 assert(guardedIds.indexOf("F01") < 0, "F01 absent");
 assert(guardedIds.indexOf("F02") < 0, "F02 absent");
 const relations = guarded.edges.map(function (e) { return e.relation; });
-assert(relations.indexOf("OBSERVED_FROM") < 0, "OBSERVED_FROM absent");
+assert(relations.indexOf("OBSERVED_FROM") >= 0, "OBSERVED_FROM kept");
 assert(relations.indexOf("FRONTIER_TO") < 0, "FRONTIER_TO absent");
 assert(relations.indexOf("MOVED_TO") < 0, "MOVED_TO absent");
-assertEqual(guarded.edges.length, 1, "only the object-object edge remains");
+assertEqual(guarded.edges.length, 2, "near + OBSERVED_FROM remain");
 guarded.edges.forEach(function (edge) {
   assert(guardedIds.indexOf(edge.from) >= 0 && guardedIds.indexOf(edge.to) >= 0,
-         "edge endpoints subset of object nodes: " + edge.from + "->" + edge.to);
+         "edge endpoints subset of kept nodes: " + edge.from + "->" + edge.to);
 });
 
 console.log("case 3: node type comes from node_type, never from the id prefix");

@@ -1,4 +1,10 @@
-"""计划书 §11.2：WebUI 语义拓扑投影的契约测试。
+"""WebUI 语义拓扑投影的契约测试。
+
+契约随《GO2W 三维建图重影与拓扑碎片化修复计划书》步骤 2.1 / 2.2 更新：
+拓扑投影保留 OBJECT **和 PLACE**（PLACE 是跨视角中转站，去掉它对象图必然碎成
+多个连通分量，判据 T2 连通分量=1 / T3 PLACE 节点>=1 都要靠它），
+并保留 ``OBSERVED_FROM`` / ``CONNECTED_TO`` 这两类挂接边；
+FRONTIER 节点与 ``FRONTIER_TO`` / ``MOVED_TO`` 纯导航关系仍然排除。
 
 前端契约用 headless node 跑 search_map.js 暴露的纯函数
 ``window.TopologyLayout.objectOnly``；后端契约直接检查
@@ -82,7 +88,7 @@ def _graph_with_p1_f01_and_two_objects() -> SemanticNavigationGraph:
     return graph
 
 
-def test_projection_keeps_only_obj_001_and_obj_002():
+def test_projection_keeps_objects_and_place_but_no_frontier():
     graph = _graph_with_p1_f01_and_two_objects()
     full = graph.to_dict()
     internal_ids = {node["node_id"] for node in full["nodes"]}
@@ -95,17 +101,20 @@ def test_projection_keeps_only_obj_001_and_obj_002():
     topology = full["object_topology"]
     node_ids = {node["node_id"] for node in topology["nodes"]}
     labels = {str(node.get("label")) for node in topology["nodes"]}
-    assert node_ids == {"obj_001", "obj_002"}
-    assert "P1" not in node_ids and "P1" not in labels
+    # 步骤 2.1：P1 作为中转站留在投影里，两个视角看到的物体才连成一张图。
+    assert node_ids == {"obj_001", "obj_002", "P1"}
+    # FRONTIER 仍然不进拓扑（它是规划用的，不是语义结构）。
     assert "F01" not in node_ids and "F01" not in labels
     for edge in topology["edges"]:
         assert edge["from"] in node_ids and edge["to"] in node_ids
     relations = {edge["relation"] for edge in topology["edges"]}
-    assert "OBSERVED_FROM" not in relations
+    # P1 靠 OBSERVED_FROM 把两个物体挂上来，这是 T2 连通分量=1 的唯一来源。
+    assert "OBSERVED_FROM" in relations
     assert "FRONTIER_TO" not in relations
+    assert "MOVED_TO" not in relations
 
 
-def test_backend_projection_excludes_place_and_frontier():
+def test_backend_projection_keeps_place_excludes_frontier():
     graph = _graph_with_place_frontier_and_objects()
     full = graph.to_dict()
     node_types = {node["node_type"] for node in full["nodes"]}
@@ -114,10 +123,12 @@ def test_backend_projection_excludes_place_and_frontier():
 
     topology = full["object_topology"]
     assert topology["schema_version"] == "semantic_object_topology_v1"
-    object_ids = {node["node_id"] for node in topology["nodes"]}
-    assert object_ids, "expected persistent object nodes"
-    assert all(node["node_type"] == "OBJECT" for node in topology["nodes"])
-    assert not any(node_id.startswith(("P", "F")) for node_id in object_ids)
+    node_ids = {node["node_id"] for node in topology["nodes"]}
+    assert node_ids, "expected persistent object nodes"
+    assert all(node["node_type"] in {"OBJECT", "PLACE"} for node in topology["nodes"])
+    # 判据 T3：投影里至少有一个 PLACE 节点。
+    assert any(node["node_type"] == "PLACE" for node in topology["nodes"])
+    assert not any(node["node_type"] == "FRONTIER" for node in topology["nodes"])
     for edge in topology["edges"]:
-        assert edge["from"] in object_ids and edge["to"] in object_ids
-        assert edge["relation"] not in {"OBSERVED_FROM", "FRONTIER_TO", "MOVED_TO"}
+        assert edge["from"] in node_ids and edge["to"] in node_ids
+        assert edge["relation"] not in {"FRONTIER_TO", "MOVED_TO"}

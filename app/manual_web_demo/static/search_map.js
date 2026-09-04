@@ -1041,16 +1041,17 @@
 
   // 计划书 §7.3：前端最小契约检查。后端 object_topology_snapshot() 已经按对象
   // 过滤，这里只做一层不信任上游的兜底：
-  //   - 节点只接受 node_type === "OBJECT"（绝不用 ID 前缀猜类型）；
-  //   - 边的 from/to 必须都在当前对象节点集合内；
-  //   - 拒绝 OBSERVED_FROM / FRONTIER_TO / MOVED_TO 这类导航关系；
+  //   - 节点接受 node_type === "OBJECT" 或 "PLACE"（绝不用 ID 前缀猜类型）；
+  //     PLACE 是跨视角中转站，去掉它对象图必然碎成多个连通分量；
+  //   - 边的 from/to 必须都在当前节点集合内；
+  //   - 拒绝 FRONTIER_TO / MOVED_TO 这类纯导航关系；
   //   - 没有关系时显示孤立对象节点，但绝不退回导航图。
-  var NON_OBJECT_RELATIONS = { OBSERVED_FROM: 1, FRONTIER_TO: 1, MOVED_TO: 1 };
+  var NON_OBJECT_RELATIONS = { FRONTIER_TO: 1, MOVED_TO: 1 };
 
   function objectTopologyOnly(topology) {
     if (!topology || !Array.isArray(topology.nodes)) return null;
     var nodes = topology.nodes.filter(function (node) {
-      return node && node.node_type === "OBJECT" && node.node_id;
+      return node && (node.node_type === "OBJECT" || node.node_type === "PLACE") && node.node_id;
     });
     var objectIds = {};
     nodes.forEach(function (node) { objectIds[node.node_id] = true; });

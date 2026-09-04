@@ -186,6 +186,18 @@ class SemanticNavigationGraph:
             _ot = {"schema_version": "semantic_object_topology_v1", "revision": self.revision,
                    "generated_at": 0.0, "nodes": [], "edges": [],
                    "stats": {"node_count": 0, "edge_count": 0}}
+        # 把地点当中转站：不同视角看到的物体都挂在同一个 place 上，拓扑才连成一
+        # 张图。VLM 的 scene_relations 只覆盖单帧，结构上无法跨视角连边。
+        _ot_ids = {n.get("node_id") for n in _ot["nodes"]}
+        for node in nodes:
+            if node.get("node_type") == "PLACE" and node.get("node_id") not in _ot_ids:
+                _ot["nodes"].append(node)
+                _ot_ids.add(node.get("node_id"))
+        for edge in self.edges:
+            if edge.get("relation") in {"OBSERVED_FROM", "CONNECTED_TO"} \
+                    and edge.get("from") in _ot_ids and edge.get("to") in _ot_ids:
+                _ot["edges"].append(edge)
+        _ot["stats"] = {"node_count": len(_ot["nodes"]), "edge_count": len(_ot["edges"])}
         return {
             "schema_version": "semantic_navigation_graph_v1",
             "revision": self.revision,

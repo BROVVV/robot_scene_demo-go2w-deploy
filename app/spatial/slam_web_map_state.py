@@ -204,14 +204,18 @@ class SlamWebMapState:
         self.wheel_pose = (float(x), float(y), float(yaw))
         event = self.gate.note_wheel(x, y, yaw, speed=speed,
                                      yaw_rate=yaw_rate, now=now)
-        if event == "finished" and self.health != DEGRADED_LIO_DRIFT:
+        if event == "finished":
             reason = drift_reason(self.gate.wheel_delta, self.gate.lio_delta)
             if reason:
-                # §10.2：冻结即锁定。安静的 scan 不能让它自己恢复，只有一次
-                # 真正的 LIO reset / 重定位（新 mapping session）才允许恢复。
+                # 这段运动的 LIO 平移对不上轮式里程计：冻结，拒收这段的地图。
                 self.health = DEGRADED_LIO_DRIFT
                 self.health_reason = reason
                 return "degraded"
+            if self.health == DEGRADED_LIO_DRIFT:
+                # 下一段真实运动里两者重新一致，说明前端已恢复：解冻继续建图。
+                # 仍然只在 finished 时判，安静的 scan 自己不能解冻。
+                self.health = HEALTHY if self.accepted_maps else WAITING_FOR_MAP
+                self.health_reason = ""
         return event
 
     def reset_session(self, *, stamp: float, reason: str = "operator_reset") -> None:

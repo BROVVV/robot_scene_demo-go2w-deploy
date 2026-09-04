@@ -297,9 +297,11 @@ def detect_segments(times: np.ndarray, yaw_rate: np.ndarray, speed: np.ndarray,
 def cloud_points(message, voxel_m: float, max_points: int) -> np.ndarray:
     from sensor_msgs_py import point_cloud2
 
-    raw = point_cloud2.read_points_numpy(
+    # read_points_numpy 要求所有字段同 datatype；plain_slam schema 是
+    # x/y/z/intensity FLOAT32 + timestamp FLOAT64，只能走结构化读取。
+    raw = point_cloud2.read_points(
         message, field_names=("x", "y", "z"), skip_nans=True)
-    points = np.asarray(raw, dtype=float).reshape(-1, 3)
+    points = np.stack([raw["x"], raw["y"], raw["z"]], axis=-1).astype(float)
     radius = np.linalg.norm(points, axis=1)
     points = points[(radius > 0.4) & (radius < 40.0)]
     if voxel_m > 0.0 and points.size:

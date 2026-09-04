@@ -46,7 +46,7 @@ class PlaceGraph:
     def __init__(
         self,
         *,
-        merge_distance_m: float = 0.35,
+        merge_distance_m: float = 0.6,
         relocation_min_displacement_m: float = 0.10,
     ) -> None:
         self.merge_distance_m = float(merge_distance_m)

@@ -53,8 +53,11 @@ def test_semantic_navigation_graph_outputs_object_topology():
     assert "object_topology" in d
     ot = d["object_topology"]
     assert ot["schema_version"] == "semantic_object_topology_v1"
-    assert len(ot["nodes"]) == 3
-    assert len(ot["edges"]) == 2
+    # 3 个持久物体 + 当前 place P1（P1 是中转站，拓扑才连成一张图）
+    assert len(ot["nodes"]) == 4
+    assert {n["node_id"] for n in ot["nodes"]} == {"obj_001", "obj_002", "obj_003", "P1"}
+    # 2 条物体关系 + 3 条 P1 -> 物体的 OBSERVED_FROM
+    assert len(ot["edges"]) == 5
     near = [e for e in ot["edges"] if e["relation"] == "near"]
     assert len(near) == 1
     assert near[0]["observation_count"] == 2
@@ -79,8 +82,8 @@ def test_adapter_graph_reaches_web_contract():
     assert sg.get("schema_version") == "semantic_navigation_graph_v1"
     ot = sg.get("object_topology") or {}
     assert ot.get("schema_version") == "semantic_object_topology_v1"
-    assert len(ot.get("nodes") or []) == 3
-    assert len(ot.get("edges") or []) == 2
+    assert len(ot.get("nodes") or []) == 4
+    assert len(ot.get("edges") or []) == 5
 
 
 # --------------------------------------------------------------------------- #
@@ -113,8 +116,8 @@ def test_adapter_memory_update_carries_topology_to_store():
     assert sg.get("schema_version") == "semantic_navigation_graph_v1"
     ot = sg.get("object_topology") or {}
     assert ot.get("schema_version") == "semantic_object_topology_v1"
-    assert len(ot.get("nodes") or []) == 3
-    assert len(ot.get("edges") or []) == 2
+    assert len(ot.get("nodes") or []) == 4
+    assert len(ot.get("edges") or []) == 5
     assert any(
         e["relation"] == "near" and e["observation_count"] == 2 and e["status"] == "CONFIRMED"
         for e in (ot.get("edges") or [])
@@ -130,4 +133,4 @@ def test_adapter_memory_update_carries_topology_to_store():
     })
     sg_again = (store.spatial_snapshot().get("semantic_graph") or {})
     ot_again = sg_again.get("object_topology") or {}
-    assert len(ot_again.get("nodes") or []) == 3, "observation 不得覆盖 object_topology"
+    assert len(ot_again.get("nodes") or []) == 4, "observation 不得覆盖 object_topology"

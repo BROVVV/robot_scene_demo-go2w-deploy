@@ -7,9 +7,29 @@
 # the runtime files; edit the sources here.
 #
 # Rationale summary (see GO2W_PANDAR_PLAIN_SLAM_IMPLEMENTATION_PLAN.md §6.2):
-#   - acc_scale 1.0: /utlidar/imu is standard sensor_msgs/Imu in m/s^2.
-#   - use_loose_coupling true: no new LiDAR-IMU calibration is performed;
-#     best-effort loose coupling is the first version's choice.
+#   - acc_scale 0.95400: /utlidar/imu 静止实测重力模长 10.2795 m/s^2（2006 样本
+#     中位 acc=(3.0884, -0.0009, 9.8046)），偏高 4.82%；紧耦合下 IMU 尺度直接进
+#     残差，必须先修正。
+#   - use_loose_coupling true: 20260903 实测紧耦合(false)在本机标定条件下灾难性
+#     发散 —— 四次原地转向 pslam Δxy = 0.32 / 21.8 / 187 / 353 m，之后静止状态
+#     仍自行飞到 11 km 外。原因：紧耦合把 IMU 预积分当残差项且协方差不重置，而
+#     重力方向实测 pitch +17.484° 与 URDF 标称 -15.091° 差 2.39°（≈0.41 m/s^2
+#     假加速度，30 s 即积出百米），外参又被 extrinsic_upgrade_allowed=False 门控
+#     禁止升级。松耦合每帧重置 imu_state_cov_ 反而阻止了这种无界发散，是当前唯一
+#     可用路径。修好外参并解除门控之前不要再改回 false。
+#   - max_correspondence_dist 0.5: 1.5 m 关联半径在 filter_size 0.15 的室内点云里
+#     会把同一面墙不同位置的点错配到一起，GICP 收敛到不同局部极小，同样约 100° 的
+#     原地转向有时假平移 0.057 m 有时 0.505 m。收到 0.5 m 消掉这类错配。
+#     （20260903 18:30 曾把 176 次 "Optimization has not converged" + 156 次
+#     "No relevant IMU measurements" 归因为 0.5 m 太紧而放宽到 1.0，该归因是错的：
+#     真因是 start_plain_slam_mapping.sh 只 pkill lio/slam 两个节点，
+#     imu_fallback_adapter / pandar_slam_adapter 等每次启动都残留，累积到 3 组，
+#     /go2w/slam/imu 与 /go2w/slam/pandar_points 各有 3 个发布者，IMU 表观 337 Hz
+#     = 3x112 Hz。同一时刻 IMU 被预积分重复吃 3 次、点云算量 3 倍，机器狗静止不动
+#     也能把 odom_base 飞到 1e10 m。启动脚本已改为清掉整个 launch 树。）
+#   - num_keyframes 30: 必须 > 转一圈的关键帧数 18（angle_th 20° → 360/20），否则
+#     回到原朝向时局部地图里已经没有"原来的样子"可对齐，每圈净积一次漂移，回环侧
+#     也纠不回来。
 #   - clip_range 0.35: Pandar is used for indoor/short-range navigation.
 #   - voxel filters 0.15: 10 Hz Pandar stream, indoor geometry compromise.
 schema_version: 1
@@ -24,7 +44,7 @@ lio_3d_node:
     #     rotation_matrix: [AUTO x9]
 
     imu_params:
-      acc_scale: 1.0
+      acc_scale: 0.95400
 
     initial_pose:
       translation: [0.0, 0.0, 0.0]
@@ -43,7 +63,7 @@ lio_3d_node:
       filter_size: 0.15
 
     normal_map:
-      num_keyframes: 15
+      num_keyframes: 30
       filter_size: 0.15
       num_normal_points: 10
       normal_eigen_val_thresh: 0.2
@@ -53,5 +73,5 @@ lio_3d_node:
       huber_delta: 0.1
       num_max_iteration: 5
       num_max_matching_points: 8000
-      max_correspondence_dist: 1.5
+      max_correspondence_dist: 0.5
       convergence_th: 0.1
