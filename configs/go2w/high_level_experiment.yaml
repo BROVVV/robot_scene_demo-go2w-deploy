@@ -41,7 +41,7 @@ automatic_checks:
 
 limits:
   max_turn_deg: 30
-  max_forward_step_m: 1.5
+  max_forward_step_m: 0.10
   max_radius_m: 0.0          # 0 = unlimited for the experiment (supervised)
   front_half_plane_only: false
   turn_only: false

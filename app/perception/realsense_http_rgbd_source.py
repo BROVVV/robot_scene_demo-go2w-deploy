@@ -154,6 +154,7 @@ class RealSenseHTTPRGBDSource:
             depth_aligned_to_color=frame.depth_aligned_to_color,
             device_timestamp_ms=frame.device_timestamp_ms,
             host_timestamp=frame.host_timestamp,
+            timestamp_quality=frame.timestamp_quality,
             health=frame.health,
             provenance={**frame.provenance, "materialized": True},
         )

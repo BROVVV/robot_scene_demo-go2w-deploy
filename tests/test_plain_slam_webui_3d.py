@@ -244,6 +244,32 @@ def test_motion_episode_gate_latches_drift_until_new_session() -> None:
     assert state.health == WAITING_FOR_MAP
     assert state.accept_map(fixed, frame_id="pslam_map", stamp=51.0,
                             wall_time=51.0) is True
+
+
+def test_drift_freeze_lifts_after_a_clean_motion_episode() -> None:
+    """一段转向假平移只拒这段的图，下一段两者重新一致就继续建图。"""
+    state = _state(gate=MotionEpisodeGate(settle_seconds=0.5))
+    fixed = np.array([[1.0, 1.0, 0.0]], dtype=np.float32)
+    assert state.accept_map(fixed, frame_id="pslam_map", stamp=1.0,
+                            wall_time=1.0) is True
+    state.note_lio(0.0, 0.0, 0.0)
+    state.note_wheel(0.0, 0.0, 0.0, speed=0.0, yaw_rate=0.0, now=0.0)
+    state.note_wheel(0.0, 0.0, 0.0, speed=0.0, yaw_rate=0.4, now=0.2)
+    state.note_lio(0.35, 0.0, 0.5)
+    state.note_wheel(0.02, 0.0, 0.52, speed=0.0, yaw_rate=0.0, now=1.0)
+    assert state.note_wheel(0.02, 0.0, 0.52, speed=0.0, yaw_rate=0.0,
+                            now=2.0) == "degraded"
+    assert state.accept_map(fixed, frame_id="pslam_map", stamp=3.0,
+                            wall_time=3.0) is False
+    state.note_wheel(0.02, 0.0, 0.52, speed=0.3, yaw_rate=0.0, now=3.0)
+    state.note_lio(0.85, 0.0, 0.5)
+    state.note_wheel(0.52, 0.0, 0.52, speed=0.0, yaw_rate=0.0, now=4.0)
+    state.note_wheel(0.52, 0.0, 0.52, speed=0.0, yaw_rate=0.0, now=5.0)
+    assert state.note_wheel(0.52, 0.0, 0.52, speed=0.0, yaw_rate=0.0,
+                            now=6.0) == "finished"
+    assert state.health == HEALTHY
+    assert state.accept_map(fixed, frame_id="pslam_map", stamp=7.0,
+                            wall_time=7.0) is True
     assert state.health == HEALTHY
 
 
@@ -438,6 +464,15 @@ def test_webui_search_defaults_to_plain_slam_and_worker_forwards_provider() -> N
     spool_index = argv.index("--spool-root")
     assert argv[spool_index + 1].endswith("/runtime/go2w/spool")
     assert argv[spool_index + 1].startswith("/")
+
+
+def test_worker_nonlegacy_flag_is_normalized_before_direct_runner_call() -> None:
+    """The IPC worker calls run_go2w directly, bypassing rse.main()."""
+    argv = build_argv({
+        "target": "饮水机",
+        "finish_on_visual_confirmation": False,
+    })
+    assert "--no-finish-on-visual-confirmation" in argv
 
 
 def test_webui_contains_live_3d_map_contract() -> None:

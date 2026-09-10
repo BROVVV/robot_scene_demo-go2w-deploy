@@ -30,7 +30,9 @@ pandar_adapter:
 plain_slam_odom_adapter:
   ros__parameters:
     imu_pose_topic: /go2w/slam/imu_pose_raw
-    imu_odom_topic: /go2w/slam/imu_odom_raw
+    # 见 plain_slam_go2w.launch.py：odom_base 只跟配准后的 imu_pose_raw，
+    # 不再混入 250 Hz 纯开环的 imu_odom_raw（会无界发散）。
+    imu_odom_topic: ""
     odom_base_topic: /go2w/slam/odom_base
     base_pose_topic: /go2w/slam/base_pose
 

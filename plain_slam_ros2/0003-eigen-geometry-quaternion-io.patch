@@ -1,0 +1,26 @@
+From 37643a08116b461c6a30ea21026a986c7457faef Mon Sep 17 00:00:00 2001
+From: robot_scene <deploy@example.invalid>
+Date: Mon, 31 Aug 2026 12:43:23 +0800
+Subject: [PATCH] patch: include Eigen/Geometry for Quaternion stream output
+ (GCC9)
+
+---
+ src/lidar_lidar_calibration_node.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/lidar_lidar_calibration_node.cpp b/src/lidar_lidar_calibration_node.cpp
+index 0d9726f..078bda7 100644
+--- a/src/lidar_lidar_calibration_node.cpp
++++ b/src/lidar_lidar_calibration_node.cpp
+@@ -25,6 +25,8 @@
+ #include <iostream>
+ #include <chrono>
+ 
++#include <Eigen/Geometry>
++
+ #include <plain_slam/types.hpp>
+ #include <plain_slam/io.hpp>
+ #include <plain_slam/gicp.hpp>
+-- 
+2.34.1
+

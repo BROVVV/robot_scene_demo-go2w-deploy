@@ -1,0 +1,21 @@
+{
+  "task_id": "task_7f4da14f528d",
+  "raw_text": "蓝色垃圾桶",
+  "intent": "search_semantic_target",
+  "canonical_target": "蓝色垃圾桶",
+  "target_attributes": {
+    "category": "semantic_target",
+    "attributes": []
+  },
+  "target_relations": [],
+  "constraints": [],
+  "subtasks": [],
+  "executable": true,
+  "rejection_reason": null,
+  "parsed_task": {
+    "raw_task": "蓝色垃圾桶",
+    "canonical_target": "蓝色垃圾桶",
+    "parser_source": "offline_mock_fallback"
+  },
+  "created_at": 1787202145.2354736
+}

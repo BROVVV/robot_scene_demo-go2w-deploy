@@ -65,6 +65,16 @@ class ScoringWeights:
     navigation_failure_penalty: float = 0.35
     estimated_motion_cost: float = 0.15
     oscillation_penalty: float = 0.20
+    # 计划书 §9：净空/视角/可达性成为一等公民，不再只看语义与新鲜度。
+    viewpoint_quality_weight: float = 2.5
+    path_min_clearance_weight: float = 3.0
+    path_mean_clearance_weight: float = 1.0
+    route_reachability_weight: float = 2.0
+    route_cost_weight: float = 1.0
+    near_wall_risk_weight: float = 3.0
+    camera_occlusion_risk_weight: float = 3.0
+    traversal_failure_weight: float = 2.0
+    unknown_geometry_risk_weight: float = 2.5
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +88,15 @@ class ScoringWeights:
             "navigation_failure_penalty": self.navigation_failure_penalty,
             "estimated_motion_cost": self.estimated_motion_cost,
             "oscillation_penalty": self.oscillation_penalty,
+            "viewpoint_quality_weight": self.viewpoint_quality_weight,
+            "path_min_clearance_weight": self.path_min_clearance_weight,
+            "path_mean_clearance_weight": self.path_mean_clearance_weight,
+            "route_reachability_weight": self.route_reachability_weight,
+            "route_cost_weight": self.route_cost_weight,
+            "near_wall_risk_weight": self.near_wall_risk_weight,
+            "camera_occlusion_risk_weight": self.camera_occlusion_risk_weight,
+            "traversal_failure_weight": self.traversal_failure_weight,
+            "unknown_geometry_risk_weight": self.unknown_geometry_risk_weight,
         }
 
 
@@ -229,6 +248,15 @@ def _scoring_from(value: dict[str, Any]) -> ScoringWeights:
         navigation_failure_penalty=float(value.get("navigation_failure_penalty", 0.35)),
         estimated_motion_cost=float(value.get("estimated_motion_cost", 0.15)),
         oscillation_penalty=float(value.get("oscillation_penalty", 0.20)),
+        viewpoint_quality_weight=float(value.get("viewpoint_quality_weight", 2.5)),
+        path_min_clearance_weight=float(value.get("path_min_clearance_weight", 3.0)),
+        path_mean_clearance_weight=float(value.get("path_mean_clearance_weight", 1.0)),
+        route_reachability_weight=float(value.get("route_reachability_weight", 2.0)),
+        route_cost_weight=float(value.get("route_cost_weight", 1.0)),
+        near_wall_risk_weight=float(value.get("near_wall_risk_weight", 3.0)),
+        camera_occlusion_risk_weight=float(value.get("camera_occlusion_risk_weight", 3.0)),
+        traversal_failure_weight=float(value.get("traversal_failure_weight", 2.0)),
+        unknown_geometry_risk_weight=float(value.get("unknown_geometry_risk_weight", 2.5)),
     )
 
 

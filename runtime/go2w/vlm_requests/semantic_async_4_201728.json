@@ -1,0 +1,189 @@
+{
+  "objects": [],
+  "scene_objects": [
+    {
+      "id": "obj_001",
+      "name": "wall",
+      "name_zh": "墙壁",
+      "category": "structure",
+      "color": "yellow",
+      "attributes": [
+        "left",
+        "textured"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "left",
+        "estimated_distance_m": 1.5
+      },
+      "bbox_2d": {
+        "x1": 0.0,
+        "y1": 0.0,
+        "x2": 0.49,
+        "y2": 1.0
+      },
+      "confidence": 0.95
+    },
+    {
+      "id": "obj_002",
+      "name": "wall",
+      "name_zh": "墙壁",
+      "category": "structure",
+      "color": "yellow",
+      "attributes": [
+        "right",
+        "smooth"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "right",
+        "vertical": "middle",
+        "relative_to_robot": "right",
+        "estimated_distance_m": 1.6
+      },
+      "bbox_2d": {
+        "x1": 0.51,
+        "y1": 0.0,
+        "x2": 1.0,
+        "y2": 1.0
+      },
+      "confidence": 0.95
+    },
+    {
+      "id": "obj_003",
+      "name": "ceiling",
+      "name_zh": "天花板",
+      "category": "structure",
+      "color": "white",
+      "attributes": [
+        "top",
+        "with trim"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "center",
+        "vertical": "middle",
+        "relative_to_robot": "top",
+        "estimated_distance_m": 2.0
+      },
+      "bbox_2d": {
+        "x1": 0.0,
+        "y1": 0.0,
+        "x2": 1.0,
+        "y2": 0.2
+      },
+      "confidence": 0.9
+    },
+    {
+      "id": "obj_004",
+      "name": "trim",
+      "name_zh": "墙角线",
+      "category": "structure",
+      "color": "blue",
+      "attributes": [
+        "vertical",
+        "at corner"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "center",
+        "vertical": "middle",
+        "relative_to_robot": "center",
+        "estimated_distance_m": 1.5
+      },
+      "bbox_2d": {
+        "x1": 0.48,
+        "y1": 0.0,
+        "x2": 0.52,
+        "y2": 1.0
+      },
+      "confidence": 0.9
+    },
+    {
+      "id": "obj_005",
+      "name": "handle",
+      "name_zh": "把手",
+      "category": "hardware",
+      "color": "black",
+      "attributes": [
+        "on ceiling",
+        "small"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "right",
+        "vertical": "middle",
+        "relative_to_robot": "top-right",
+        "estimated_distance_m": 2.2
+      },
+      "bbox_2d": {
+        "x1": 0.8,
+        "y1": 0.05,
+        "x2": 0.9,
+        "y2": 0.15
+      },
+      "confidence": 0.7
+    }
+  ],
+  "scene_relations": [
+    {
+      "source_id": "obj_001",
+      "target_id": "obj_002",
+      "relation_type": "left_of",
+      "description_zh": "左侧墙壁在右侧墙壁的左边",
+      "estimated_distance_m": null,
+      "confidence": 0.95
+    },
+    {
+      "source_id": "obj_001",
+      "target_id": "obj_003",
+      "relation_type": "below",
+      "description_zh": "左侧墙壁在天花板下方",
+      "estimated_distance_m": null,
+      "confidence": 0.95
+    },
+    {
+      "source_id": "obj_002",
+      "target_id": "obj_003",
+      "relation_type": "below",
+      "description_zh": "右侧墙壁在天花板下方",
+      "estimated_distance_m": null,
+      "confidence": 0.95
+    },
+    {
+      "source_id": "obj_004",
+      "target_id": "obj_001",
+      "relation_type": "on",
+      "description_zh": "墙角线在左侧墙壁上",
+      "estimated_distance_m": null,
+      "confidence": 0.9
+    },
+    {
+      "source_id": "obj_004",
+      "target_id": "obj_002",
+      "relation_type": "on",
+      "description_zh": "墙角线在右侧墙壁上",
+      "estimated_distance_m": null,
+      "confidence": 0.9
+    },
+    {
+      "source_id": "obj_005",
+      "target_id": "obj_003",
+      "relation_type": "on",
+      "description_zh": "把手在天花板上",
+      "estimated_distance_m": null,
+      "confidence": 0.7
+    }
+  ],
+  "scene_summary_zh": "画面显示室内角落，有两面黄色墙壁和天花板交界处。",
+  "target_decision": {
+    "target_text": "饮水机",
+    "is_present": false,
+    "matched_object_ids": [],
+    "match_reason_zh": "目标饮水机未在画面中出现。",
+    "confidence": 0.99
+  },
+  "all_objects_count": 5
+}

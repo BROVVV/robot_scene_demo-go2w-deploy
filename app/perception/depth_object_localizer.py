@@ -70,6 +70,42 @@ def _source_object_id(item: dict[str, Any]) -> str | None:
     return text or None
 
 
+def enrich_scene_objects_with_spatial(
+    scene_objects: list[dict[str, Any]],
+    localized: list[ObjectSpatialObservation],
+    *,
+    image_timestamp: float,
+) -> list[dict[str, Any]]:
+    """按同帧 source id 把 RGB-D / map 坐标写回语义物体。
+
+    只允许 ``id/object_id/frame_object_id`` 精确匹配；不按 label 或列表下标
+    猜测，因此同类多个物体不会互相串位。
+    """
+    localized_by_source_id = {
+        str(item.object_id): item
+        for item in localized
+        if item.object_id
+    }
+    enriched: list[dict[str, Any]] = []
+    for scene_object in scene_objects:
+        item = dict(scene_object)
+        source_object_id = _source_object_id(item)
+        spatial = localized_by_source_id.get(source_object_id or "")
+        if spatial is not None:
+            item.update({
+                "source_object_id": source_object_id,
+                "camera_xyz": (
+                    list(spatial.camera_xyz) if spatial.camera_xyz is not None else None
+                ),
+                "map_xyz": list(spatial.map_xyz) if spatial.map_xyz is not None else None,
+                "map_frame": (spatial.provenance or {}).get("map_frame"),
+                "spatial_quality": spatial.spatial_quality,
+                "image_timestamp": float(image_timestamp),
+            })
+        enriched.append(item)
+    return enriched
+
+
 def resolve_depth_frame(
     semantic_frame_id: str | None,
     current_frame: RGBDFrame | None,
@@ -93,7 +129,7 @@ def resolve_depth_frame(
 
 
 class DepthObjectLocalizer:
-    """Localize detected objects in a depth image using robust median sampling."""
+    """Localize detected objects using the dominant depth surface in the bbox."""
 
     def __init__(
         self,
@@ -230,18 +266,69 @@ class DepthObjectLocalizer:
         iy2 = min(y2, iy1 + inner_h)
         if ix2 <= ix1 or iy2 <= iy1:
             return None
-        patch = depth_m[iy1:iy2, ix1:ix2]
-        valid = patch[(patch > self.min_depth_m) & (patch < self.max_depth_m) & np.isfinite(patch)]
-        self._last_sample_count = int(valid.size)
-        if valid.size < 1:
+        inner_patch = depth_m[iy1:iy2, ix1:ix2]
+        inner_valid = inner_patch[
+            (inner_patch > self.min_depth_m)
+            & (inner_patch < self.max_depth_m)
+            & np.isfinite(inner_patch)
+        ]
+        if inner_valid.size < 1:
+            self._last_sample_count = 0
             return None
-        median = float(np.median(valid))
-        mad = float(np.median(np.abs(valid - median))) if valid.size > 1 else 0.0
-        # Conservative MAD filter; fall back to percentile if MAD is zero.
+
+        # A large object can contain several real depth layers.  A changing VLM
+        # bbox may move the inner median from one layer to another (for example,
+        # from a desk's rear surface to its nearer top).  Pick the strongest
+        # 5-cm depth cluster in the complete bbox, then require that cluster to
+        # also be present in the inner crop.  The inner support check prevents
+        # a large far-background region from winning a loose ordinary-object
+        # bbox.
+        full_patch = depth_m[y1:y2, x1:x2]
+        full_valid = full_patch[
+            (full_patch > self.min_depth_m)
+            & (full_patch < self.max_depth_m)
+            & np.isfinite(full_patch)
+        ]
+        bin_width_m = 0.05
+        bin_count = max(
+            1,
+            int(math.ceil((self.max_depth_m - self.min_depth_m) / bin_width_m)),
+        )
+        histogram, edges = np.histogram(
+            full_valid,
+            bins=bin_count,
+            range=(self.min_depth_m, self.max_depth_m),
+        )
+        dominant_index = int(np.argmax(histogram))
+        lower = float(edges[dominant_index])
+        upper = float(edges[dominant_index + 1])
+        full_cluster = full_valid[
+            (full_valid >= lower)
+            & (full_valid <= upper if dominant_index == bin_count - 1 else full_valid < upper)
+        ]
+        inner_cluster = inner_valid[
+            (inner_valid >= lower)
+            & (inner_valid <= upper if dominant_index == bin_count - 1 else inner_valid < upper)
+        ]
+        inner_support = float(inner_cluster.size) / float(inner_valid.size)
+        full_support = float(full_cluster.size) / float(full_valid.size)
+        cluster_depth = float(np.median(full_cluster))
+        wide_bbox = bw >= 2 * bh
+        if (inner_support >= 0.005 or wide_bbox) and (
+            full_support <= 0.50
+            or inner_support >= 0.80
+            or cluster_depth <= float(np.median(inner_valid)) + bin_width_m
+        ):
+            self._last_sample_count = int(inner_cluster.size)
+            return cluster_depth
+
+        self._last_sample_count = int(inner_valid.size)
+        median = float(np.median(inner_valid))
+        mad = float(np.median(np.abs(inner_valid - median))) if inner_valid.size > 1 else 0.0
         if mad > 1e-6:
             lower = median - self.mad_multiplier * 1.4826 * mad
             upper = median + self.mad_multiplier * 1.4826 * mad
-            filtered = valid[(valid >= lower) & (valid <= upper)]
+            filtered = inner_valid[(inner_valid >= lower) & (inner_valid <= upper)]
             if filtered.size > 0:
                 return float(np.median(filtered))
         return median

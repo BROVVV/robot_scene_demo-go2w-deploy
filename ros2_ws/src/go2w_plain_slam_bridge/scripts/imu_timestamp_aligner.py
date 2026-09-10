@@ -20,7 +20,10 @@
 只进诊断，绝不再拖动时间轴（旧版滚动中位数在 500 Hz 上只有 62 ms 窗口，
 CPU 负载一变就把 IMU 时间轴拉着走，这正是原地转向出现数米假平移的来源）。
 
-时间回退、重复或大跳变不再自动恢复：停止给 LIO 喂数据并要求重启 session。
+时间回退、重复戳和锁定后的 offset 跳变不会自动恢复：停止给 LIO 喂数据并要求重启
+session。传感器数据空洞（>``max_sensor_gap_s``）是例外——它不改变已锁定的
+offset，只丢弃空洞后的第一帧，随后照常喂数据，这样一次链路闪断不会废掉整个
+建图会话。
 """
 
 from __future__ import annotations
@@ -110,7 +113,8 @@ class ImuTimestampAligner:
         if not _finite(receive) or receive <= 0.0:
             return self._invalid(raw, receive, "ROS receive time is invalid")
 
-        # 计划书 §8.4：时间回退、重复或大跳变一律停止喂数据并要求重启 session。
+        # 计划书 §8.4：时间回退、重复戳、锁定后 offset 跳变一律停止喂数据并要求重启
+        # session；数据空洞只丢一帧，见下方注释。
         if self._last_sensor_sec is not None:
             sensor_dt = raw - self._last_sensor_sec
             if sensor_dt == 0.0:
@@ -118,9 +122,18 @@ class ImuTimestampAligner:
             if sensor_dt < 0.0:
                 return self._require_restart(raw, receive, "sensor stamp moved backward")
             if sensor_dt > self.max_sensor_gap_s:
-                return self._require_restart(
-                    raw, receive, f"sensor stamp gap {sensor_dt:.3f}s exceeds "
-                                  f"{self.max_sensor_gap_s:.3f}s")
+                # 数据空洞（网线闪断、丢包）不是时钟异常：已锁定的 offset 依旧成立，
+                # 时间轴不会被拖走，所以不要求重启 session。§8.4 禁的是 offset 漂移，
+                # 不是数据缺失；永久阻断会让一次 2 s 闪断废掉整轮建图——IMU 恢复后
+                # LIO 仍然收不到样本，只能退化成纯几何配准，这正是地图重影的来源。
+                # 只丢掉空洞后的这一帧，避免给 LIO 喂一个空洞长度的预积分 dt。
+                self._last_sensor_sec = raw
+                gap_reason = (f"sensor stamp gap {sensor_dt:.3f}s exceeds "
+                              f"{self.max_sensor_gap_s:.3f}s")
+                if self._locked_offset is None:
+                    # 启动窗口里就出现空洞，已收集的 offset 样本可信度不明：仍要求重启。
+                    return self._require_restart(raw, receive, gap_reason)
+                return self._invalid(raw, receive, gap_reason)
 
         offset_sample = receive - raw
         if self._locked_offset is None:

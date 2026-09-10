@@ -56,14 +56,17 @@ DEFAULT_GEOMETRY_CONFIG = PROJECT_ROOT / "configs/go2w/official_reference.yaml"
 
 
 def cloud_xyz(message: PointCloud2) -> np.ndarray:
-    records = point_cloud2.read_points(
-        message, field_names=("x", "y", "z"), skip_nans=True
+    # sensor_msgs_py.read_points yields (x, y, z) tuples; the historical
+    # structured-array indexing crashed on this deployment (generator has no
+    # len and no field names).
+    records = list(
+        point_cloud2.read_points(
+            message, field_names=("x", "y", "z"), skip_nans=True
+        )
     )
-    if len(records) == 0:
+    if not records:
         return np.empty((0, 3), dtype=np.float64)
-    return np.column_stack(
-        tuple(np.asarray(records[name], dtype=np.float64) for name in ("x", "y", "z"))
-    )
+    return np.asarray(records, dtype=np.float64).reshape(-1, 3)
 
 
 def quaternion_yaw(quaternion) -> float:

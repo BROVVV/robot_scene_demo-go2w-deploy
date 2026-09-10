@@ -56,6 +56,20 @@ class DecisionRecord:
     execution_status: str = "PLANNED"
     execution_message: str = ""
     replan_reason: str | None = None
+    # 计划书 §29：新增机制必须可诊断——局部安全、感知质量、卡死状态、
+    # 被选中的 frontier/viewpoint 及其净空/视野分量、硬安全拒绝清单、
+    # 脱困决策与目标接近状态，全部随决策记录落盘。
+    local_safety_summary: dict[str, Any] | None = None
+    perception_quality: dict[str, Any] | None = None
+    stuck_state: str | None = None
+    selected_frontier_id: str | None = None
+    selected_viewpoint_id: str | None = None
+    path_min_clearance_m: float | None = None
+    path_mean_clearance_m: float | None = None
+    view_quality: float | None = None
+    hard_safety_rejections: list[dict[str, Any]] = field(default_factory=list)
+    recovery_decision: dict[str, Any] | None = None
+    target_approach: dict[str, Any] | None = None
 
     @classmethod
     def create(

@@ -207,6 +207,18 @@ def _empty_snapshot() -> dict[str, Any]:
             "last_worker_message_at": None,
             "last_error": None,
         },
+        # 计划书 §29/§30：净空 / 感知质量 / 卡住 / 视点 / 脱困 / 目标接近的
+        # 可观测摘要。这些状态决定"能不能动"，刷新页面后必须还在。
+        "embodiment": {
+            "local_safety": None,
+            "perception_quality": None,
+            "stuck_state": None,
+            "viewpoint_candidates": [],
+            "selected_viewpoint": None,
+            "safety_rejections": [],
+            "recovery": None,
+            "target_approach": None,
+        },
         "health": {},
         "last_warning": None,
         "timeline": [],
@@ -409,6 +421,18 @@ class SearchStateStore:
             self._snapshot["startup"] = worker
         if payload.get("warning"):
             self._snapshot["last_warning"] = copy.deepcopy(payload["warning"])
+        if payload.get("embodiment"):
+            # 目标接近是跨多个事件累积的（确认 -> 定位 -> 逐步 -> 最终确认），
+            # 所以同名 dict 做合并而不是整体覆盖。
+            embodiment = dict(self._snapshot["embodiment"])
+            for key, value in dict(payload["embodiment"]).items():
+                if isinstance(value, dict) and isinstance(embodiment.get(key), dict):
+                    merged = dict(embodiment[key])
+                    merged.update(value)
+                    embodiment[key] = merged
+                else:
+                    embodiment[key] = copy.deepcopy(value)
+            self._snapshot["embodiment"] = embodiment
 
     def _on_observation(self, event: SearchEvent) -> None:
         payload = event.payload

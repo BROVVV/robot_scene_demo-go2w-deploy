@@ -1,0 +1,8 @@
+{
+  "places": [],
+  "observations": [],
+  "edges": [],
+  "current_place_id": null,
+  "merge_distance_m": 0.35,
+  "relocation_min_displacement_m": 0.1
+}

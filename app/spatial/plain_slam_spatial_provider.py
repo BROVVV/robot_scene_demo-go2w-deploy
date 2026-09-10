@@ -79,6 +79,9 @@ class PlainSlamSpatialProvider:
         self._tf_listener = None
         self._transform_source = "nominal_extrinsic"
         self._tf_available = False
+        # §5.1 / §10：map→odom 只存在于 TF（slam_3d_node 广播），
+        # 用它把语义点从 pslam_odom 升到 pslam_map。
+        self._map_bridge: Any = None
         if enable_ros:
             self._enable_ros(map_topic=map_topic, odom_topic=odom_topic)
 
@@ -109,14 +112,47 @@ class PlainSlamSpatialProvider:
                 history=HistoryPolicy.KEEP_LAST,
                 depth=10,
             )
+            # 2026-09-09 P2 修复第四步：map_2d 的 publisher 是
+            # `rclcpp::QoS(10).transient_local()`（RELIABLE + TRANSIENT_LOCAL）。
+            # 之前用 BEST_EFFORT + VOLATILE 订阅时，只要 worker 主循环阻塞几秒、
+            # 错过发布时刻，就再也拿不到样本 → quality() 降级 CAMERA_LOCAL。
+            # 改成与 publisher 同级的 RELIABLE + TRANSIENT_LOCAL 后，订阅建立时
+            # 即可取到最后一份地图，不再依赖"恰好赶上发布时刻"。
+            # odom_base / tf 仍是 BEST_EFFORT（它们的 publisher 就是 BEST_EFFORT）。
+            map_qos = QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=10,
+            )
             self._subs.append(
                 self._node.create_subscription(
-                    OccupancyGrid, map_topic, self._on_occupancy_grid, sensor_qos
+                    OccupancyGrid, map_topic, self._on_occupancy_grid, map_qos
                 )
             )
             self._subs.append(
                 self._node.create_subscription(
                     Odometry, odom_topic, self._on_odometry, sensor_qos
+                )
+            )
+            from tf2_msgs.msg import TFMessage
+
+            from app.slam.slam_bridge import SLAMBridge
+
+            self._map_bridge = SLAMBridge(
+                map_frame="pslam_map",
+                odom_frame=self.odom_frame,
+                base_frame=self.base_frame,
+                camera_frame=self.camera_frame,
+                camera_translation_m=self.nominal_translation_m,
+                # 闭环通常超过默认 30 秒；保留十分钟历史 odom→base，
+                # 让 timestamp + camera_xyz 锚点能在回环后重算。
+                buffer_seconds=600.0,
+                max_samples=12000,
+            )
+            self._subs.append(
+                self._node.create_subscription(
+                    TFMessage, "/tf", self._on_tf, sensor_qos
                 )
             )
         except Exception as exc:  # noqa: BLE001 - degrade to fallback
@@ -238,6 +274,58 @@ class PlainSlamSpatialProvider:
             camera_translation_m=self.nominal_translation_m,
         )
 
+    def _on_tf(self, message: Any) -> None:
+        if self._map_bridge is None:
+            return
+        for transform in message.transforms:
+            parent = transform.header.frame_id.lstrip("/")
+            child = transform.child_frame_id.lstrip("/")
+            if (parent != self._map_bridge.map_frame
+                    or child != self._map_bridge.odom_frame):
+                continue
+            quaternion = transform.transform.rotation
+            translation = transform.transform.translation
+            stamp = (float(transform.header.stamp.sec)
+                     + float(transform.header.stamp.nanosec) * 1e-9)
+            self._map_bridge.note_map_to_odom(
+                stamp,
+                (translation.x, translation.y,
+                 math.atan2(2.0 * (quaternion.z * quaternion.w),
+                            1.0 - 2.0 * (quaternion.z * quaternion.z))),
+            )
+            # 2026-09-09 修复：该标志此前只在 __init__ 里置 False、在
+            # transform_provenance() 里被读，**从未置 True**，导致 P2 排查时
+            # 误判成「TF 缺失」。真正收到 map→odom 后置位。
+            self._tf_available = True
+
+    def camera_point_to_map(
+        self,
+        xyz_camera: tuple[float, float, float],
+        timestamp: float | None = None,
+    ) -> tuple[float, float, float] | None:
+        """§10：camera-optical 点 -> ``pslam_map``（经 SLAMBridge 合成 T_map_base）。
+
+        ``timestamp`` 应为图像拍摄时刻；缺省时退回当前 SLAM 位姿。
+        map→odom 尚未收到时返回 ``None``——绝不退回 odom 系冒充 map 系。
+        """
+        if self._map_bridge is None or xyz_camera is None:
+            return None
+        if self.get_pose() is None:
+            return None
+        return self._map_bridge.camera_point_to_map(xyz_camera, timestamp)
+
+    def reproject_camera_point_to_map(
+        self,
+        xyz_camera: tuple[float, float, float],
+        timestamp: float,
+    ) -> tuple[float, float, float] | None:
+        """用最新 map→odom 校正重算历史图像时刻的语义点。"""
+        if self._map_bridge is None or xyz_camera is None:
+            return None
+        return self._map_bridge.reproject_camera_point_to_map(
+            xyz_camera, timestamp
+        )
+
     def transform_provenance(self) -> dict[str, Any]:
         pose = self.get_pose()
         return {
@@ -250,6 +338,10 @@ class PlainSlamSpatialProvider:
             "transform_source": self._transform_source,
             "pose_source": pose.source if pose is not None else None,
             "map_revision": self._map.revision if self._map is not None else None,
+            "map_correction_revision": (
+                self._map_bridge.map_correction_revision
+                if self._map_bridge is not None else None
+            ),
             "transform_quality": self.quality(),
             "tf_available": self._tf_available,
         }
@@ -349,3 +441,9 @@ class PlainSlamSpatialProvider:
             },
         )
         self._pose_ts = time.monotonic()
+        if self._map_bridge is not None:
+            # 与 /tf 同一 ROS 时基，供 SLAMBridge 合成 T_map_base（§10）。
+            self._map_bridge.note_odom_to_base(
+                float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9,
+                (float(pose.position.x), float(pose.position.y), float(yaw)),
+            )

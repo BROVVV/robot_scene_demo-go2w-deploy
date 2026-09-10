@@ -1,0 +1,25 @@
+From 500904ed900ccfe1be86c4b1d3ca77a6bfa96d5e Mon Sep 17 00:00:00 2001
+From: robot_scene <deploy@example.invalid>
+Date: Mon, 31 Aug 2026 11:43:21 +0800
+Subject: [PATCH] patch: use Eigen/Dense for LDLT + inverse symbols
+
+---
+ include/plain_slam/gicp.hpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/plain_slam/gicp.hpp b/include/plain_slam/gicp.hpp
+index d9c064b..ab72648 100644
+--- a/include/plain_slam/gicp.hpp
++++ b/include/plain_slam/gicp.hpp
+@@ -24,7 +24,7 @@
+ 
+ #pragma once
+ 
+-#include <Eigen/Cholesky>
++#include <Eigen/Dense>
+ #include <sophus/se3.hpp>
+ 
+ #include <plain_slam/types.hpp>
+-- 
+2.34.1
+

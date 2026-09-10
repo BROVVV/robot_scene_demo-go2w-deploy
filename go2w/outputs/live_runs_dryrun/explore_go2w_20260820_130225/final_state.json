@@ -1,0 +1,68 @@
+{
+  "schema_version": "search_final_state_v1",
+  "session_id": "explore_go2w_20260820_130225",
+  "state": "FINISHED",
+  "result": {
+    "result": "PERCEPTION_FAILURE",
+    "target": "蓝色垃圾桶",
+    "duration_s": 4.081,
+    "planning_cycles": 0,
+    "motion_steps": 0,
+    "observations": 0,
+    "unique_nodes": 0,
+    "unique_places": 0,
+    "unique_objects": 0,
+    "frontiers_discovered": 0,
+    "map_nodes_total": 0,
+    "replans": 0,
+    "navigation_failures": 0,
+    "verify_attempts": 0,
+    "semantic_goal_selection_count": 0,
+    "fallback_goal_selection_count": 0,
+    "finish_reason": "PERCEPTION_FAILURE",
+    "session_id": "explore_go2w_20260820_130225",
+    "summary": {
+      "result": "PERCEPTION_FAILURE",
+      "target": "蓝色垃圾桶",
+      "duration_s": 4.081,
+      "planning_cycles": 0,
+      "motion_steps": 0,
+      "observations": 0,
+      "unique_nodes": 0,
+      "unique_places": 0,
+      "unique_objects": 0,
+      "frontiers_discovered": 0,
+      "map_nodes_total": 0,
+      "replans": 0,
+      "navigation_failures": 0,
+      "verify_attempts": 0,
+      "semantic_goal_selection_count": 0,
+      "fallback_goal_selection_count": 0,
+      "finish_reason": "PERCEPTION_FAILURE"
+    }
+  },
+  "task": {
+    "task_id": "task_7f4da14f528d",
+    "raw_text": "蓝色垃圾桶",
+    "intent": "search_semantic_target",
+    "canonical_target": "蓝色垃圾桶",
+    "target_attributes": {
+      "category": "semantic_target",
+      "attributes": []
+    },
+    "target_relations": [],
+    "constraints": [],
+    "subtasks": [],
+    "executable": true,
+    "rejection_reason": null,
+    "parsed_task": {
+      "raw_task": "蓝色垃圾桶",
+      "canonical_target": "蓝色垃圾桶",
+      "parser_source": "offline_mock_fallback"
+    },
+    "created_at": 1787202145.2354736
+  },
+  "current_place_id": null,
+  "map_revision": 0,
+  "last_decision": null
+}

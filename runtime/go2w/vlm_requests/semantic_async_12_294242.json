@@ -1,0 +1,173 @@
+{
+  "objects": [],
+  "scene_objects": [
+    {
+      "id": "obj_001",
+      "name": "robot",
+      "name_zh": "机器人",
+      "category": "robot",
+      "color": "white",
+      "attributes": [
+        "front-left",
+        "key object"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "front-left",
+        "estimated_distance_m": 1.2
+      },
+      "bbox_2d": {
+        "x1": 0.1,
+        "y1": 0.2,
+        "x2": 0.4,
+        "y2": 0.75
+      },
+      "confidence": 0.8
+    },
+    {
+      "id": "obj_002",
+      "name": "chair",
+      "name_zh": "椅子",
+      "category": "furniture",
+      "color": "white",
+      "attributes": [
+        "right",
+        "occupied"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "right",
+        "vertical": "middle",
+        "relative_to_robot": "right",
+        "estimated_distance_m": 0.8
+      },
+      "bbox_2d": {
+        "x1": 0.55,
+        "y1": 0.1,
+        "x2": 1.0,
+        "y2": 0.8
+      },
+      "confidence": 0.9
+    },
+    {
+      "id": "obj_003",
+      "name": "person",
+      "name_zh": "人",
+      "category": "person",
+      "color": "black",
+      "attributes": [
+        "sitting",
+        "on chair"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "right",
+        "vertical": "middle",
+        "relative_to_robot": "right",
+        "estimated_distance_m": 0.7
+      },
+      "bbox_2d": {
+        "x1": 0.7,
+        "y1": 0.0,
+        "x2": 1.0,
+        "y2": 0.5
+      },
+      "confidence": 0.9
+    },
+    {
+      "id": "obj_004",
+      "name": "bin",
+      "name_zh": "垃圾桶",
+      "category": "bin",
+      "color": "green",
+      "attributes": [
+        "on floor",
+        "near chair"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "right",
+        "vertical": "middle",
+        "relative_to_robot": "right",
+        "estimated_distance_m": 0.9
+      },
+      "bbox_2d": {
+        "x1": 0.5,
+        "y1": 0.6,
+        "x2": 0.65,
+        "y2": 0.85
+      },
+      "confidence": 0.8
+    },
+    {
+      "id": "obj_005",
+      "name": "box",
+      "name_zh": "纸箱",
+      "category": "box",
+      "color": "brown",
+      "attributes": [
+        "on shelf",
+        "left"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "left",
+        "estimated_distance_m": 1.5
+      },
+      "bbox_2d": {
+        "x1": 0.0,
+        "y1": 0.25,
+        "x2": 0.18,
+        "y2": 0.5
+      },
+      "confidence": 0.7
+    }
+  ],
+  "scene_relations": [
+    {
+      "source_id": "obj_003",
+      "target_id": "obj_002",
+      "relation_type": "on",
+      "description_zh": "人坐在椅子上",
+      "estimated_distance_m": null,
+      "confidence": 0.9
+    },
+    {
+      "source_id": "obj_004",
+      "target_id": "obj_002",
+      "relation_type": "near",
+      "description_zh": "垃圾桶在椅子旁边",
+      "estimated_distance_m": null,
+      "confidence": 0.8
+    },
+    {
+      "source_id": "obj_001",
+      "target_id": "obj_002",
+      "relation_type": "left_of",
+      "description_zh": "机器人在椅子左侧",
+      "estimated_distance_m": null,
+      "confidence": 0.8
+    },
+    {
+      "source_id": "obj_004",
+      "target_id": "obj_001",
+      "relation_type": "right_of",
+      "description_zh": "垃圾桶在机器人右侧",
+      "estimated_distance_m": null,
+      "confidence": 0.8
+    }
+  ],
+  "scene_summary_zh": "机器人在办公室环境中，前方有白色办公椅和绿色垃圾桶，背景有玻璃隔断和纸箱。",
+  "target_decision": {
+    "target_text": "白色垃圾桶",
+    "is_present": false,
+    "matched_object_ids": [],
+    "match_reason_zh": "目标白色垃圾桶未在画面中出现",
+    "confidence": 0.9
+  },
+  "all_objects_count": 5
+}

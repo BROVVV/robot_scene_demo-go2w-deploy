@@ -41,6 +41,17 @@ exploration:
     navigation_failure_penalty: 0.35
     estimated_motion_cost: 0.15
     oscillation_penalty: 0.20
+    # 计划书 §9：净空 / 视角质量 / 可达性权重。数量级明显高于语义权重，
+    # 因为 "看得见且走得安全" 是 "语义上像" 的前提，不是加分项。
+    viewpoint_quality_weight: 2.5
+    path_min_clearance_weight: 3.0
+    path_mean_clearance_weight: 1.0
+    route_reachability_weight: 2.0
+    route_cost_weight: 1.0
+    near_wall_risk_weight: 3.0
+    camera_occlusion_risk_weight: 3.0
+    traversal_failure_weight: 2.0
+    unknown_geometry_risk_weight: 2.5
 
   # ---- memory / TTL -------------------------------------------------------
   memory:

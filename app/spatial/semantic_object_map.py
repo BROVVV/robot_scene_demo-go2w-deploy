@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from app.perception.depth_object_localizer import ObjectSpatialObservation
 from app.spatial.models import (
@@ -36,6 +36,26 @@ ENTITY_REJECTED = "REJECTED"
 ACTION_CREATED = "CREATED"
 ACTION_MERGED = "MERGED"
 ACTION_REJECTED = "REJECTED"
+
+
+@dataclass
+class SemanticObservationAnchor:
+    """可在 loop closure 后重投影的最小原始观测。"""
+
+    timestamp: float
+    camera_xyz: tuple[float, float, float]
+    confidence: float
+    spatial_quality: str
+    map_xyz_at_insert: tuple[float, float, float]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timestamp": self.timestamp,
+            "camera_xyz": list(self.camera_xyz),
+            "confidence": self.confidence,
+            "spatial_quality": self.spatial_quality,
+            "map_xyz_at_insert": list(self.map_xyz_at_insert),
+        }
 
 
 @dataclass
@@ -99,6 +119,7 @@ class SemanticObjectEntry:
     position_mean_xyz: tuple[float, float, float] | None = None
     position_variance_xyz: tuple[float, float, float] | None = None
     map_observation_count: int = 0
+    observation_anchors: list[SemanticObservationAnchor] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,6 +144,7 @@ class SemanticObjectEntry:
             "position_mean_xyz": list(self.position_mean_xyz) if self.position_mean_xyz else None,
             "position_variance_xyz": list(self.position_variance_xyz) if self.position_variance_xyz else None,
             "map_observation_count": self.map_observation_count,
+            "observation_anchors": [item.to_dict() for item in self.observation_anchors],
         }
 
 
@@ -270,6 +292,7 @@ class SemanticObjectMap:
                     position_mean_xyz=obs.map_xyz,
                     position_variance_xyz=(0.0, 0.0, 0.0),
                     map_observation_count=1 if obs.map_xyz is not None else 0,
+                    observation_anchors=_observation_anchors(obs),
                 )
                 result.created_ids.append(object_id)
                 result.associations.append(
@@ -491,6 +514,10 @@ class SemanticObjectMap:
                     entry.position_variance_xyz = position_variance(
                         [prev_mean or fused, obs.map_xyz], fused
                     )
+                anchor = _observation_anchor(obs)
+                if anchor is not None:
+                    entry.observation_anchors.append(anchor)
+                    entry.observation_anchors = entry.observation_anchors[-32:]
             else:
                 # CAMERA_LOCAL / RGB_ONLY does not participate in global fusion.
                 pass
@@ -510,6 +537,52 @@ class SemanticObjectMap:
         entry.confidence = max(entry.confidence, obs.confidence)
         if place_id and place_id not in entry.seen_from_places:
             entry.seen_from_places.append(place_id)
+
+    def reproject_observations(
+        self,
+        transform_lookup: Callable[
+            [tuple[float, float, float], float],
+            tuple[float, float, float] | None,
+        ],
+    ) -> dict[str, int]:
+        """重投影原始观测并重算实体位置，persistent object ID 保持不变。"""
+        reprojected_objects = 0
+        reprojected_observations = 0
+        for entry in self.objects.values():
+            points: list[tuple[float, float, float]] = []
+            weights: list[float] = []
+            for anchor in entry.observation_anchors:
+                mapped = transform_lookup(anchor.camera_xyz, anchor.timestamp)
+                if mapped is None:
+                    continue
+                anchor.map_xyz_at_insert = tuple(float(v) for v in mapped)
+                points.append(anchor.map_xyz_at_insert)
+                weights.append(
+                    quality_weight(anchor.spatial_quality)
+                    * max(0.05, float(anchor.confidence))
+                )
+            if not points:
+                continue
+            fused = weighted_position_mean(points, weights)
+            entry.map_xyz = fused
+            entry.position_mean_xyz = fused
+            entry.map_observation_count = len(points)
+            if len(points) >= 2:
+                from app.spatial.spatial_transform import position_variance
+
+                entry.position_variance_xyz = position_variance(points, fused)
+            else:
+                entry.position_variance_xyz = (0.0, 0.0, 0.0)
+            entry.provenance = {
+                **entry.provenance,
+                "semantic_reprojected": True,
+            }
+            reprojected_objects += 1
+            reprojected_observations += len(points)
+        return {
+            "objects": reprojected_objects,
+            "observations": reprojected_observations,
+        }
 
     def _reconcile_statuses(self, *, now: float) -> None:
         for entry in self.objects.values():
@@ -561,8 +634,35 @@ def _quality_rank(value: str) -> int:
         "CAMERA_LOCAL": 1,
         "RELATIVE_RGBD": 2,
         "METRIC_RGBD": 3,
+        # 2026-09-09 P2 修复：plain_slam provider 返回的等级是 METRIC_LIDAR，
+        # 之前不在表里 → order.get(..., 0) 让它的 rank 变成 0，
+        # 反而比 CAMERA_LOCAL(1) 还低，于是语义实体的 spatial_quality
+        # 永远无法从 CAMERA_LOCAL 升级（"只升不降"逻辑被卡死）。
+        "METRIC_LIDAR": 4,
     }
     return order.get(value, 0)
+
+
+def _observation_anchor(
+    obs: ObjectSpatialObservation,
+) -> SemanticObservationAnchor | None:
+    timestamp = (obs.provenance or {}).get("timestamp")
+    if timestamp is None or obs.camera_xyz is None or obs.map_xyz is None:
+        return None
+    return SemanticObservationAnchor(
+        timestamp=float(timestamp),
+        camera_xyz=tuple(float(v) for v in obs.camera_xyz),
+        confidence=float(obs.confidence),
+        spatial_quality=str(obs.spatial_quality),
+        map_xyz_at_insert=tuple(float(v) for v in obs.map_xyz),
+    )
+
+
+def _observation_anchors(
+    obs: ObjectSpatialObservation,
+) -> list[SemanticObservationAnchor]:
+    anchor = _observation_anchor(obs)
+    return [anchor] if anchor is not None else []
 
 
 def _source_id(obs: ObjectSpatialObservation) -> str | None:

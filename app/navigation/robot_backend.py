@@ -59,6 +59,12 @@ class RobotCapabilities:
     supports_navigation_cancel: bool = False
     supports_navigation_feedback: bool = False
     supports_platform_obstacle_avoidance: bool = False
+    # Plan section 16.1: the coarse flag above hides three very different
+    # guarantees.  Go2-W has none of the emergency stop / bypass behavior, but
+    # this project does implement clearance-aware planning on top of it.
+    emergency_collision_stop_supported: bool = False
+    clearance_aware_navigation_supported: bool = False
+    autonomous_obstacle_bypass_supported: bool = False
     # High-level motion vocabulary exposed to planners.  This is deliberately
     # more specific than supports_relative_translation/rotation: the current
     # Go2-W experiment can move forward, rotate, and execute short operator-
@@ -83,6 +89,15 @@ class RobotCapabilities:
             supports_navigation_feedback=bool(value.get("supports_navigation_feedback", False)),
             supports_platform_obstacle_avoidance=bool(
                 value.get("supports_platform_obstacle_avoidance", False)
+            ),
+            emergency_collision_stop_supported=bool(
+                value.get("emergency_collision_stop_supported", False)
+            ),
+            clearance_aware_navigation_supported=bool(
+                value.get("clearance_aware_navigation_supported", False)
+            ),
+            autonomous_obstacle_bypass_supported=bool(
+                value.get("autonomous_obstacle_bypass_supported", False)
             ),
             allowed_motion_primitives=tuple(
                 str(item) for item in (value.get("allowed_motion_primitives") or [])

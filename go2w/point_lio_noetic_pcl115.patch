@@ -1,0 +1,36 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 979512c..f691ca1 100755
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3,14 +3,14 @@ project(point_lio_unilidar)
+ 
+ SET(CMAKE_BUILD_TYPE "Debug")
+ 
+-ADD_COMPILE_OPTIONS(-std=c++14 )
+-set(CMAKE_CXX_FLAGS "-std=c++14 -O3" ) 
++ADD_COMPILE_OPTIONS(-std=c++17 )
++set(CMAKE_CXX_FLAGS "-std=c++17 -O3" ) 
+ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fexceptions" )
+ 
+-set(CMAKE_CXX_STANDARD 14)
++set(CMAKE_CXX_STANDARD 17)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ set(CMAKE_CXX_EXTENSIONS OFF)
+-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -pthread -std=c++0x -std=c++14 -fexceptions")
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pthread -fexceptions")
+ 
+ add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
+ message("DROOT_DIR = ${DROOT_DIR}")
+diff --git a/include/common_lib.h b/include/common_lib.h
+index 7321303..38e5e55 100755
+--- a/include/common_lib.h
++++ b/include/common_lib.h
+@@ -1,6 +1,8 @@
+ #ifndef COMMON_LIB_H
+ #define COMMON_LIB_H
+ 
++#include <deque>
++
+ #include <so3_math.h>
+ #include <Eigen/Eigen>
+ #include <pcl/point_types.h>

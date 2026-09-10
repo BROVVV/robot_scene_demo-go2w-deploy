@@ -127,6 +127,13 @@ if ! command -v ros2 >/dev/null 2>&1; then
   printf '%s\n' 'ERROR: ros2 CLI still not available after sourcing ROS.' >&2
   exit 2
 fi
+# setup_environment.sh intentionally clears stale PYTHONPATH. Re-add only the
+# matching system-Python user site where this host keeps app dependencies.
+system_py_minor="$(${system_python} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+system_user_site="${HOME}/.local/lib/python${system_py_minor}/site-packages"
+if [[ -d "${system_user_site}" ]]; then
+  export PYTHONPATH="${system_user_site}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
 
 # --- helper: is a topic alive? -------------------------------------------------
 topic_alive() {

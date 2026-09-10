@@ -70,7 +70,13 @@ class RobotCapabilityContract(StrictBaseModel):
     forbidden_action_phrases_zh: list[str] = Field(default_factory=list)
     max_forward_step_m: float = Field(default=0.5, gt=0.0)
     max_executable_distance_m: float = Field(default=0.5, gt=0.0)
+    # Plan section 16.1: "the platform avoids obstacles" bundles three
+    # unrelated guarantees.  Go2-W has neither an emergency collision stop nor
+    # autonomous bypass; only this project's own clearance-aware planning.
     platform_obstacle_avoidance_assumed: bool = True
+    emergency_collision_stop_supported: bool = False
+    clearance_aware_navigation_supported: bool = True
+    autonomous_obstacle_bypass_supported: bool = False
     execution_assumption: str = "platform_obstacle_avoidance_assumed"
     require_stop_after_each_motion: bool = True
     require_reobserve_after_each_motion: bool = True
@@ -81,6 +87,8 @@ def default_quadruped_capability(
     max_forward_step_m: float = 0.5,
     max_executable_distance_m: float | None = None,
     platform_obstacle_avoidance_assumed: bool = True,
+    emergency_collision_stop_supported: bool | None = None,
+    autonomous_obstacle_bypass_supported: bool | None = None,
     can_manipulate: bool = False,
     can_open_container: bool = False,
     can_look_down: bool = False,
@@ -98,6 +106,17 @@ def default_quadruped_capability(
             else max_forward_step_m
         ),
         platform_obstacle_avoidance_assumed=platform_obstacle_avoidance_assumed,
+        emergency_collision_stop_supported=(
+            platform_obstacle_avoidance_assumed
+            if emergency_collision_stop_supported is None
+            else emergency_collision_stop_supported
+        ),
+        clearance_aware_navigation_supported=True,
+        autonomous_obstacle_bypass_supported=(
+            platform_obstacle_avoidance_assumed
+            if autonomous_obstacle_bypass_supported is None
+            else autonomous_obstacle_bypass_supported
+        ),
         execution_assumption=(
             "platform_obstacle_avoidance_assumed"
             if platform_obstacle_avoidance_assumed
@@ -124,6 +143,15 @@ def default_quadruped_capability(
 
 
 DEFAULT_QUADRUPED_CAPABILITY = default_quadruped_capability()
+
+# Go2-W as actually deployed: no platform obstacle avoidance of any kind, so
+# every motion segment must be authorized by this project's clearance gates and
+# the LLM may never assume it will be steered around an obstacle.
+GO2W_STRICT_SAFE_CAPABILITY = default_quadruped_capability(
+    max_forward_step_m=0.25,
+    max_executable_distance_m=0.25,
+    platform_obstacle_avoidance_assumed=False,
+)
 
 
 class Position(StrictBaseModel):
@@ -383,6 +411,58 @@ class LLMSearchHypothesis(StrictBaseModel):
     execution_assumption: str | None = None
 
 
+class LLMSafetySector(StrictBaseModel):
+    """计划书 §15.1：一个 15° 扇区的可通行证据。"""
+
+    bearing_deg: float
+    clearance_m: float | None = None
+    state: str
+    traversable: bool = False
+    confidence: Confidence = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class LLMLocalSafetyContext(StrictBaseModel):
+    """喂给 LLM 的局部几何摘要。禁止传原始点云，只传扇区级结论。"""
+
+    front_clearance_m: float | None = None
+    rear_clearance_m: float | None = None
+    left_clearance_m: float | None = None
+    right_clearance_m: float | None = None
+    forward_safe: bool = False
+    backward_safe: bool = False
+    nearest_free_sector_deg: float | None = None
+    lidar_fresh: bool = False
+    geometry_validated: bool = False
+    sectors: list[LLMSafetySector] = Field(default_factory=list)
+
+
+class LLMFrontierSummary(StrictBaseModel):
+    frontier_id: str
+    bearing_deg: float
+    distance_m: float | None = None
+    semantic_relevance: Confidence = Field(default=0.0, ge=0.0, le=1.0)
+    spatial_information_gain: Confidence = Field(default=0.0, ge=0.0, le=1.0)
+    route_reachable: bool = False
+    route_cost_m: float | None = None
+    path_min_clearance_m: float | None = None
+    view_quality: Confidence = Field(default=0.0, ge=0.0, le=1.0)
+    traversal_failure_count: int = 0
+
+
+class LLMTopologyContext(StrictBaseModel):
+    current_place_id: str | None = None
+    recent_place_ids: list[str] = Field(default_factory=list)
+    # Top-K frontier（计划书 §15.2：5-8 个），不是全部 frontier。
+    frontiers: list[LLMFrontierSummary] = Field(default_factory=list)
+
+
+class LLMRecoveryContext(StrictBaseModel):
+    stuck_state: str = "FREE"
+    recent_navigation_failures: int = 0
+    recent_recoveries: int = 0
+    breadcrumb_backward_available: bool = False
+
+
 class LLMReasoningRequest(StrictBaseModel):
     target_text: str
     target_profile: dict[str, Any] | None = None
@@ -391,6 +471,11 @@ class LLMReasoningRequest(StrictBaseModel):
     capability_contract: RobotCapabilityContract
     max_hypotheses: int = Field(default=5, ge=1, le=20)
     language: str = "zh"
+    # 计划书 §15.1：几何/感知/拓扑/脱困上下文与语义证据同等重要。
+    local_safety: LLMLocalSafetyContext | None = None
+    perception_quality: dict[str, Any] | None = None
+    topology_context: LLMTopologyContext | None = None
+    recovery_context: LLMRecoveryContext | None = None
 
 
 class LLMReasoningResult(StrictBaseModel):
@@ -406,6 +491,12 @@ class LLMReasoningResult(StrictBaseModel):
     requires_stop_after_motion: bool = True
     reasoning_available: bool = True
     error_message: str | None = None
+    # 计划书 §17：LLM 只能建议意图，不能直接下发运动指令。
+    preferred_intent: str | None = None
+    preferred_frontier_id: str | None = None
+    avoid_frontier_ids: list[str] = Field(default_factory=list)
+    requires_recovery_first: bool = False
+    preferred_open_direction_deg: float | None = None
 
 
 class ViewpointStep(StrictBaseModel):

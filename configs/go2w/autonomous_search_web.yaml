@@ -12,7 +12,9 @@ web:
 search:
   reasoner: semantic_navigation
   backend: go2w_experimental     # go2w_experimental | mock | mock_metric
-  finish_on_visual_confirmation: true
+  # 计划书 §18.2/§19：视觉确认只是接近的开始。真实 Go2W 必须走完
+  # target approach + 最终确认才算 TARGET_FOUND，所以这里是 false。
+  finish_on_visual_confirmation: false
   # The WebUI search button enters the repository's existing
   # operator_supervised_experiment path.  The operator remains responsible
   # for holding the remote emergency stop; all motion bounds and per-step

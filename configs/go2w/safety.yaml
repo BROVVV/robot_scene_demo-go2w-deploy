@@ -11,6 +11,10 @@ shorten_on_target_candidate: true
 visual_navigation_execution_enabled: false
 video_navigation_allow_nav2_from_metric_video: false
 sensor_timeout_sec: 0.3
-minimum_front_clearance_m: 0.6
+# Deprecated: 单一的「前方留 0.6m」阈值已被 search_policy.yaml 的
+# clearance_navigation.hard_clearance_m（硬拒绝）与
+# clearance_navigation.preferred_clearance_m（代价整形）取代。留注释是为了
+# 让旧的操作记录还能读懂；没有任何代码再读这个键。
+# minimum_front_clearance_m: 0.6
 command_watchdog_sec: 0.3
 motion_authorized_by_operator: false

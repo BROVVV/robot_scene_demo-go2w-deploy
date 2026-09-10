@@ -1,4 +1,12 @@
-schema_version: 1
+# Go2-W autonomous search policy.
+#
+# schema_version 2 adds the clearance-aware / camera-view-aware navigation
+# blocks required by
+# docs/GO2W_自主搜索_高净空视觉友好导航_目标接近_完整实施计划_20260904.md
+# (section 25.1).  The Go2-W platform has no emergency collision stop and no
+# autonomous obstacle bypass, so every motion must be authorized by this
+# project's own deterministic clearance / swept-volume gates.
+schema_version: 2
 default_mode: observe_only
 motion_enabled: false
 max_search_duration_sec: 300
@@ -9,17 +17,111 @@ max_turn_step_deg: 30
 minimum_turn_step_deg: 10
 target_observation_distance_m: 1.2
 target_confirmation_stop_distance_m: 1.0
-minimum_front_clearance_m: 0.6
 sensor_timeout_sec: 0.3
 stop_settle_sec: 0.8
 observe_while_moving: false
+
+# Deprecated in schema_version 2: the single "keep 0.6m in front" number is
+# replaced by clearance_navigation.hard_clearance_m (hard reject) and
+# clearance_navigation.preferred_clearance_m (cost shaping).  Kept only so old
+# operator notes remain readable; the loader ignores it.
+# minimum_front_clearance_m: 0.6
+
+capabilities:
+  emergency_collision_stop_supported: false
+  clearance_aware_navigation_supported: true
+  autonomous_obstacle_bypass_supported: false
+
+clearance_navigation:
+  enabled: true
+  hard_clearance_m: 0.40
+  preferred_clearance_m: 0.80
+  # Go2-W body half width + wheel margin; every pose/path clearance query
+  # inflates the robot by this radius before comparing with the two limits.
+  footprint_radius_m: 0.25
+  unknown_is_traversable: false
+  stale_is_traversable: false
+  path_clearance_weight: 3.0
+  path_min_clearance_weight: 3.0
+  path_mean_clearance_weight: 1.0
+  route_length_weight: 1.0
+  turning_weight: 0.5
+  unknown_risk_weight: 2.5
+
+camera_view:
+  enabled: true
+  fov_half_angle_deg: 45
+  useful_view_min_m: 0.30
+  useful_view_max_m: 2.50
+  camera_blocked_front_m: 0.45
+  near_field_threshold_m: 0.50
+  near_field_ratio_threshold: 0.55
+  low_information_threshold: 0.20
+  clearance_weight: 2.0
+  visibility_weight: 2.5
+  information_gain_weight: 2.0
+  occlusion_penalty_weight: 3.0
+
+stuck_detection:
+  enabled: true
+  history_cycles: 3
+  min_commanded_progress_m: 0.10
+  max_observed_progress_m: 0.03
+  repeated_viewpoint_limit: 2
+  repeated_heading_limit: 3
+  # Below this rotation span in both directions the dog counts as cornered.
+  min_escape_turn_deg: 15
+  constrained_clearance_m: 0.80
+  recovery_required_failures: 2
+
+recovery:
+  enabled: true
+  max_backward_step_m: 0.12
+  min_backward_step_m: 0.05
+  max_age_sec: 8.0
+  heading_tolerance_deg: 8.0
+  max_consecutive: 2
+  max_total_m: 0.36
+  escape_turn_candidates_deg: [10, -10, 15, -15, 20, -20, 30, -30]
+
+viewpoint_planning:
+  enabled: true
+  frontier_standoff_candidates_m: [0.60, 0.80, 1.00]
+  frontier_lateral_offsets_m: [-0.30, 0.0, 0.30]
+  require_path_clearance: true
+  require_view_quality: true
+
+target_approach:
+  enabled: true
+  finish_on_visual_confirmation: false
+  preferred_standoff_m: 0.85
+  minimum_standoff_m: 0.70
+  maximum_standoff_m: 1.10
+  approach_ring_angles_deg: [-90, -60, -30, 0, 30, 60, 90]
+  max_approach_step_m: 0.25
+  fine_approach_step_m: 0.10
+  align_yaw_threshold_deg: 8
+  max_finish_bearing_deg: 12
+  require_fresh_depth: true
+  require_final_verification: true
+  require_line_of_sight: true
+
+llm_embodiment_context:
+  enabled: true
+  safety_sector_count: 24
+  max_frontiers: 8
+  include_recovery_context: true
+  include_perception_quality: true
+
 target_lost_strategy:
   action: stop_reobserve_then_backtrack
   maximum_reobserve_attempts: 2
   require_stationary_observation: true
+
 candidate_region_visit_limit:
   maximum_visits_per_region: 2
   cooldown_steps: 3
+
 confirmation:
   require_bbox: true
   require_mask: true
@@ -27,11 +129,12 @@ confirmation:
   require_track_vote: true
   require_evidence_gate: true
   llm_context_can_confirm: false
+
 navigation_goal:
   require_visual_confirmation: true
   require_3d_localization: true
   target_center_is_goal: false
-  minimum_standoff_m: 1.0
-  maximum_standoff_m: 1.5
+  minimum_standoff_m: 0.70
+  maximum_standoff_m: 1.10
   require_free_space: true
   require_line_of_sight: true

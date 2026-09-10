@@ -1,0 +1,25 @@
+From 65a135f24ebb758c105d4a2dcdee9c1d7a606a9c Mon Sep 17 00:00:00 2001
+From: robot_scene <deploy@example.invalid>
+Date: Mon, 31 Aug 2026 12:44:34 +0800
+Subject: [PATCH] patch: print quaternion coeffs (compatible with Eigen 3.3)
+
+---
+ src/lidar_lidar_calibration_node.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/lidar_lidar_calibration_node.cpp b/src/lidar_lidar_calibration_node.cpp
+index 078bda7..7e96a68 100644
+--- a/src/lidar_lidar_calibration_node.cpp
++++ b/src/lidar_lidar_calibration_node.cpp
+@@ -73,7 +73,7 @@ int main() {
+   const Eigen::Quaternionf q = Eigen::Quaternionf(T.rotationMatrix());
+   const Eigen::Vector3f t = T.translation();
+   std::cout << "T:" << std::endl << T.matrix() << std::endl;
+-  std::cout << "quaternion:" << std::endl << q << std::endl;
++  std::cout << "quaternion:" << std::endl << q.coeffs().transpose() << std::endl;  // Eigen >= 3.4 ostream op missing on 3.3
+   std::cout << "translation:" << std::endl << t << std::endl;
+ 
+   pslam::PointCloud3f aligned_cloud;
+-- 
+2.34.1
+

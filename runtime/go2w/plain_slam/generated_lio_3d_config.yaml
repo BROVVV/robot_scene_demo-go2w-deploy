@@ -5,7 +5,7 @@ lio_3d_node:
     map_cloud_dir: /tmp/go2w_plain_slam/
     param_files_dir: /home/unitree/robotscene/runtime/go2w/plain_slam
     pointcloud_topic: /go2w/slam/pandar_points
-    imu_topic: /utlidar/imu
+    imu_topic: /go2w/slam/imu
     imu_pose_topic: /go2w/slam/imu_pose_raw
     imu_odom_topic: /go2w/slam/imu_odom_raw
     lio_map_cloud_topic: /go2w/slam/lio_map_cloud

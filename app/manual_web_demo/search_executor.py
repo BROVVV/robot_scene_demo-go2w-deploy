@@ -461,7 +461,7 @@ class InProcessMockExecutor:
                 graph=graph,
                 negative_target_key=task_context.canonical_target,
                 finish_on_visual_confirmation=bool(
-                    params.get("finish_on_visual_confirmation", True)
+                    params.get("finish_on_visual_confirmation", False)
                 ),
                 turn_only=bool(params.get("turn_only", False)),
                 session_id=graph.session_id,

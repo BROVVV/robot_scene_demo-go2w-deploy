@@ -140,32 +140,42 @@ def build_situated_search_reasoning_prompt(
                 "memory_sources": [],
                 "should_not_mark_found": True,
                 "max_executable_distance_m": 3.0,
-                "execution_assumption": "platform_obstacle_avoidance_assumed",
+                "execution_assumption": "strict_safe_no_platform_obstacle_avoidance",
             }
         ],
         "global_uncertainty_zh": "全局不确定性",
         "recommended_next_observation_zh": "下一观察建议",
         "no_target_found_policy_zh": "未找到策略",
         "recommended_motion_horizon_m": 3.0,
-        "motion_horizon_reason_zh": "当前区域较开阔，目标尚未出现，建议移动到较远观察点扩大视野。",
-        "motion_profile_hint": "platform_assisted_open_area",
+        "motion_horizon_reason_zh": "前方净空充足，目标尚未出现，建议移动到视野更好的观察点。",
+        "motion_profile_hint": "strict_safe_clearance_aware",
         "requires_stop_after_motion": True,
         "reasoning_available": True,
         "error_message": None,
+        "preferred_intent": "EXPLORE_FRONTIER",
+        "preferred_frontier_id": "frontier_003",
+        "avoid_frontier_ids": [],
+        "requires_recovery_first": False,
+        "preferred_open_direction_deg": -30.0,
     }
     system = """你是机械狗第一视角目标搜索系统中的情境推理模块。
-你正在为一只具备基础避障能力的机械狗规划下一观察动作。
+你正在为一只没有平台级自动避障、没有紧急碰撞停止的机械狗规划下一观察动作。
 你只能提出观察视角与高层语义移动距离建议，不能假设有机械臂、开合、翻找、拿取、低头俯视或近距离精查能力。
-不要编写避障逻辑，不要假设自己能直接控制底层避障；真实安全由机械狗底层平台/SDK/ROS 安全层兜底。
+你只能根据结构化几何状态提出高层搜索偏好；底层安全由确定性 LiDAR/footprint/swept-volume gate 决定。不得假设平台会自动绕障。任何建议都可能被安全层否决。
 硬性规则：
 1. 除非 observed_facts.target_observed=true，否则目标状态只能是 inferred 或 unreachable，should_not_mark_found 必须为 true。
 2. 禁止建议打开、翻找、拿取、移动物体、低头查看表面、检查容器内部。
 3. 必须操作容器或遮挡物的假设标为 needs_human 或 unsafe_or_impossible。
 4. quadruped_view_strategy 只能使用 capability_contract.allowed_primitives。
 5. 每个假设引用可见锚点；没有锚点时明确写空列表。
-6. 空间开阔且目标尚未出现时，recommended_motion_horizon_m 可建议 2 到 5 米；普通室内搜索建议 0.8 到 2 米；目标候选出现或确认阶段建议 0.3 到 0.8 米。
-7. 不要固定每 0.5 米停一次；所有距离只是建议，最终会由 Motion Horizon Planner 根据配置和硬上限裁剪。
-8. 输出严格 JSON，不输出 Markdown，不输出长篇思维链。"""
+6. recommended_motion_horizon_m 只表示"想走多远看下一眼"：几何净空充足且目标尚未出现时建议 0.8 到 2 米；净空受限或前方状态未知时建议 0.1 到 0.4 米；目标已确认进入接近阶段时只能建议 0.05 到 0.25 米的增量步长，并保持 0.70 到 1.10 米站位距离。
+7. 不要固定每 0.5 米停一次；所有距离只是建议，最终会由 clearance / swept-volume 安全层和 Motion Horizon Planner 裁剪甚至否决。
+8. local_safety 是扇区级几何结论：clearance_m 为 null 表示该方向不可观测，必须当作不可通行，绝不能当作空旷。forward_safe=false 时不许建议任何前进。
+9. perception_quality.camera_blocked=true 表示相机被近处表面糊住：这不是"这里已搜完"，必须先建议脱离贴面状态再观察。
+10. recovery_context.stuck_state 不是 FREE 时优先输出 requires_recovery_first=true；breadcrumb_backward_available=false 时禁止建议后退。
+11. preferred_frontier_id 只能取自 topology_context.frontiers；route_reachable=false 或 path_min_clearance_m 为 null 的 frontier 只能出现在 avoid_frontier_ids。
+12. preferred_intent 只能是 EXPLORE_FRONTIER / REOBSERVE / RECOVER_THEN_EXPLORE / APPROACH_CONFIRMED_TARGET / WAIT_FOR_SENSOR 之一。
+13. 输出严格 JSON，不输出 Markdown，不输出长篇思维链。"""
     payload = request.model_dump(mode="json")
     user = (
         "根据以下输入生成最多 "

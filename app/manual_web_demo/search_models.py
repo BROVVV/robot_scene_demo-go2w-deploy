@@ -23,7 +23,7 @@ class SearchStartRequest:
     task_text: str = ""
     reasoner: str = "semantic"
     backend: str = "go2w_experimental"  # go2w_experimental | mock | mock_metric
-    finish_on_visual_confirmation: bool = True
+    finish_on_visual_confirmation: bool = False
     turn_only: bool = False
     enable_autonomous_motion: bool = False
     # Explicitly carried through the WebUI -> worker -> semantic runner
@@ -100,7 +100,10 @@ class SearchStartRequest:
             reasoner=requested_reasoner,
             backend=backend,
             finish_on_visual_confirmation=bool(
-                value.get("finish_on_visual_confirmation", True)
+                value.get(
+                    "finish_on_visual_confirmation",
+                    defaults["finish_on_visual_confirmation"],
+                )
             ),
             turn_only=bool(value.get("turn_only", False)),
             enable_autonomous_motion=enable_motion,
@@ -177,6 +180,8 @@ def load_search_defaults() -> dict[str, Any]:
 
     defaults: dict[str, Any] = {
         "backend": "go2w_experimental",
+        # 计划书 §18.2：默认走完目标接近再收工，不在视觉确认那一刻就 finish。
+        "finish_on_visual_confirmation": False,
         "enable_autonomous_motion": False,
         "operator_supervised_experiment": False,
         "rgbd_source": False,
@@ -198,6 +203,10 @@ def load_search_defaults() -> dict[str, Any]:
             for key in ("backend",):
                 if search.get(key):
                     defaults[key] = str(search[key])
+            if search.get("finish_on_visual_confirmation") is not None:
+                defaults["finish_on_visual_confirmation"] = bool(
+                    search["finish_on_visual_confirmation"]
+                )
             if search.get("rgbd_source") is not None:
                 defaults["rgbd_source"] = bool(search["rgbd_source"])
             if search.get("rgbd_base_url"):

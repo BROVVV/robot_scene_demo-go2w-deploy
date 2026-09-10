@@ -255,7 +255,8 @@ def _evidence_frames(based_on: list[str]) -> list[int]:
     for item in based_on:
         if item.startswith("frame_"):
             try:
-                frames.append(int(item.removeprefix("frame_")))
+                # 机器狗上是 Python 3.8，没有 str.removeprefix。
+                frames.append(int(item[len("frame_"):]))
             except ValueError:
                 continue
     return frames

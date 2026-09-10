@@ -46,6 +46,7 @@ class SemanticObservation:
     # ---- 计划书 §3.3：语义 freshness / frame binding 元信息 ------------------
     semantic_source_frame_id: str | None = None
     semantic_capture_timestamp: float | None = None
+    timestamp_quality: str | None = None
     semantic_completed_timestamp: float | None = None
     semantic_age_ms: float | None = None
     semantic_status: str = SEMANTIC_STATUS_FRESH_FULL
@@ -263,6 +264,7 @@ def _from_payload(payload: dict[str, Any], *, robot_pose: dict[str, Any] | None,
             payload.get("semantic_capture_timestamp")
             or payload.get("capture_timestamp")
         ),
+        timestamp_quality=_opt_str(payload.get("timestamp_quality")),
         semantic_completed_timestamp=_opt_float(
             payload.get("semantic_completed_timestamp")
             or payload.get("completed_timestamp")
@@ -350,7 +352,10 @@ def semantic_observation_to_live(
         semantic_error_detail=semantic.semantic_error_detail,
         semantic_source_pose=semantic.semantic_source_pose,
         sensor_health=dict(sensor_health or {}),
-        provenance={"source": str(semantic.source)},
+        provenance={
+            "source": str(semantic.source),
+            "timestamp_quality": semantic.timestamp_quality,
+        },
     )
 
 

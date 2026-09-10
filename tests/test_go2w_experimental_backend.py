@@ -167,6 +167,16 @@ class TestGo2WExperimentalBackend(unittest.TestCase):
         self.assertEqual(result.observed_motion["observed_total_deg"], 0.0)
         self.assertEqual(result.observed_motion["remaining_deg"], 60.0)
 
+    def test_dry_run_turn_does_not_require_stationary_odometry_to_rotate(self) -> None:
+        motion = _FakeMotion(rotation_gain=0.0)
+        backend = _backend(motion, dry_run=True)
+        result = backend.execute_goal(ExplorationGoal(
+            goal_id="g-dry-turn", goal_type=GOAL_ROTATE_VIEW, relative_dyaw=12.0,
+        )).result
+        self.assertTrue(result.succeeded)
+        self.assertEqual(motion.steps, [])
+        self.assertTrue(result.requested_motion["dry_run"])
+
     def test_rotate_right_uses_r_step(self) -> None:
         motion = _FakeMotion()
         backend = _backend(motion)

@@ -49,7 +49,11 @@ def _wait_status(service: SearchSessionService, statuses: set[str],
 
 def _start(service: SearchSessionService, target: str = "饮水机旁边的蓝色垃圾桶",
            **overrides) -> dict:
-    params = {"target": target, "backend": "mock", "reasoner": "semantic_navigation", **overrides}
+    # 这些用例查的是 WebUI 会话骨架（起停/事件/历史），不是目标接近闭环，
+    # 所以走计划书 §18.2 允许保留的 legacy 分支：看见即收工。接近闭环由
+    # test_autonomous_explorer_target_approach 与 E2E 用例负责。
+    params = {"target": target, "backend": "mock", "reasoner": "semantic_navigation",
+              "finish_on_visual_confirmation": True, **overrides}
     return service.start_search(SearchStartRequest.from_dict(params))
 
 

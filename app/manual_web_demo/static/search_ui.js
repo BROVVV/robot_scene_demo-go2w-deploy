@@ -83,6 +83,7 @@
     stSemantic: document.getElementById("st-semantic"),
     stSemanticDetail: document.getElementById("st-semantic-detail"),
     stEvidence: document.getElementById("st-evidence"),
+    stEmbodiment: document.getElementById("st-embodiment"),
     taskUnderstanding: document.getElementById("task-understanding"),
     // observation
     obsCurrent: document.getElementById("obs-current"),
@@ -237,6 +238,7 @@
             state.session_id !== appState.search.session_id);
           if (!appState.search.session_id) appState.search.session_id = state.session_id;
           appState.spatial = mergeSpatialGraph(state.spatial || {}, sessionChanged);
+          if (state.embodiment) appState.embodiment = state.embodiment;
           renderAll();
         })
         .catch(function () { /* 后端暂时不可达时忽略，保持上次画面 */ });
@@ -269,6 +271,7 @@
     appState.nextMotionCommand = state.next_motion_command || null;
     appState.candidates = state.candidates || [];
     appState.map = state.map || {};
+    appState.embodiment = state.embodiment || {};
     appState.spatial = mergeSpatialGraph(state.spatial || {}, sessionChanged);
     if (sessionChanged) appState._lastSemanticGraph = null;
     state.timeline = state.timeline || [];
@@ -326,6 +329,7 @@
         }
         if (payload.startup) appState.search.startup = payload.startup;
         if (payload.warning) appState.search.last_warning = payload.warning;
+        if (payload.embodiment) mergeEmbodiment(payload.embodiment);
         break;
       case "OBSERVATION_UPDATED":
         appState.observation = {
@@ -721,6 +725,7 @@
   function renderAll() {
     renderTaskUnderstanding();
     renderStatus();
+    renderEmbodiment();
     renderObservation();
     renderObjects();
     renderDecision();
@@ -859,6 +864,100 @@
     });
     html += "<div class='pend'>关系验证: " + (appState.verification ? esc(String(appState.verification.reason_zh || "")) : "pending") + "</div>";
     els.stEvidence.innerHTML = html;
+  }
+
+  // 计划书 §29/§30：目标接近跨多个事件累积，同名 dict 合并而不是整体覆盖。
+  function mergeEmbodiment(patch) {
+    var current = appState.embodiment || {};
+    Object.keys(patch).forEach(function (key) {
+      var value = patch[key];
+      var previous = current[key];
+      if (value && typeof value === "object" && !Array.isArray(value) &&
+          previous && typeof previous === "object" && !Array.isArray(previous)) {
+        var merged = {};
+        Object.keys(previous).forEach(function (k) { merged[k] = previous[k]; });
+        Object.keys(value).forEach(function (k) { merged[k] = value[k]; });
+        current[key] = merged;
+      } else {
+        current[key] = value;
+      }
+    });
+    appState.embodiment = current;
+  }
+
+  function fmtMeters(value) {
+    return (value === null || value === undefined) ? "--" : Number(value).toFixed(2) + "m";
+  }
+
+  // 计划书 §30：净空 / 卡住 / 选中视点 / 脱困原因 / 目标接近状态必须可见，
+  // 且接近中的状态绝不能显示成"已完成"。
+  function renderEmbodiment() {
+    if (!els.stEmbodiment) return;
+    var e = appState.embodiment || {};
+    var rows = [];
+    var safety = e.local_safety;
+    if (safety) {
+      rows.push("<div>净空 前 " + fmtMeters(safety.front_clearance_m) +
+        " · 左 " + fmtMeters(safety.left_clearance_m) +
+        " · 右 " + fmtMeters(safety.right_clearance_m) +
+        " · 后 " + fmtMeters(safety.rear_clearance_m) + "</div>");
+      rows.push('<div class="muted">前扇区 ' + esc(safety.front_state || "--") +
+        " · 可前进 " + (safety.forward_safe ? "是" : "否") +
+        " · LiDAR " + (safety.lidar_fresh ? "新鲜" : "不新鲜") +
+        " · 几何 " + (safety.geometry_validated ? "已校验" : "未校验") +
+        " · 安全转向 左" + Number(safety.safe_turn_left_deg || 0).toFixed(0) +
+        "° 右" + Number(safety.safe_turn_right_deg || 0).toFixed(0) + "°</div>");
+    }
+    var perception = e.perception_quality;
+    if (perception) {
+      rows.push('<div class="muted">相机 ' +
+        (perception.camera_blocked ? '<span class="no">贴障/死角</span>' : "正常") +
+        " · 信息量 " + Number(perception.estimated_information_gain || 0).toFixed(2) +
+        (perception.reason ? " · " + esc(perception.reason) : "") + "</div>");
+    }
+    if (e.stuck_state) {
+      rows.push("<div>卡住状态 <b>" + esc(e.stuck_state) + "</b></div>");
+    }
+    var viewpoint = e.selected_viewpoint;
+    if (viewpoint) {
+      rows.push("<div>选中视点 " + esc(viewpoint.viewpoint_id || "--") +
+        '<span class="muted"> ← ' + esc(viewpoint.frontier_id || "--") + "</span></div>");
+      rows.push('<div class="muted">路径最小净空 ' +
+        fmtMeters(viewpoint.path_min_clearance_m) + " · 站位净空 " +
+        fmtMeters(viewpoint.local_clearance_m) + " · 视野质量 " +
+        Number(viewpoint.view_quality || 0).toFixed(2) + "</div>");
+    }
+    if (Array.isArray(e.safety_rejections) && e.safety_rejections.length) {
+      rows.push('<div class="muted">安全拒绝 ' + e.safety_rejections.length +
+        " 个候选：" + esc((e.safety_rejections[0] || {}).reason || "") + "</div>");
+    }
+    var recovery = e.recovery;
+    if (recovery) {
+      rows.push("<div>脱困 " + esc(recovery.stage || "") + " · " +
+        esc(recovery.trigger || recovery.stuck_state || "") +
+        '<span class="muted"> ' + esc(recovery.reason || "") + "</span></div>");
+      rows.push('<div class="muted">后退 ' +
+        (recovery.backward_dx_m == null ? "不允许" : fmtMeters(recovery.backward_dx_m)) +
+        " · 脱困转向 " + (recovery.escape_rotation_deg == null ? "--" :
+          Number(recovery.escape_rotation_deg).toFixed(0) + "°") +
+        " · 已执行 " + esc(recovery.executed || "无") + "</div>");
+    }
+    var approach = e.target_approach;
+    if (approach) {
+      rows.push("<div>目标接近 <b>" + esc(approach.status || "--") + "</b>" +
+        (approach.reached ? ' <span class="ok">已到达</span>'
+                          : ' <span class="muted">未到达</span>') + "</div>");
+      rows.push('<div class="muted">距离 ' + fmtMeters(approach.depth_m) +
+        " · 方位 " + (approach.bearing_deg == null ? "--" :
+          Number(approach.bearing_deg).toFixed(1) + "°") +
+        " · 空间质量 " + esc(approach.spatial_quality || "--") +
+        " · 期望 standoff " + fmtMeters(approach.desired_standoff_m) + "</div>");
+      rows.push('<div class="muted">第 ' + (approach.steps || 0) + " 步 · " +
+        esc(approach.action || "") + " · " +
+        esc(approach.reason || approach.decision_reason || "") + "</div>");
+    }
+    els.stEmbodiment.innerHTML = rows.length ? rows.join("")
+      : '<span class="muted">等待局部安全证据…</span>';
   }
 
   function renderObservation() {

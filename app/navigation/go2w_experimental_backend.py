@@ -129,6 +129,9 @@ class Go2WExperimentalBackend(RobotBackend):
             supports_navigation_cancel=True,
             supports_navigation_feedback=True,
             supports_platform_obstacle_avoidance=False,
+            emergency_collision_stop_supported=False,
+            clearance_aware_navigation_supported=True,
+            autonomous_obstacle_bypass_supported=False,
             allowed_motion_primitives=GO2W_OPERATOR_SUPERVISED_PRIMITIVES,
         )
 
@@ -371,8 +374,9 @@ class Go2WExperimentalBackend(RobotBackend):
                             "unsupported_primitive": "BACKWARD_TOO_SHORT",
                         },
                     )
-                allowed = min(requested, self.config.max_backward_step_m)
-                return self._execute_backward(goal, allowed)
+                # Clamp inside _execute_backward so requested vs executed
+                # distance (safety_limited) stays visible to the caller.
+                return self._execute_backward(goal, requested)
             if dx < 0.01 and abs(dy) <= 0.01:
                 # A pure re-position with no forward demand.
                 return navigation_result(
@@ -420,6 +424,37 @@ class Go2WExperimentalBackend(RobotBackend):
                 observed_motion={"observed_total_deg": 0.0,
                                  "remaining_deg": round(requested_total, 3)},
                 provenance={"backend": "go2w_experimental", "segments": []},
+            )
+
+        # Observe-only is a real perception/planning validation mode, not a
+        # synthetic movement test.  The injected executor intentionally keeps
+        # odometry still, so waiting for a measured yaw here would turn every
+        # guarded approach alignment into a false navigation failure.
+        if self.config.dry_run:
+            return navigation_result(
+                goal.goal_id,
+                NavigationStatus.SUCCEEDED,
+                message=(
+                    f"dry-run turn {requested_total:+.1f}° validated; "
+                    "no motion command sent"
+                ),
+                requested_motion={
+                    "step": "turn_segmented",
+                    "requested_total_deg": round(requested_total, 3),
+                    "relative_yaw_deg": round(requested_total, 3),
+                    "segment_count": 0,
+                    "dry_run": True,
+                },
+                observed_motion={
+                    "observed_total_deg": 0.0,
+                    "remaining_deg": round(requested_total, 3),
+                    "yaw_delta_deg": 0.0,
+                },
+                provenance={
+                    "backend": "go2w_experimental",
+                    "dry_run": True,
+                    "segments": [],
+                },
             )
 
         started = self._now()

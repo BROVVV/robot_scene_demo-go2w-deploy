@@ -30,6 +30,7 @@ class AsyncSemanticRequest:
     image_path: str
     frame_id: str
     capture_timestamp: float
+    timestamp_quality: str | None
     robot_pose: dict[str, Any] | None
     target_profile: Any
     scene_signature: Any = None
@@ -108,6 +109,7 @@ class AsyncSemanticObservationManager:
         robot_pose: dict[str, Any] | None,
         target_profile: Any,
         scene_signature: Any = None,
+        timestamp_quality: str | None = None,
     ) -> bool:
         if not self.enabled:
             return False
@@ -123,6 +125,9 @@ class AsyncSemanticObservationManager:
                 image_path=image_path,
                 frame_id=str(frame_id),
                 capture_timestamp=float(capture_timestamp),
+                timestamp_quality=(
+                    str(timestamp_quality) if timestamp_quality is not None else None
+                ),
                 robot_pose=dict(robot_pose) if robot_pose else None,
                 target_profile=target_profile,
                 scene_signature=scene_signature,
@@ -147,6 +152,7 @@ class AsyncSemanticObservationManager:
             "frame_id": str(frame_id),
             "sequence": sequence,
             "capture_timestamp": float(capture_timestamp),
+            "timestamp_quality": timestamp_quality,
         })
         thread = threading.Thread(
             target=self._run_analyze,
@@ -292,6 +298,7 @@ class AsyncSemanticObservationManager:
                     image_path=pending.image_path,
                     frame_id=pending.frame_id,
                     capture_timestamp=pending.capture_timestamp,
+                    timestamp_quality=pending.timestamp_quality,
                     robot_pose=pending.robot_pose,
                     target_profile=pending.target_profile,
                     scene_signature=pending.scene_signature,
@@ -345,6 +352,7 @@ class AsyncSemanticObservationManager:
             return
         semantic.semantic_source_frame_id = str(request.frame_id)
         semantic.semantic_capture_timestamp = float(request.capture_timestamp)
+        semantic.timestamp_quality = request.timestamp_quality
         semantic.semantic_completed_timestamp = now
         semantic.semantic_age_ms = 0.0
         semantic.semantic_source_pose = (

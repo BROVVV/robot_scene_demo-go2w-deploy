@@ -204,7 +204,10 @@ class MockMetricBackend(RobotBackend):
                 "yaw": round(goal.yaw or 0.0, 3),
             }
             if status == NavigationStatus.SUCCEEDED:
-                self._pose = [goal.position[0], goal.position[1], goal.yaw or 0.0]
+                # ExplorationGoal.yaw 是度，RobotPose.yaw 是弧度；直接赋值会把
+                # 度当弧度累积，几轮之后 mock 位姿彻底失控。
+                self._pose = [goal.position[0], goal.position[1],
+                              math.radians(float(goal.yaw or 0.0))]
         else:
             observed = _apply_mock_motion(self._pose, goal, MockBackendConfig())
         result = navigation_result(

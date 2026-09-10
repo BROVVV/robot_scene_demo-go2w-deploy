@@ -76,6 +76,103 @@ _RECOVERABLE_EVENTS = {
 }
 
 
+def _viewpoint_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    viewpoint = payload.get("viewpoint") or {}
+    return {
+        "frontier_id": payload.get("frontier_id"),
+        "viewpoint_id": payload.get("viewpoint_id"),
+        "path_min_clearance_m": viewpoint.get("path_min_clearance_m"),
+        "local_clearance_m": viewpoint.get("local_clearance_m"),
+        "view_quality": viewpoint.get("view_quality"),
+        "score": viewpoint.get("viewpoint_score"),
+    }
+
+
+def _recovery_summary(payload: dict[str, Any], stage: str) -> dict[str, Any]:
+    decision = payload.get("decision") or {}
+    goal = decision.get("backward_goal") or {}
+    return {
+        "stage": stage,
+        "stuck_state": payload.get("stuck_state"),
+        "trigger": decision.get("trigger") or "",
+        "reason": decision.get("reason") or "",
+        "backward_allowed": decision.get("backward_allowed"),
+        "backward_dx_m": goal.get("relative_dx"),
+        "escape_rotation_deg": (payload.get("escape_rotation") or {}).get("yaw_deg"),
+        "executed": payload.get("executed"),
+        "status": payload.get("status"),
+    }
+
+
+# 计划书 §29/§30：这些事件没有独立的 SearchEvent 类型，统一压到
+# SEARCH_STATE_CHANGED 的 ``embodiment`` 字段。这样 WebUI 复用已有 generic
+# event 通道，刷新后也还能从快照里读回净空/卡住/视点/脱困/接近状态。
+_EMBODIMENT_PATCHES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "local_safety_snapshot": lambda p: {"local_safety": p.get("local_safety")},
+    "perception_quality": lambda p: {
+        "perception_quality": p.get("perception_quality")},
+    "stuck_detected": lambda p: {"stuck_state": p.get("stuck_state")},
+    "viewpoint_candidates": lambda p: {
+        "viewpoint_candidates": p.get("viewpoints") or []},
+    "viewpoint_selected": lambda p: {"selected_viewpoint": _viewpoint_summary(p)},
+    "candidate_rejected_safety": lambda p: {
+        "safety_rejections": p.get("rejections") or []},
+    "recovery_triggered": lambda p: {
+        "recovery": _recovery_summary(p, "TRIGGERED")},
+    "recovery_result": lambda p: {"recovery": _recovery_summary(p, "FINISHED")},
+    "target_confirmed": lambda p: {"target_approach": {
+        "status": "VISUALLY_CONFIRMED", "reached": False,
+        "object_id": p.get("object_id"),
+        "reason_zh": p.get("reason_zh") or "", "steps": 0}},
+    "target_localized": lambda p: {"target_approach": {
+        "status": "LOCALIZED", "depth_m": p.get("depth_m"),
+        "bearing_deg": p.get("bearing_deg"),
+        "spatial_quality": p.get("spatial_quality"),
+        "desired_standoff_m": p.get("desired_standoff_m"),
+        "lost_count": p.get("lost_count")}},
+    "approach_candidate_selected": lambda p: {"target_approach": {
+        "approach_viewpoint": p.get("selected"),
+        "approach_candidate_count": p.get("candidate_count")}},
+    "approach_step": lambda p: {"target_approach": {
+        "status": "APPROACHING", "steps": p.get("step"),
+        "action": p.get("action"), "reason": p.get("reason"),
+        "relative_dx": p.get("relative_dx"),
+        "relative_dyaw": p.get("relative_dyaw"),
+        "depth_m": p.get("target_depth_m"),
+        "bearing_deg": p.get("target_bearing_deg")}},
+    "final_verification": lambda p: {"target_approach": {
+        "status": "FINAL_VERIFY", "reached": p.get("reached"),
+        "reason": p.get("reason"), "verified_again": p.get("verified_again"),
+        "steps": p.get("steps"),
+        "depth_m": (p.get("target") or {}).get("depth_m"),
+        "bearing_deg": (p.get("target") or {}).get("bearing_deg")}},
+    "target_reached": lambda p: {"target_approach": {
+        "status": "REACHED", "reached": True, "reason": p.get("reason"),
+        "steps": p.get("steps")}},
+    "approach_aborted": lambda p: {"target_approach": {
+        "status": "ABORTED", "reached": False, "reason": p.get("reason"),
+        "decision_reason": p.get("decision_reason"), "steps": p.get("steps")}},
+}
+
+# 需要在 UI 上直接读出中文原因的事件（其余只是遥测，不改 phase_detail）。
+_EMBODIMENT_DETAIL_ZH: dict[str, Callable[[dict[str, Any]], str]] = {
+    "stuck_detected": lambda p: f"卡住判定：{p.get('stuck_state') or '未知'}",
+    "recovery_triggered": lambda p: (
+        "触发脱困：" + str((p.get("decision") or {}).get("trigger") or
+                      p.get("stuck_state") or "")),
+    "recovery_result": lambda p: (
+        "脱困结束：" + str(p.get("executed") or "仅停车")
+        + "（" + str(p.get("status") or (p.get("reason") or "")) + "）"),
+    "target_confirmed": lambda p: "已视觉确认目标，开始安全接近（尚未完成）",
+    "approach_step": lambda p: (
+        f"接近第 {p.get('step')} 步：{p.get('action')} / {p.get('reason')}"),
+    "final_verification": lambda p: (
+        ("已到达目标：" if p.get("reached") else "未到达目标：")
+        + str(p.get("reason") or "")),
+    "approach_aborted": lambda p: "接近中止：" + str(p.get("reason") or ""),
+}
+
+
 class ExplorerSearchAdapter:
     """Maps explorer events to SearchEvents and keeps the store in sync."""
 
@@ -428,6 +525,15 @@ class ExplorerSearchAdapter:
                 }))
             events.append(self._emit(SEARCH_FINISHED, payload=finish_payload))
             return events
+        if name in _EMBODIMENT_PATCHES:
+            state_payload: dict[str, Any] = {
+                "phase": payload.get("phase"),
+                "embodiment": _EMBODIMENT_PATCHES[name](payload),
+            }
+            detail = _EMBODIMENT_DETAIL_ZH.get(name)
+            if detail is not None:
+                state_payload["phase_detail"] = detail(payload)
+            return [self._emit(SEARCH_STATE_CHANGED, payload=state_payload)]
         if name in _RECOVERABLE_EVENTS:
             error_type, source = _RECOVERABLE_EVENTS[name]
             message = str(

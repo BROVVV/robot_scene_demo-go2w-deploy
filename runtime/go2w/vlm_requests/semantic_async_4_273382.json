@@ -1,0 +1,173 @@
+{
+  "objects": [],
+  "scene_objects": [
+    {
+      "id": "obj_001",
+      "name": "chair",
+      "name_zh": "椅子",
+      "category": "furniture",
+      "color": "black",
+      "attributes": [
+        "front-left",
+        "key object"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "front-left",
+        "estimated_distance_m": 1.2
+      },
+      "bbox_2d": {
+        "x1": 0.23,
+        "y1": 0.3,
+        "x2": 0.55,
+        "y2": 0.8
+      },
+      "confidence": 0.8
+    },
+    {
+      "id": "obj_002",
+      "name": "monitor",
+      "name_zh": "显示器",
+      "category": "electronics",
+      "color": "black",
+      "attributes": [
+        "on shelf",
+        "left side"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "left",
+        "estimated_distance_m": 1.5
+      },
+      "bbox_2d": {
+        "x1": 0.1,
+        "y1": 0.05,
+        "x2": 0.22,
+        "y2": 0.25
+      },
+      "confidence": 0.9
+    },
+    {
+      "id": "obj_003",
+      "name": "box",
+      "name_zh": "纸箱",
+      "category": "package",
+      "color": "brown",
+      "attributes": [
+        "on right",
+        "SF logo"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "right",
+        "vertical": "middle",
+        "relative_to_robot": "right",
+        "estimated_distance_m": 2.0
+      },
+      "bbox_2d": {
+        "x1": 0.85,
+        "y1": 0.25,
+        "x2": 0.99,
+        "y2": 0.5
+      },
+      "confidence": 0.8
+    },
+    {
+      "id": "obj_004",
+      "name": "robot",
+      "name_zh": "机器人",
+      "category": "equipment",
+      "color": "black",
+      "attributes": [
+        "on right",
+        "EAI logo"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "right",
+        "vertical": "middle",
+        "relative_to_robot": "right",
+        "estimated_distance_m": 1.8
+      },
+      "bbox_2d": {
+        "x1": 0.65,
+        "y1": 0.35,
+        "x2": 0.85,
+        "y2": 0.65
+      },
+      "confidence": 0.9
+    },
+    {
+      "id": "obj_005",
+      "name": "desk",
+      "name_zh": "办公桌",
+      "category": "furniture",
+      "color": "white",
+      "attributes": [
+        "behind chair",
+        "left side"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "left",
+        "estimated_distance_m": 1.3
+      },
+      "bbox_2d": {
+        "x1": 0.15,
+        "y1": 0.35,
+        "x2": 0.55,
+        "y2": 0.75
+      },
+      "confidence": 0.8
+    }
+  ],
+  "scene_relations": [
+    {
+      "source_id": "obj_001",
+      "target_id": "obj_004",
+      "relation_type": "left_of",
+      "description_zh": "椅子在机器人左侧",
+      "estimated_distance_m": null,
+      "confidence": 0.8
+    },
+    {
+      "source_id": "obj_001",
+      "target_id": "obj_005",
+      "relation_type": "in_front_of",
+      "description_zh": "椅子在办公桌前方",
+      "estimated_distance_m": null,
+      "confidence": 0.8
+    },
+    {
+      "source_id": "obj_002",
+      "target_id": "obj_005",
+      "relation_type": "on",
+      "description_zh": "显示器在办公桌上",
+      "estimated_distance_m": null,
+      "confidence": 0.9
+    },
+    {
+      "source_id": "obj_003",
+      "target_id": "obj_004",
+      "relation_type": "right_of",
+      "description_zh": "纸箱在机器人右侧",
+      "estimated_distance_m": null,
+      "confidence": 0.8
+    }
+  ],
+  "scene_summary_zh": "办公室场景，有办公椅、显示器、纸箱和机器人设备",
+  "target_decision": {
+    "target_text": "白色垃圾桶",
+    "is_present": false,
+    "matched_object_ids": [],
+    "match_reason_zh": "画面中未见白色垃圾桶",
+    "confidence": 0.9
+  },
+  "all_objects_count": 5
+}

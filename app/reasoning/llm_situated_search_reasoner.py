@@ -8,6 +8,7 @@ from openai import OpenAI
 
 from app.config import Settings, get_settings
 from app.prompts import build_situated_search_reasoning_prompt
+from app.reasoning.embodiment_context import recovery_required
 from app.schemas import (
     Actionability,
     LLMReasoningRequest,
@@ -41,9 +42,12 @@ class LLMSituatedSearchReasoner:
 
     def reason(self, request: LLMReasoningRequest) -> LLMReasoningResult:
         if request.observed_facts.target_observed:
-            return _observed_target_result(request)
+            return _constrain_preferences(_observed_target_result(request), request)
         if self.client is None:
-            return self._fallback_result(request, RuntimeError("未配置推理模型 API"))
+            return _constrain_preferences(
+                self._fallback_result(request, RuntimeError("未配置推理模型 API")),
+                request,
+            )
         try:
             messages = build_situated_search_reasoning_prompt(request)
             response = self.client.chat.completions.create(
@@ -57,15 +61,18 @@ class LLMSituatedSearchReasoner:
                 raise ValueError("LLM 情境推理返回空内容")
             result = self._parse_json_response(content)
             result = _sanitize_result(result, request)
-            return result.model_copy(
-                update={
-                    "hypotheses": result.hypotheses[: request.max_hypotheses],
-                    "reasoning_available": True,
-                    "error_message": None,
-                }
+            return _constrain_preferences(
+                result.model_copy(
+                    update={
+                        "hypotheses": result.hypotheses[: request.max_hypotheses],
+                        "reasoning_available": True,
+                        "error_message": None,
+                    }
+                ),
+                request,
             )
         except Exception as exc:
-            return self._fallback_result(request, exc)
+            return _constrain_preferences(self._fallback_result(request, exc), request)
 
     @staticmethod
     def _parse_json_response(text: str) -> LLMReasoningResult:
@@ -159,6 +166,72 @@ class LLMSituatedSearchReasoner:
             reasoning_available=False,
             error_message=str(error),
         )
+
+
+PREFERRED_INTENTS = (
+    "EXPLORE_FRONTIER",
+    "REOBSERVE",
+    "RECOVER_THEN_EXPLORE",
+    "APPROACH_CONFIRMED_TARGET",
+    "WAIT_FOR_SENSOR",
+)
+
+
+def _constrain_preferences(
+    result: LLMReasoningResult,
+    request: LLMReasoningRequest,
+) -> LLMReasoningResult:
+    """计划书 §17：LLM 的偏好必须落在几何证据允许的范围内。
+
+    这里不是"防御性容错"，而是安全层对 LLM 输出的一次否决权：不可达 frontier
+    只能进 avoid 列表，未观测方向不能被当成开阔方向，脱困状态下不许先探索。
+    """
+    topology = request.topology_context
+    reachable = {
+        item.frontier_id
+        for item in (topology.frontiers if topology else ())
+        if item.route_reachable and item.path_min_clearance_m is not None
+    }
+    avoid = list(result.avoid_frontier_ids)
+    preferred = result.preferred_frontier_id
+    if preferred and preferred not in reachable:
+        if preferred not in avoid:
+            avoid.append(preferred)
+        preferred = None
+    direction = result.preferred_open_direction_deg
+    safety = request.local_safety
+    if direction is not None and safety is not None:
+        sector = _nearest_sector(safety.sectors, float(direction))
+        if sector is None or not sector.traversable:
+            direction = None
+    intent = result.preferred_intent
+    if intent is not None and intent not in PREFERRED_INTENTS:
+        intent = None
+    needs_recovery = recovery_required(request.recovery_context)
+    if needs_recovery:
+        intent = "RECOVER_THEN_EXPLORE"
+        preferred = None
+    return result.model_copy(
+        update={
+            "preferred_intent": intent,
+            "preferred_frontier_id": preferred,
+            "avoid_frontier_ids": avoid,
+            "requires_recovery_first": (
+                result.requires_recovery_first or needs_recovery
+            ),
+            "preferred_open_direction_deg": direction,
+        }
+    )
+
+
+def _nearest_sector(sectors: Any, bearing_deg: float) -> Any:
+    best = None
+    best_delta = 361.0
+    for sector in sectors:
+        delta = abs((float(sector.bearing_deg) - bearing_deg + 180.0) % 360.0 - 180.0)
+        if delta < best_delta:
+            best, best_delta = sector, delta
+    return best
 
 
 def _strategy_for_region(region: str) -> list[QuadrupedActionPrimitive]:

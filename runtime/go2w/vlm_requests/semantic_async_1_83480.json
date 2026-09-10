@@ -1,0 +1,173 @@
+{
+  "objects": [],
+  "scene_objects": [
+    {
+      "id": "obj_001",
+      "name": "chair",
+      "name_zh": "椅子",
+      "category": "furniture",
+      "color": "black",
+      "attributes": [
+        "front-center",
+        "key object"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "center",
+        "vertical": "middle",
+        "relative_to_robot": "front-center",
+        "estimated_distance_m": 1.1
+      },
+      "bbox_2d": {
+        "x1": 0.32,
+        "y1": 0.15,
+        "x2": 0.62,
+        "y2": 0.85
+      },
+      "confidence": 0.9
+    },
+    {
+      "id": "obj_002",
+      "name": "monitor",
+      "name_zh": "显示器",
+      "category": "electronics",
+      "color": "black",
+      "attributes": [
+        "on desk",
+        "left of chair"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "left of chair",
+        "estimated_distance_m": 1.2
+      },
+      "bbox_2d": {
+        "x1": 0.35,
+        "y1": 0.15,
+        "x2": 0.55,
+        "y2": 0.35
+      },
+      "confidence": 0.85
+    },
+    {
+      "id": "obj_003",
+      "name": "backpack",
+      "name_zh": "背包",
+      "category": "accessory",
+      "color": "gray",
+      "attributes": [
+        "hanging",
+        "left of chair"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "left of chair",
+        "estimated_distance_m": 1.3
+      },
+      "bbox_2d": {
+        "x1": 0.05,
+        "y1": 0.0,
+        "x2": 0.25,
+        "y2": 0.45
+      },
+      "confidence": 0.9
+    },
+    {
+      "id": "obj_004",
+      "name": "bin",
+      "name_zh": "垃圾桶",
+      "category": "container",
+      "color": "light blue",
+      "attributes": [
+        "on floor",
+        "left of chair"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "left",
+        "vertical": "middle",
+        "relative_to_robot": "left of chair",
+        "estimated_distance_m": 1.2
+      },
+      "bbox_2d": {
+        "x1": 0.22,
+        "y1": 0.6,
+        "x2": 0.32,
+        "y2": 0.78
+      },
+      "confidence": 0.8
+    },
+    {
+      "id": "obj_005",
+      "name": "desk",
+      "name_zh": "办公桌",
+      "category": "furniture",
+      "color": "white",
+      "attributes": [
+        "with monitor",
+        "behind chair"
+      ],
+      "visible": true,
+      "position": {
+        "horizontal": "center",
+        "vertical": "middle",
+        "relative_to_robot": "behind chair",
+        "estimated_distance_m": 1.1
+      },
+      "bbox_2d": {
+        "x1": 0.25,
+        "y1": 0.2,
+        "x2": 0.65,
+        "y2": 0.4
+      },
+      "confidence": 0.9
+    }
+  ],
+  "scene_relations": [
+    {
+      "source_id": "obj_002",
+      "target_id": "obj_001",
+      "relation_type": "on",
+      "description_zh": "显示器在椅子后方的桌子上",
+      "estimated_distance_m": null,
+      "confidence": 0.85
+    },
+    {
+      "source_id": "obj_003",
+      "target_id": "obj_001",
+      "relation_type": "left_of",
+      "description_zh": "背包挂在椅子左侧",
+      "estimated_distance_m": null,
+      "confidence": 0.9
+    },
+    {
+      "source_id": "obj_004",
+      "target_id": "obj_001",
+      "relation_type": "left_of",
+      "description_zh": "垃圾桶在椅子左侧",
+      "estimated_distance_m": null,
+      "confidence": 0.8
+    },
+    {
+      "source_id": "obj_005",
+      "target_id": "obj_001",
+      "relation_type": "behind",
+      "description_zh": "桌子在椅子后方",
+      "estimated_distance_m": null,
+      "confidence": 0.9
+    }
+  ],
+  "scene_summary_zh": "办公室隔间内有办公椅、显示器、背包和垃圾桶等物品",
+  "target_decision": {
+    "target_text": "白色垃圾桶",
+    "is_present": false,
+    "matched_object_ids": [],
+    "match_reason_zh": "目标白色垃圾桶未在画面中出现",
+    "confidence": 0.95
+  },
+  "all_objects_count": 5
+}

@@ -244,6 +244,12 @@ def run_session(params: dict[str, Any]) -> None:
         argv = build_argv(params)
         parser = rse.build_parser()
         args = parser.parse_args(argv)
+        # This worker invokes ``run_go2w`` directly instead of rse.main(), so
+        # apply the one normalization normally performed by main(). Without
+        # it ``--no-finish-on-visual-confirmation`` merely sets its auxiliary
+        # flag while the parser's legacy default remains True.
+        if args.no_finish_on_visual_confirmation:
+            args.finish_on_visual_confirmation = False
     except SystemExit as exc:
         _emit_stage("FAILED", state="failed", error=f"bad start params: {exc}")
         emit({
