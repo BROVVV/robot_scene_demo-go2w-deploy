@@ -196,6 +196,20 @@ def semantic_payload_from_quick_target_absence(
     }
 
 
+def local_detection_scene_objects(objects, profile, *, source_frame_id: str,
+                                  current_frame_id: str) -> list[dict[str, Any]]:
+    """Carry observed local context into semantics while full analysis is pending.
+
+    Use the same role/freshness partition as target selection. Local detections
+    are observations, not inferred relations; preserve their source frame so a
+    reused context slot is never relabelled as a current-frame measurement.
+    """
+    from app.perception.entity_roles import classify_roles
+    partition = classify_roles(objects, profile, source_frame_id=source_frame_id)
+    return [item for item in partition.scene_objects
+            if current_frame_id and str(item.get('entity_source_frame_id') or '') == current_frame_id]
+
+
 def _from_payload(payload: dict[str, Any], *, robot_pose: dict[str, Any] | None,
                   sector: int, now: float) -> SemanticObservation:
     raw_objects = list(payload.get("scene_objects") or payload.get("objects") or [])
@@ -223,6 +237,8 @@ def _from_payload(payload: dict[str, Any], *, robot_pose: dict[str, Any] | None,
             attributes=list(item.get("attributes") or []) + ([str(item["color"])] if item.get("color") else []),
             navigation_role=str(item.get("navigation_role") or "landmark"),
             is_landmark=True,
+            mask_rle=_mask_rle(item.get("mask_rle")),
+            mask_size=_mask_size(item.get("mask_size")),
         ))
     relations: list[FrameRelation] = []
     for item in raw_relations:
@@ -291,6 +307,10 @@ def semantic_observation_to_live(
     detections: list[dict[str, Any]],
     target_present: bool,
     target_state: str | None = None,
+    target_candidates: list[dict[str, Any]] | None = None,
+    relation_anchors: list[dict[str, Any]] | None = None,
+    views_source_frame_id: str | None = None,
+    scene_objects_source_frame_id: str | None = None,
     pose: dict[str, Any] | None,
     sensor_health: dict[str, Any] | None = None,
     timestamp: float | None = None,
@@ -330,13 +350,35 @@ def semantic_observation_to_live(
         ),
         scene_objects=list(semantic.objects),
         scene_relations=list(semantic.relations),
+        target_candidates=list(target_candidates or []),
+        relation_anchors=list(relation_anchors or []),
+        # 谁跟谁是同一帧的产物，必须写下来：`detections` / `target_candidates` /
+        # `relation_anchors` 是**同一次**前景检测的三份视图，`scene_objects` 来自
+        # 另一次后台全量检测。不写下来，下游就只能靠"4 位小数 bbox + label"的
+        # 哈希去猜同一实体 —— 那个猜法跨检测根本不成立（审查 P1-c）。
+        views_source_frame_id=str(views_source_frame_id or ""),
+        scene_objects_source_frame_id=str(
+            scene_objects_source_frame_id
+            if scene_objects_source_frame_id is not None
+            else (semantic.semantic_source_frame_id or "")
+        ),
         target_match={
             "target_present": bool(target_present),
             "target_state": normalize_target_state(
                 target_state,
                 default=("PRESENT" if target_present else semantic.target_state),
             ),
-            "score": max((item.get("score", 0.0) for item in detections), default=0.0),
+            # 目标分只在**目标候选**里取。此前是在全部 `detections` 上取最大值，
+            # 而 grounded_sam 那条路的 detections 混着 RAM 场景词 —— 于是
+            # "目标分"实际是"画面里最显眼那件东西的分"，与目标无关。
+            # 没有候选视图时（旧调用方）才回退到 detections。
+            "score": max(
+                (
+                    item.get("score", 0.0)
+                    for item in (detections if target_candidates is None else target_candidates)
+                ),
+                default=0.0,
+            ),
         },
         pose=pose,
         heading_sector=semantic.heading_sector,
@@ -387,6 +429,25 @@ def _bbox_horizontal(bbox: list[float] | None) -> str:
         return "unknown"
     center = (float(bbox[0]) + float(bbox[2])) / 2.0
     return "left" if center < 0.4 else "right" if center > 0.6 else "center"
+
+
+def _mask_rle(value: Any) -> list[list[int]] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    runs: list[list[int]] = []
+    for run in value:
+        if isinstance(run, list) and len(run) == 3:
+            runs.append([int(run[0]), int(run[1]), int(run[2])])
+    return runs or None
+
+
+def _mask_size(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        return (int(value[0]), int(value[1]))
+    except (TypeError, ValueError):
+        return None
 
 
 def _signature(observation: SemanticObservation) -> str:

@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>go2w_nav2_compat_msgs</name><version>1.1.20</version>
+  <description>Pinned Nav2 Spin action with duration, separately named for Foxy.</description>
+  <maintainer email="maintainer@example.com">RobotScene</maintainer><license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>rosidl_default_generators</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <depend>builtin_interfaces</depend><depend>action_msgs</depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

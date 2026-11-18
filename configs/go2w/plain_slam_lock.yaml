@@ -1,12 +1,24 @@
 # Dependency lock for the plain_slam_ros2 integration.
 #
-# The commit below is filled in by scripts/go2w/vendor_plain_slam_ros2.sh (or
-# manually) with the SHA actually checked out in ros2_ws/src/plain_slam_ros2.
 # Never guess a SHA in documentation; the lock is a record of what is built.
+#
+# ⚠ 两个 commit 不是一回事（2026-09-16 更正）。此前只有 `commit` 一个字段，
+#   而上面那句"a record of what is built"被读成"它就是实际检出的 SHA" ——
+#   实际不是：`commit` 记的是 2026-08-31 vendoring 当时 pull 到的上游基线，
+#   此后 `git apply` 上去的 Eigen 兼容补丁又被提交成了 4 个本地 commit。
+#
+#   commit     —— **上游可达**的基线。换机器复现必须用它，因为下一行的
+#                 repository 指向上游；把它换成 built_head 会 clone 不到。
+#   built_head —— 实际编译出来的那棵树 = 基线 + patches/plain_slam_ros2/*.patch
+#                 所形成的本地提交。只存在于本机对象库，上游没有。
+#
+# 两者都不够用时看每份地图自己的准数：provenance.json 的 plain_slam_commit
+# 由 save_plain_slam_map.sh 在存档那一刻现取，不依赖本文件是否新鲜。
 schema_version: 1
 plain_slam_ros2:
   repository: https://github.com/NaokiAkai/plain_slam_ros2.git
   commit: 0c4b610f6a486a906d51dd32e897bc787f67b208
+  built_head: 65a135f24ebb758c105d4a2dcdee9c1d7a606a9c
   vendored_at: 2026-08-31T03:45:00+08:00
   notes: >
     Academic/personal free use; commercial use requires the author's written

@@ -16,5 +16,6 @@ setup(
     maintainer_email="maintainer@example.invalid",
     description="Go2-W Twist to leased MotionCommand adapter",
     license="Apache-2.0",
-    entry_points={"console_scripts": ["bridge = go2w_cmd_vel_bridge.bridge_node:main"]},
+    entry_points={"console_scripts": ["bridge = go2w_cmd_vel_bridge.bridge_node:main",
+            "velocity_guard = go2w_cmd_vel_bridge.velocity_guard:main"]},
 )

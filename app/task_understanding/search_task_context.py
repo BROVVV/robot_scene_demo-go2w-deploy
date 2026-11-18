@@ -107,6 +107,60 @@ class SearchTaskContext:
         )
 
     @classmethod
+    def safe_navigation_fallback(
+        cls,
+        raw_text: str,
+        *,
+        task_id: str | None = None,
+        failure_reason: str = "task_understanding_unavailable",
+    ) -> "SearchTaskContext":
+        """Conservative production fallback for an explicit search command.
+
+        This is deliberately much narrower than the LLM task parser.  It only
+        admits a sentence whose first operation is an unambiguous visual
+        search/locate verb, and rejects contact, manipulation, harm and
+        person-following words anywhere in the request.  The fallback lets a
+        WebUI search remain usable during a reasoning-provider outage without
+        turning arbitrary natural language into robot motion.
+        """
+        text = str(raw_text or "").strip()
+        unsafe = (
+            "攻击", "伤害", "殴打", "揍", "杀", "撞人", "咬",
+            "拿取", "拿走", "搬运", "递送", "送给", "打开", "关闭",
+            "推开", "拉开", "破坏", "砸", "踢", "跟踪", "尾随",
+        )
+        prefix = re.compile(
+            r"^(?:(?:请|麻烦)(?:帮我)?|帮我|我想|我要)?\s*"
+            r"(?:寻找|搜索|查找|找到|定位)\s*(?P<target>.+?)\s*[。！？!?]*$"
+        )
+        match = prefix.match(text)
+        blocked = next((word for word in unsafe if word in text), None)
+        target = (match.group("target").strip() if match else "")
+        executable = bool(match and target and not blocked)
+        if blocked:
+            rejection = f"任务理解服务不可用，安全退化解析拒绝敏感动作：{blocked}"
+        elif not match or not target:
+            rejection = "任务理解服务不可用；安全退化模式只接受明确的寻找/搜索/定位任务"
+        else:
+            rejection = None
+        return cls(
+            task_id=task_id or f"task_{uuid4().hex[:12]}",
+            raw_text=text,
+            intent="search_semantic_target" if executable else "unknown",
+            canonical_target=target or text,
+            target_attributes={"category": "semantic_target", "attributes": []},
+            constraints=["no_contact", "stop_at_safe_observation_distance"],
+            executable=executable,
+            rejection_reason=rejection,
+            parsed_task={
+                "raw_task": text,
+                "canonical_target": target or text,
+                "parser_source": "production_safe_text_fallback",
+                "upstream_failure": str(failure_reason or "task_understanding_unavailable"),
+            },
+        )
+
+    @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "SearchTaskContext":
         return cls(
             task_id=str(value.get("task_id") or f"task_{uuid4().hex[:12]}"),

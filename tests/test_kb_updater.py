@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from app.knowledge import kb_store
 from app.knowledge.kb_updater import (
@@ -13,6 +14,7 @@ from app.knowledge.kb_updater import (
 )
 from app.reasoning.task_parser import parse_robot_task
 from app.schemas import KnowledgeAwareSceneResult, SceneAnalysisResult
+from app.task_understanding import llm_task_interpreter as _llm_interpreter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +25,17 @@ class KBUpdaterTest(unittest.TestCase):
         self.tmpdir = Path(tempfile.mkdtemp())
         shutil.copytree(ROOT / "data" / "scene_kb", self.tmpdir / "scene_kb")
         self.kb_dir = self.tmpdir / "scene_kb"
+        # §14-10 离线桩，与 tests/test_task_planner.py 那处同一个机制：
+        # 本文件三处 `parse_robot_task` 都不带 llm_client ⇒ 会打真实
+        # SiliconFlow（实测 16.2~16.4 秒/条）。断言的是**知识库写入**行为，
+        # 与 LLM 怎么解析任务无关。
+        patcher = mock.patch.object(
+            _llm_interpreter,
+            "_default_openai_client",
+            side_effect=RuntimeError("offline stub: real LLM disabled in tests"),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmpdir)

@@ -44,9 +44,11 @@ fi
 if [[ ! -f "$GO2W_ROS_SETUP" ]]; then
   _go2w_setup_fail "ROS 2 setup missing: ${GO2W_ROS_SETUP:-<none>} (set GO2W_ROS_SETUP)"
 fi
-[[ -f "$GO2W_UNITREE_ROOT/cyclonedds_ws/install/setup.bash" ]] || \
+export GO2W_UNITREE_SETUP="${GO2W_UNITREE_SETUP:-$GO2W_UNITREE_ROOT/cyclonedds_ws/install/setup.bash}"
+export GO2W_CONTROL_SETUP="${GO2W_CONTROL_SETUP:-$GO2W_CONTROL_ROOT/ros2_ws/install/setup.bash}"
+[[ -f "$GO2W_UNITREE_SETUP" ]] || \
   _go2w_setup_fail "Unitree message workspace missing"
-[[ -f "$GO2W_CONTROL_ROOT/ros2_ws/install/setup.bash" ]] || \
+[[ -f "$GO2W_CONTROL_SETUP" ]] || \
   _go2w_setup_fail "control workspace is not built"
 
 # The launcher is often invoked from a Conda/ROS1 shell.  Keep the control
@@ -61,9 +63,9 @@ set +u
 # shellcheck source=/dev/null
 source "$GO2W_ROS_SETUP"
 # shellcheck source=/dev/null
-source "$GO2W_UNITREE_ROOT/cyclonedds_ws/install/setup.bash"
+source "$GO2W_UNITREE_SETUP"
 # shellcheck source=/dev/null
-source "$GO2W_CONTROL_ROOT/ros2_ws/install/setup.bash"
+source "$GO2W_CONTROL_SETUP"
 set -u
 
 # Some ROS 2 setup files preserve legacy ROS 1 variables when this script is
@@ -103,15 +105,27 @@ export ROS_DOMAIN_ID=0
 _GO2W_CYCLONE_FILE="/tmp/go2w_cyclonedds_${UID}.xml"
 if [[ "$(uname -m)" == "aarch64" ]]; then
   # Jetson 真机（arm64）：foxy CycloneDDS 0.7.0 不识别 <Interfaces> 元素，
-  # 因此使用无 Interfaces、无组播、127.0.0.1 静态 peer 的兼容配置。保留
-  # ROS_LOCALHOST_ONLY=1，防止 Foxy 在没有 Interfaces 元素时随机选 eth0；
-  # 显式 loopback peer 保证新参与者之间的 action/service 数据面可用。SDK
-  # 独立进程只读采集 DCU 状态，再由本机 ROS relay 转发，避免在同一进程中
-  # 混用 Unitree SDK 与 Foxy CycloneDDS。
+  # 因此使用无 Interfaces、无组播、回环静态 peer 的兼容配置。保留
+  # ROS_LOCALHOST_ONLY=1；显式 loopback peer 保证新参与者之间的 action/service
+  # 数据面可用。SDK 独立进程只读采集 DCU 状态，再由本机 ROS relay 转发，避免
+  # 在同一进程中混用 Unitree SDK 与 Foxy CycloneDDS。
+  #
+  # 2026-10-08 实测：**必须显式写 <NetworkInterfaceAddress>127.0.0.1</...>**。
+  # 原配置靠 ROS_LOCALHOST_ONLY=1 让 rmw 注入 NetworkInterfaceAddress=localhost，
+  # 但本机 localhost 解析成 ::1，建域直接失败（日志：localhost: does not match
+  # an available interface），action server 反复重启。写死 127.0.0.1 后建域成功、
+  # action server 稳定。
+  #
+  # 该配置在 0.7.0 下只钉住"本参与者自己的地址"（数据 socket 绑 127.0.0.1），
+  # SPDP/单播 socket 仍绑 0.0.0.0，因此仍收得到 eth0 上外部参与者的发现报文，
+  # 而回包发不出去 → 持续刷 `ddsi_udp_conn_write ... retcode -3`（实测约 1.2 万行/分,
+  # 功能无影响但日志增长快）。反向亦然：外部参与者连不到本岛。
+  # eth0 侧进程（motion_network_proxy / network_low_state_capture）自己 source
+  # setup_environment.sh，走厂商 CycloneDDS，不受此处影响。
   export ROS_LOCALHOST_ONLY="${GO2W_ROS_LOCALHOST_ONLY:-1}"
   {
     printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
-    printf '%s\n' '<CycloneDDS xmlns="https://cdds.io/config"><Domain id="any"><General><AllowMulticast>false</AllowMulticast></General><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex><Peers><Peer Address="127.0.0.1"/></Peers></Discovery></Domain></CycloneDDS>'
+    printf '%s\n' '<CycloneDDS xmlns="https://cdds.io/config"><Domain id="any"><General><AllowMulticast>false</AllowMulticast><NetworkInterfaceAddress>127.0.0.1</NetworkInterfaceAddress></General><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex><Peers><Peer Address="127.0.0.1"/></Peers></Discovery></Domain></CycloneDDS>'
   } >"$_GO2W_CYCLONE_FILE"
 else
   # 工作站（x86_64，Ubuntu 22.04 官方 humble，CycloneDDS 0.10）：多播直连

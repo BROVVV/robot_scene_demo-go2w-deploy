@@ -9,8 +9,23 @@ from go2w_lidar_preprocessor.preprocess_core import (
     filter_points_base_link,
     laser_scan_ranges,
     rotation_observability_report,
+    sensor_header_fresh,
     transform_points,
 )
+
+
+def test_sensor_header_fresh_rejects_stale_and_future_scans():
+    now_ns = 1_791_967_800_000_000_000
+    common = {"now_ns": now_ns, "timeout_seconds": 0.3}
+    assert sensor_header_fresh(**common, stamp_sec=1_791_967_799,
+                               stamp_nanosec=750_000_000)
+    assert not sensor_header_fresh(**common, stamp_sec=1_791_967_799,
+                                   stamp_nanosec=690_000_000)
+    assert not sensor_header_fresh(**common, stamp_sec=1_791_967_365,
+                                   stamp_nanosec=0)
+    assert not sensor_header_fresh(**common, stamp_sec=1_791_967_800,
+                                   stamp_nanosec=100_000_000)
+    assert not sensor_header_fresh(**common, stamp_sec=0, stamp_nanosec=0)
 
 
 def parameters():
@@ -135,6 +150,41 @@ def test_clearance_uses_x_forward_and_y_left_after_base_link_transform():
     assert clearance.front == 0.7
     assert abs(clearance.left - math.hypot(0.4, 0.8)) < 1e-9
     assert abs(clearance.right - math.hypot(0.3, 0.6)) < 1e-9
+
+
+def test_clearance_ignores_planar_blind_radius_like_the_safety_scan():
+    p = parameters()
+    # The first return has a 3-D norm above minimum_range because it is low,
+    # but its XY projection is inside the same blind radius enforced by
+    # laser_scan_ranges.  It must not create a millimetre-scale forward stop.
+    obstacles = np.array(
+        [
+            [0.01, 0.29, -0.20],
+            [0.60, 0.00, 0.20],
+        ]
+    )
+    clearance = directional_clearance(obstacles, p)
+    assert clearance.front == 0.60
+    assert math.isinf(clearance.left)
+
+    ranges = laser_scan_ranges(
+        obstacles,
+        angle_min=-math.pi,
+        angle_max=math.pi,
+        angle_increment=math.pi / 180.0,
+        range_min=p.minimum_range,
+        range_max=p.maximum_range,
+    )
+    assert np.min(ranges[np.isfinite(ranges)]) == np.float32(0.60)
+
+
+def test_laser_scan_many_returns_in_one_bin_retain_nearest_and_unknown_bins():
+    distances=np.linspace(.3,6.,4000)[::-1]
+    points=np.column_stack((distances,np.zeros((len(distances),2))))
+    ranges=laser_scan_ranges(points,angle_min=-math.pi,angle_max=math.pi,
+        angle_increment=math.pi/360,range_min=.3,range_max=6.)
+    assert ranges[360]==np.float32(.3)
+    assert np.count_nonzero(np.isfinite(ranges))==1
 
 
 def test_laser_scan_keeps_nearest_obstacle_per_bin():

@@ -29,10 +29,24 @@ transform_candidate:
   rotation_rpy_deg:
     roll: 0.385
     pitch: 0.905
-    yaw: 11.357
-  source: hesai_pandarxt16_mount_candidate_20260813
+    yaw: 90.0
+  source: hesai_pandarxt16_axis_convention_20260915
   note: >
-    Seeded from the operator-photo + static cross-registration candidate only.
+    yaw corrected from the rejected 20260813 cross-registration value (11.357) to
+    90.0. The 11.357 figure came from a static dual-lidar registration that the
+    20260813 report itself rejects (median NN 0.3516 m, 13.54% within 0.10 m); it
+    is a failed measurement, not a calibration result. The correct yaw is
+    deterministic, not measured: the Hesai driver computes
+    x = d*cos(el)*sin(azi), y = d*cos(el)*cos(azi) (udp6_1_parser.h:162-165) while
+    Hesai defines azi=0 at the cable outlet and azi=180 as the front direction, so
+    the cloud's -y axis is the sensor front and the sensor frame needs Rz(+90) to
+    become a ROS frame. The driver applies no correction
+    (transform_flag: false, hesai_pandarxt16.yaml; TransformPoint() returns early
+    when use_flag is false, general_parser.h:561). Measured forward bearing in the
+    raw cloud is -90.00 deg (grid cross-correlation) / -90.60 deg (frame-wise ICP)
+    on bag lio_align_20260914_195708, i.e. the sensor is mounted correctly and the
+    cloud's +x points to the vehicle's left. roll/pitch remain the 20260813 ground
+    fit and are unchanged; translation is unchanged.
     Multi-scene calibration output from scripts/go2w/calibrate_pandarxt16_extrinsics.py
     must overwrite this file's transform fields and set confirmed=true before any
     authorizes_* flag may be raised.

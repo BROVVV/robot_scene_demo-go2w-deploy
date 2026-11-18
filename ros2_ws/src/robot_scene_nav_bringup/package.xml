@@ -1,12 +1,30 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>robot_scene_nav_bringup</name><version>0.1.0</version>
-  <description>Humble Nav2 baseline for robot_scene_demo.</description>
+  <description>Native Humble and Foxy Nav2 bringup for robot_scene_demo.</description>
   <maintainer email="maintainer@example.com">robot_scene_demo</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <exec_depend>nav2_bringup</exec_depend><exec_depend>nav2_collision_monitor</exec_depend>
   <exec_depend>nav2_map_server</exec_depend><exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend condition="$ROS_DISTRO == foxy">go2w_nav2_controller_compat</exec_depend>
+  <exec_depend condition="$ROS_DISTRO != foxy">nav2_behaviors</exec_depend>
+  <exec_depend condition="$ROS_DISTRO != foxy">nav2_regulated_pure_pursuit_controller</exec_depend>
+  <exec_depend condition="$ROS_DISTRO == foxy">nav2_recoveries</exec_depend>
+  <exec_depend condition="$ROS_DISTRO == foxy">go2w_regulated_pure_pursuit_controller</exec_depend>
+  <exec_depend condition="$ROS_DISTRO == foxy">go2w_nav2_spin_compat</exec_depend>
+  <exec_depend condition="$ROS_DISTRO == foxy">go2w_nav2_bt_compat</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend><exec_depend>nav2_velocity_smoother</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>go2w_cmd_vel_bridge</exec_depend>
+  <depend>slam_toolbox</depend><exec_depend>nav2_amcl</exec_depend>
+  <depend>boost</depend><depend>libtbb-dev</depend>
+  <depend>rclcpp</depend><depend>tf2_msgs</depend><depend>std_msgs</depend>
+  <exec_depend>rclpy</exec_depend><exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend><exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>go2w_mapping_interfaces</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

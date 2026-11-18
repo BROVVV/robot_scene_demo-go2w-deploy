@@ -1,0 +1,33 @@
+{
+  "repository": "https://github.com/ros-navigation/navigation2.git",
+  "foxy_tag": "0.4.7",
+  "foxy_commit": "a947ab5656e46ae3aa1afdf95e1706a16e478974",
+  "humble_tag": "1.1.20",
+  "humble_commit": "a097086719c88f781aa59788eca29ac6ca5e56db",
+  "base_files_sha256": {
+    "nav2_controller/src/nav2_controller.cpp": "964cb36f0d047eb01da69baaadd2610c7607bc252c7c4e4c75a0cdcfb911a802",
+    "nav2_controller/include/nav2_controller/nav2_controller.hpp": "f853f59a8ab3723efe10568c1ff97456e25a6356b9d4c7c5886a465b915847fa",
+    "nav2_controller/src/main.cpp": "46e49ec7335c3bb577d7c3485f1387debae2d0b6874d4f5ded12f1937404cf81",
+    "LICENSE": "e71fcb65bd31cdbdcf50cf43ab87a0c600ea3ec407495c2e15d1e68bc9c3bfc1"
+  },
+  "base_to_adapted": {
+    "nav2_controller/src/nav2_controller.cpp": "src/controller_server.cpp",
+    "nav2_controller/include/nav2_controller/nav2_controller.hpp": "include/go2w_nav2_controller_compat/controller_server.hpp",
+    "nav2_controller/src/main.cpp": "src/main.cpp",
+    "LICENSE": "LICENSE"
+  },
+  "reference_files_sha256": {
+    "nav2_controller/src/controller_server.cpp": "b9bc6dc7bb90602f65971d8c5eed2b73ffeaf5aa3e9ebd4ec1de3e725552d705",
+    "nav2_controller/include/nav2_controller/controller_server.hpp": "b607b9d512a830046b26130e240655098bac6c17ec6a5596d4f604a172237e09",
+    "nav2_util/include/nav2_util/geometry_utils.hpp": "3ed18883874edd3d29e1a5edc2170c517ae12dc21807d10f06d0a92418518230"
+  },
+  "scope": "20261109 candidate: native Foxy build, 30 policy/semantic cases, full isolated navigation/RPC chain and dedicated action/lifecycle faults passed; physical/downstream and loaded localization acceptance pending",
+  "foxy_context_files_sha256": {
+    "nav2_costmap_2d/include/nav2_costmap_2d/costmap_2d_ros.hpp": "3b0b461ba0e06fe46e2434431ac68112fba32dc12a085a0df7723ca21ab4e417",
+    "nav2_dwb_controller/nav_2d_utils/include/nav_2d_utils/tf_help.hpp": "b3773bae12de6c8c69e7c3dacaedd84c3afe05eb5915ce903a1c8189047c07cf",
+    "nav2_dwb_controller/nav_2d_utils/src/tf_help.cpp": "355fd56b809bb9bf08062908c8356a728fd2fc35d49dda3f91863d58de36ce40",
+    "nav2_util/include/nav2_util/simple_action_server.hpp": "e4bd9ab103785bad9175c90b7187c48626ef16a8c64a11bbbf6c769c09f988ce",
+    "nav2_controller/plugins/simple_progress_checker.cpp": "f40f64010e601ae3ccf295af1e8246b0c4fd989b6b910acd0dea5f17b4323c63",
+    "nav2_controller/include/nav2_controller/plugins/simple_progress_checker.hpp": "9115afd050d85c2aef2ead25a4c0bf7115183ec8bbb4647bab84b220c50ed915"
+  }
+}

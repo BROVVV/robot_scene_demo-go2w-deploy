@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
 
+from app.config import get_settings
+
 
 class SearchState(str, Enum):
     INITIALIZE = "INITIALIZE"
@@ -86,11 +88,17 @@ class SearchStateMachine:
         mode: SearchMode | str = SearchMode.OBSERVE_ONLY,
         *,
         motion_allowed: bool = False,
-        stop_settle_seconds: float = 0.8,
+        stop_settle_seconds: float | None = None,
     ) -> None:
         self.mode = SearchMode(mode)
         self.motion_allowed = bool(motion_allowed)
-        self.stop_settle_seconds = float(stop_settle_seconds)
+        # §15：None = 跟随 settings（默认仍是 0.8）。显式传值仍然是显式传值，
+        # 所以调用方原有行为不变。
+        self.stop_settle_seconds = float(
+            get_settings().go2w_perception_settle_seconds
+            if stop_settle_seconds is None
+            else stop_settle_seconds
+        )
         self.state = SearchState.INITIALIZE
         self.spatial_state = "target_2d_only"
         self.trace: list[dict[str, Any]] = []

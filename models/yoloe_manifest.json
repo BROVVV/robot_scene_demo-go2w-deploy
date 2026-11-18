@@ -1,0 +1,12 @@
+{
+  "backend": "yoloe_seg",
+  "model_id": "yoloe-26s-seg.pt",
+  "model_sha256": "48f24206bc8680d60cbbfa296b0140da849669b9515058b72f5a945142df0654",
+  "text_encoder": "mobileclip2_b.ts",
+  "text_encoder_sha256": "35d7f213e4d75f38514e4656ad3cb91158bd33e3805d8ac349f23b186f66982f",
+  "ultralytics_version": "8.4.190",
+  "clip_commit": "7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40",
+  "torch_version": "2.5.1+cu121",
+  "device_profile": "cuda:0/fp16",
+  "fallback_used": false
+}

@@ -247,7 +247,7 @@ def render_urdf(values: dict[str, float]) -> str:
     return "".join(elements)
 
 
-def render_official_sensor_urdf(reference: dict) -> str:
+def render_official_sensor_urdf(reference: dict, sensor_profile: dict | None = None) -> str:
     """Render only the two fixed transforms published by Unitree."""
 
     frames = reference["frames"]
@@ -275,4 +275,27 @@ def render_official_sensor_urdf(reference: dict) -> str:
         ),
         "</robot>",
     ]
+    if sensor_profile is not None:
+        # Retain the old mounting reference under its own name. The DDS cloud
+        # coordinates have an independently observed transform, not an assumed
+        # equality with the manufacturer's physical radar joint.
+        reference_xml="".join(elements).replace('utlidar_lidar','utlidar_mount_reference')
+        # Go2-W runs ROS 2 Foxy on Python 3.8, where ``str.removesuffix`` is not
+        # available.  The reference loader already guarantees a closing robot
+        # tag, so use slicing to keep the generated URDF identical on Foxy and
+        # Humble.
+        closing_tag = '</robot>'
+        elements=[
+            reference_xml[:-len(closing_tag)]
+            if reference_xml.endswith(closing_tag)
+            else reference_xml
+        ]
+        for key in ('base_to_cloud','base_to_camera'):
+            record=sensor_profile['frames'][key]
+            elements.extend([f'<link name="{record["child"]}"/>',_fixed_joint(
+                key+'_recorded_estimate',record['parent'],record['child'],
+                record['translation_m'],record['rotation_rpy_rad'])])
+        elements.extend(['<link name="d435_color_optical_frame"/>',_fixed_joint(
+            'front_camera_optical_alias','front_camera_optical_frame','d435_color_optical_frame',
+            [0.,0.,0.],[0.,0.,0.]),'</robot>'])
     return "".join(elements)

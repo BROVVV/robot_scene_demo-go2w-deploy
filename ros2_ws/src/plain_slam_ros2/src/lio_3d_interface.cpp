@@ -185,9 +185,22 @@ void LIO3DInterface::SetScanCloud(
 
   // Save prev state and preintegration
   const State prev_state = imu_state_;
+  // [GO2W-DIAG-R8] 去畸变实效统计
+  float dsk_max = 0.0f, dsk_mean = 0.0f;
+  size_t dsk_zero = 0;
   if (relevant_imu_measures.size() > 0) {
     preintegrator_.Preintegration(relevant_imu_measures, imu_state_, imu_state_cov_);
+    const PointCloud3f dsk_before = scan_cloud_;
     preintegrator_.DeskewScanCloud(imu_state_, relevant_imu_measures, scan_stamps_, scan_cloud_);
+    double dsk_sum = 0.0;
+    for (size_t i = 0; i < scan_cloud_.size(); ++i) {
+      const float d = (scan_cloud_[i] - dsk_before[i]).norm();
+      if (d > dsk_max) dsk_max = d;
+      dsk_sum += d;
+      if (d == 0.0f) ++dsk_zero;
+    }
+    dsk_mean = scan_cloud_.empty() ? 0.0f
+      : static_cast<float>(dsk_sum / static_cast<double>(scan_cloud_.size()));
   }
 
   const State pred_state = imu_state_;
@@ -218,6 +231,36 @@ void LIO3DInterface::SetScanCloud(
       // return;
     }
     active_points_rate = joint_optimizer_.GetActivePointsRate();
+  }
+
+  // [GO2W-DIAG] 每帧配准健康度诊断（定位旋转漂移根因用）
+  {
+    const float R2D = 180.0f / static_cast<float>(M_PI);
+    // IMU 预积分给出的帧间增量
+    const Sophus::SE3f dT_pre = prev_state.T.inverse() * pred_state.T;
+    // 配准对预积分先验的修正量
+    const Sophus::SE3f dT_fix = pred_state.T.inverse() * imu_state_.T;
+    // 配准后真实的帧间增量
+    const Sophus::SE3f dT_act = prev_state.T.inverse() * imu_state_.T;
+    const Eigen::Vector3f pos = imu_state_.T.translation();
+    Eigen::Vector3f gyro = Eigen::Vector3f::Zero();
+    if (!relevant_imu_measures.empty()) {
+      gyro = relevant_imu_measures[relevant_imu_measures.size() / 2].gyro - imu_state_.gb;
+    }
+    printf("[GO2W-DIAG] imu_n=%3zu pt=%.4f w=%.3f act=%.3f iter=%zu eps=%.4f "
+      "dsk_max=%.4f dsk_mean=%.4f dsk_zero=%zu "
+      "pre_t=%.4f pre_r=%.3f fix_t=%.4f fix_r=%.3f act_t=%.4f act_r=%.3f "
+      "v=%.3f pos=(%.3f,%.3f,%.3f) ab=%.3f gb=%.4f scan_n=%zu\n",
+      relevant_imu_measures.size(), preint_time, gyro.norm(), active_points_rate,
+      hg_observer_.GetLastIterNum(), hg_observer_.GetLastEpsilon(),
+      dsk_max, dsk_mean, dsk_zero,
+      dT_pre.translation().norm(), dT_pre.so3().log().norm() * R2D,
+      dT_fix.translation().norm(), dT_fix.so3().log().norm() * R2D,
+      dT_act.translation().norm(), dT_act.so3().log().norm() * R2D,
+      imu_state_.v.norm(), pos.x(), pos.y(), pos.z(),
+      imu_state_.ab.norm(), imu_state_.gb.norm(),
+      scan_cloud_.size());
+    fflush(stdout);
   }
 
   // PrintState(imu_state_);
@@ -276,6 +319,19 @@ void LIO3DInterface::SetIMUMeasure(const IMUMeasure& measure) {
       const Eigen::Vector3f t = imu_state_.T.translation();
       imu_state_.T = Sophus::SE3f(R, t);
       gravity_estimation_enabled_ = false;
+
+      // The IMU odometry state is integrated independently from the LIO
+      // state.  It must enter the same gravity-aligned world frame at the
+      // exact moment gravity initialization finishes.  Leaving it at the
+      // identity rotation makes a stationary Go2-W accelerometer (whose
+      // gravity vector is not aligned with +Z in the sensor frame) look like
+      // a constant horizontal acceleration and causes the odometry to
+      // diverge before the first scan can correct it.
+      {
+        std::lock_guard<std::mutex> lock(imu_mutex_);
+        imu_odom_state_ = imu_state_;
+        imu_odom_state_cov_ = imu_state_cov_;
+      }
     } else {
       g_estimator_.EstimateGravityDirec(m);
       return;

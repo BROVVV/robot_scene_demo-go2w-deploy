@@ -14,10 +14,12 @@ from typing import Any
 from uuid import uuid4
 
 from app.navigation.models import (
+    GOAL_NAVIGATE_POSE,
     GOAL_RELATIVE_MOVE,
     GOAL_ROTATE_VIEW,
     ExplorationGoal,
 )
+from app.navigation.robot_backend import RobotCapabilities
 from app.spatial.models import MovementEdge
 from app.spatial.place_graph import PlaceGraph
 from app.spatial.topological_frontier import TopologicalFrontier
@@ -147,6 +149,7 @@ class TopologyRouteExecutor:
 
     max_turn_deg: float = 30.0
     forward_step_m: float = 0.3
+    max_metric_step_m: float | None = None
     # Frontier bearings are recomputed from every BEV frame, so the target angle
     # moves with the robot's own heading and the residual flips sign every cycle
     # while decaying by ~0.8.  Measured search_20260902_172911: cycle 4 starts at
@@ -165,9 +168,21 @@ class TopologyRouteExecutor:
         current_yaw_deg: float = 0.0,
         capabilities: Any = None,
         frontier: TopologicalFrontier | None = None,
+        current_position: tuple[float, float] | None = None,
     ) -> ExplorationGoal | None:
         if not route or not route.place_path:
             return None
+        # 计划书 §6.7：Nav2 模式下这条路径也只产出地图系 NAVIGATE_POSE。
+        # 拓扑路线的两个分支原本都是相对动作（原地转 + 前进一段），留着它们
+        # 就等于给「不经过 Nav2 的位移」留了一条旁路。
+        if getattr(capabilities, "supports_metric_navigation", False):
+            return self._metric_goal(
+                route=route,
+                place_graph=place_graph,
+                current_yaw_deg=current_yaw_deg,
+                current_position=current_position,
+                frontier=frontier,
+            )
         if len(route.place_path) < 2:
             # Same-place frontier: rotate toward the frontier bearing.
             if route.target_frontier_id is not None:
@@ -182,10 +197,14 @@ class TopologyRouteExecutor:
                         semantic_reason="same-place frontier rotate",
                         provenance={"route": route.to_dict()},
                     )
+                distance = frontier.local_distance_hint_m if frontier is not None else None
+                distance = min(self.forward_step_m, 0.30) if distance is None else float(distance)
+                if not math.isfinite(distance) or distance <= 0:
+                    return None
                 return ExplorationGoal(
                     goal_id=f"route_move_{route.route_id}",
                     goal_type=GOAL_RELATIVE_MOVE,
-                    relative_dx=self.forward_step_m,
+                    relative_dx=min(self.forward_step_m, distance),
                     semantic_reason="same-place frontier advance",
                     provenance={"route": route.to_dict()},
                 )
@@ -220,6 +239,54 @@ class TopologyRouteExecutor:
             goal_id=f"route_move_{route.route_id}",
             goal_type=GOAL_RELATIVE_MOVE,
             relative_dx=min(self.forward_step_m, edge.observed_displacement_m or self.forward_step_m),
+            semantic_reason=f"execute first edge {edge.edge_id} -> {to_id}",
+            provenance={"route": route.to_dict(), "edge": edge.to_dict()},
+        )
+
+    def _metric_goal(
+        self,
+        *,
+        route: TopologicalRoute,
+        place_graph: PlaceGraph,
+        current_yaw_deg: float,
+        current_position: tuple[float, float] | None,
+        frontier: TopologicalFrontier | None,
+    ) -> ExplorationGoal | None:
+        """计划书 §6.7：把一条拓扑边表达成地图系 ``NAVIGATE_POSE``。
+
+        拿不到地图系目标位姿时返回 ``None``（让上层换候选或交给
+        ``LocalGoalExecutor``），绝不退回「按朝向盲走一段」——那正是计划书
+        要求消失的那条旁路。
+        """
+        if len(route.place_path) < 2:
+            # There is no topological edge to execute. Let LocalGoalExecutor
+            # use the intent's actual map position; Nav2 owns path following
+            # and any necessary heading change. A bearing-only turn here
+            # repeatedly selected a blocked rotation despite forward routes.
+            return None
+        from_id = route.place_path[0]
+        to_id = route.place_path[1]
+        edge = self._find_edge(place_graph, from_id, to_id)
+        if edge is None:
+            return None
+        target_place = place_graph.places.get(to_id)
+        if target_place is None or target_place.pose is None:
+            return None
+        target = (float(target_place.pose.x), float(target_place.pose.y))
+        if self.max_metric_step_m is not None:
+            if current_position is None or target_place.pose.frame_id != "map":
+                return None
+            dx, dy = target[0] - current_position[0], target[1] - current_position[1]
+            distance = math.hypot(dx, dy)
+            if distance > self.max_metric_step_m:
+                scale = self.max_metric_step_m / distance
+                target = (current_position[0]+dx*scale, current_position[1]+dy*scale)
+        return ExplorationGoal(
+            goal_id=f"route_move_{route.route_id}",
+            goal_type=GOAL_NAVIGATE_POSE,
+            position=target,
+            yaw=math.degrees(float(target_place.pose.yaw)),
+            frame="map",
             semantic_reason=f"execute first edge {edge.edge_id} -> {to_id}",
             provenance={"route": route.to_dict(), "edge": edge.to_dict()},
         )

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "status": "candidate_not_installed_or_native_verified",
+  "package": "polars",
+  "version": "0.20.31",
+  "wheel": "polars-0.20.31-cp38-abi3-manylinux_2_24_aarch64.whl",
+  "sha256": "87f43bce4d41abf8c8c5658d881e4b8378e5c61010a696bfea8b4106b908e916",
+  "url": "https://files.pythonhosted.org/packages/72/6a/6bf5da56542ae976140dd30be950149146c361eb8dd6471fdb6d50ae7581/polars-0.20.31-cp38-abi3-manylinux_2_24_aarch64.whl",
+  "metadata_url": "https://pypi.org/pypi/polars/0.20.31/json",
+  "python_version": "3.8.10",
+  "wheel_tag": "cp38-abi3-manylinux_2_24_aarch64",
+  "elf_machine": 183,
+  "ultralytics_version": "8.4.190",
+  "ultralytics_wheel": "ultralytics-8.4.190-py3-none-any.whl",
+  "ultralytics_sha256": "bd309728efa168af64d39040136828edd2dbcb4aeceb4510bdff4f3ca0ea01b8",
+  "ultralytics_polars_requirement": "polars>=0.20.0",
+  "native_import_and_exports_pending": true,
+  "full_ml_environment_lock_complete": false
+}

@@ -132,3 +132,15 @@ def test_max_rotations_zero_disables_local_scan():
     )
     assert goal_fields is None
     assert state.steps == 0
+
+
+def test_bounded_trial_cannot_generate_thirty_or_sixty_degree_scan():
+    goal,state=select_local_scan_goal(current_yaw_deg=0., max_local_rotations=3,
+        max_turn_deg=10., heading_coverage={})
+    assert goal is not None and goal['relative_dyaw']==10.
+    assert goal['provenance']['delta_deg']==10.
+    # Ten degrees still rounds to sector zero: never claim sector one seen.
+    assert goal['heading_sector']==0 and state.last_sector==0
+    goal,state=select_local_scan_goal(current_yaw_deg=0., max_local_rotations=3,
+        max_turn_deg=10.,heading_coverage={'0':1})
+    assert goal is None and state.steps==0

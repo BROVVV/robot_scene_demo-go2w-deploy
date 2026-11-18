@@ -1,0 +1,40 @@
+/go2w/slam/map_3d:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 5
+/go2w/slam/odom_base:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 50
+/go2w/slam/aligned_scan:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 10
+/go2w/rko_slam/map_3d:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 5
+/go2w/rko_slam/odom_base:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 50
+/go2w/rko_slam/aligned_scan:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 10
+/go2w/rko_slam/deskewed_scan:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 5
+/go2w/odom/fused:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 50

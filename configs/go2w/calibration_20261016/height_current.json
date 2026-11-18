@@ -1,0 +1,81 @@
+{
+  "scope": "kinematic estimate with side-photo posture crosscheck; not measured calibration",
+  "urdf_sha256": "f5940cbef9be28b76c075a94ed535c9c8c22c89a79b54ec8c854dc9f023c1ab8",
+  "posture_captured_at_unix": 1792136278.2609122,
+  "wheel_nominal_radius_m": 0.0889,
+  "legs": [
+    {
+      "leg": "FR",
+      "joint_angles_deg": [
+        3.2158477216333483,
+        40.21163566289911,
+        -78.89995472577779
+      ],
+      "axle_xyz_in_level_base_m": [
+        0.22450569092789846,
+        -0.0595758299797449,
+        -0.3443450560641641
+      ],
+      "inferred_base_height_m": 0.43308577571779994
+    },
+    {
+      "leg": "FL",
+      "joint_angles_deg": [
+        0.8244431064082666,
+        39.89763820637529,
+        -75.80632982424724
+      ],
+      "axle_xyz_in_level_base_m": [
+        0.13953712568847904,
+        0.19660862133757268,
+        -0.344520903620436
+      ],
+      "inferred_base_height_m": 0.43340628976630435
+    },
+    {
+      "leg": "RR",
+      "joint_angles_deg": [
+        -2.264597884415564,
+        39.69055028583509,
+        -74.74192680437079
+      ],
+      "axle_xyz_in_level_base_m": [
+        -0.14614900011053045,
+        -0.20502177952554462,
+        -0.3460944999569189
+      ],
+      "inferred_base_height_m": 0.43493759571860885
+    },
+    {
+      "leg": "RL",
+      "joint_angles_deg": [
+        -1.1303553265020903,
+        41.25531247373916,
+        -77.07166334912712
+      ],
+      "axle_xyz_in_level_base_m": [
+        -0.23155262715155653,
+        0.0730929962351958,
+        -0.345343958550241
+      ],
+      "inferred_base_height_m": 0.4342326004287072
+    }
+  ],
+  "four_leg_height_spread_m": 0.0018518200008089125,
+  "base_height_m": 0.4338194450975058,
+  "radar_vertical_offset_m": -0.04636475766767118,
+  "lidar_center_height_m": 0.38745468742983463,
+  "practical_estimate_interval_m": [
+    0.35745468742983466,
+    0.4174546874298346
+  ],
+  "interval_kind": "engineering allowance, not statistical confidence interval",
+  "assumptions": [
+    "level floor",
+    "all four wheels in contact",
+    "official link geometry and SDK joint zero/order",
+    "nominal 7-inch tire diameter; compression and wheel lateral offsets not calibrated"
+  ],
+  "authorizes_motion": false,
+  "writes_safety_configuration": false
+}

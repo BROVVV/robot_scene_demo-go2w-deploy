@@ -29,10 +29,10 @@ def test_translation_creates_new_place():
     graph.register_observation(
         observation_id="obs_0", heading_sector=0, objects=[], pose=SpatialPose(x=0, y=0)
     )
-    # 0.5m is beyond the default 0.35m merge radius -> a new Place.
+    # 0.8m is beyond the default 0.6m merge radius -> a new Place.
     place_id, created = graph.register_observation(
         observation_id="obs_1", heading_sector=0, objects=[],
-        pose=SpatialPose(x=0.5, y=0.0),
+        pose=SpatialPose(x=0.8, y=0.0),
     )
     assert created is True
     assert place_id == "P2"
@@ -111,3 +111,18 @@ def test_place_pose_fusion_running_mean():
     assert place.pose_mean is not None
     assert abs(place.pose_mean.yaw - 5.0) < 1.0
     assert abs(place.pose_mean.x - 0.05) < 0.02
+
+
+def test_break_continuity_does_not_connect_across_pose_loss():
+    graph = PlaceGraph(merge_distance_m=0.5)
+    graph.register_observation(
+        observation_id="a", heading_sector=0, objects=[],
+        pose=SpatialPose(x=0.0, y=0.0), timestamp=1.0,
+    )
+    graph.break_continuity()
+    graph.register_observation(
+        observation_id="b", heading_sector=0, objects=[],
+        pose=SpatialPose(x=5.0, y=0.0), timestamp=30.0,
+    )
+    assert len(graph.places) == 2
+    assert graph.edges == []

@@ -1,0 +1,40 @@
+{
+  "kind": "real_robot_short_distance_working_command",
+  "test_date": "2026-10-27",
+  "robot_boot_id": "f30c3baa-058e-48c5-866e-e8057756bfe5",
+  "requested_translation_m": 0.25,
+  "speed_command_validated": true,
+  "physical_goal_succeeded": false,
+  "navigation_terminal_status": "cancelled",
+  "navigation_cancel_reason": "trial_turn_limit",
+  "working_linear_command_mps": 0.30,
+  "wheel_net_translation_m": 0.18721448863090578,
+  "map_net_translation_m": 0.24786907102126893,
+  "velocity_peaks": {
+    "/cmd_vel_nav_raw": 0.30,
+    "/cmd_vel_nav_smoothed": 0.30,
+    "/cmd_vel_nav_guarded": 0.30,
+    "/go2w/nav2_cmd_vel": 0.30,
+    "/go2w/cmd_vel_selected": 0.30
+  },
+  "sdk_move_peak_mps": 0.30,
+  "sdk_move_samples_at_peak": 6,
+  "sdk_move_status_codes_zero": true,
+  "sdk_stop_verified_stationary": true,
+  "software_arm_at_end": false,
+  "gateway_error_code_at_end": 0,
+  "large_field_motion_validated": false,
+  "limitations": [
+    "This validates the 0.30 m/s command path during one short supervised straight run, not unattended or large-field operation.",
+    "The Nav2 goal was cancelled by the independent cumulative-turn trial guard after the requested translation was approximately reached.",
+    "The cancelled goal is not represented as a successful navigation acceptance."
+  ],
+  "sources": {
+    "outputs/autonomous_search/runtime/nav2_speed_calibration_030_retry2_live.json": "77d8662625ef6dd235e577647d3d0e97959c06640ba4cae16b6c1a9e05d105fc",
+    "outputs/autonomous_search/runtime/nav2_speed_calibration_030_retry2_20261027.json": "1e20978b098a284682451d6b3296e5ff64ce5de55dd6b80cec728c4d5d5d2580",
+    "unitree_go2w_control/logs/20261027_183711/goal_06bd1030526749f7a61a0deb2b6fae3e/requests.jsonl": "586895b043227ebd039e09223a8a871daf572786029a1e2ec2a13209b6a210a6",
+    "unitree_go2w_control/logs/20261027_183711/goal_06bd1030526749f7a61a0deb2b6fae3e/result.json": "13cb9c262b14ebb86f2785581b6cb16199501da06f16237c3098ad0354c95e93",
+    "unitree_go2w_control/logs/20261027_183711/goal_41d47e9e0f164d3eb7b611327f85c4ce/requests.jsonl": "00d9f77be31bce59f787213c7e8cf324ec0a0385d842400851e9144f21319173",
+    "unitree_go2w_control/logs/20261027_183711/goal_41d47e9e0f164d3eb7b611327f85c4ce/result.json": "5e26ad22bbe50cb282668634023489e3b5c5f84dc2fa67f37d2390669cca6875"
+  }
+}

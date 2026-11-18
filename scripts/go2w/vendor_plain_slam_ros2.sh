@@ -88,7 +88,16 @@ if grep -q 'PENDING_VENDOR_FILL_ME' "${lock_file}"; then
     -e "s|vendored_at: PENDING_VENDOR_FILL_ME|vendored_at: $(date -Iseconds)|" \
     "${lock_file}"
 fi
+
+# built_head every run, not only when the placeholders are empty: it is the tree
+# that actually gets compiled, and it moves whenever upstream or the patch set
+# changes.  `commit` above stays the upstream base on purpose (see the lock
+# file header) so that a fresh clone can still reach it.
+built_head="$(git -C "${plain_slam_dir}" rev-parse HEAD)"
+sed -i "s|^  built_head:.*|  built_head: ${built_head}|" "${lock_file}"
 printf 'Lock file: %s\n' "${lock_file}"
+printf '  commit (upstream base): %s\n' "${commit}"
+printf '  built_head (compiled) : %s\n' "${built_head}"
 
 # ---------------------------------------------------------------------------
 # 3. Sophus (idempotent)

@@ -129,6 +129,8 @@ def is_stable_anchor(obj: SceneObject) -> bool:
 def infer_object_source(obj: SceneObject) -> EvidenceSource:
     if obj.crop_verify:
         return EvidenceSource.CROP_VERIFY
+    if any("yoloe" in str(attribute).lower() for attribute in obj.attributes):
+        return EvidenceSource.YOLOE_SEG
     if obj.mask_area_ratio is not None:
         return EvidenceSource.SAM2_MASK
     if obj.detector_score is not None:

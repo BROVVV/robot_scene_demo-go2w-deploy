@@ -1,0 +1,81 @@
+# Operator-Supervised Experiment Profile — 大场地档 (Go2-W).
+#
+# 与 ``high_level_experiment.yaml`` 同源，只放宽"能走多远"，不放宽任何闸门：
+# 总时长和运动次数不限，活动范围为距会话起点 5 m；单个前进目标上限 3 m，
+# 可按目标距离缩短。
+# 当前后端为 Nav2；首次规划路径和速度桥的轮式里程累计都受单目标 3 m
+# 上限约束，动态绕行/回退同样计入，预留停车余量。下个目标重新握手计程，
+# 不限制会话总步数。旧实验后端的 ≤0.30 m 切片不是 Nav2 的执行方式。
+#
+# 谁选这一档：只有启动器。``scripts/go2w/start_autonomous_search_web.sh
+# --supervised-legacy-search --legacy-profile field_large`` 会把它写进
+# ``GO2W_LEGACY_SEARCH_MOTION_PROFILE``；请求体选不了、也放宽不了
+# （``autonomous_search_worker._LEGACY_MOTION_PROFILES``）。
+#
+# 注意：本文件里 ``exploration.budget`` 段对 WebUI 这条路**不生效** ——
+# 真实预算是 worker 按档位表通过 ``--max-seconds`` 等参数传下去的。
+
+profile: operator_supervised_experiment_large_field
+
+purpose:
+  production_safe: false
+  research_only: true
+  operator_present: true
+
+backend:
+  type: nav2
+
+high_level:
+  semantic_reasoning: true
+  reasoner: semantic_navigation
+  continuous_exploration: true
+
+manual_calibration_requirements:
+  required: false
+
+production_readiness:
+  stage2_readiness_required: false
+  pandar_extrinsic_required: false
+  dual_lidar_validation_required: false
+  four_direction_physical_evidence_required: false
+  nav2_gate_required: false
+
+automatic_checks:
+  motion_action_available: true
+  robot_mode_error_check: true
+  pose_freshness_if_available: true
+  camera_freshness: true
+  emergency_stop_available: true
+  stop_on_backend_error: true
+
+limits:
+  max_turn_deg: 30
+  max_forward_step_m: 3.0
+  max_radius_m: 5.0          # 会话起点 5 m 半径；目标数量与总时长仍不限
+  front_half_plane_only: false
+  turn_only: false
+
+motion_primitives:
+  FORWARD: true
+  ROTATE_LEFT: true
+  ROTATE_RIGHT: true
+  REVERSE: false
+  LATERAL: false
+
+execution:
+  stop_after_each_step: true
+  reobserve_after_motion: true
+  # 2026-10-14 的短程实测（见 reports/go2w_legacy_web_search_restore_20261014.md）：
+  # 1.5 倍时长补偿下 0.20 m 请求实测 0.2196 m、0.15 m 请求实测 0.1995 m，即
+  # 比值 1.10–1.33。大场地档同样取 1.0 —— 宁可少走（每段约 0.22 m），也不要
+  # 越过用户给的"每次前进不超过 3 m"。少走的量由后续目标补回来（次数不限）。
+  forward_command_duration_scale: 1.0
+
+# 仅供离线直连 CLI 时参考；WebUI 路径的预算由 worker 的档位表决定。
+exploration:
+  budget:
+    max_search_seconds: 0  # 不设会话总时限；单条动作/感知超时仍生效
+    max_planning_cycles: 0
+    max_motion_steps: 0
+  candidates:
+    heading_sectors: 12

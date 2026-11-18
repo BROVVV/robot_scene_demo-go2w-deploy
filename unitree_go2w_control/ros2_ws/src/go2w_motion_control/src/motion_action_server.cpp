@@ -64,6 +64,26 @@ MotionActionServer::MotionActionServer(const rclcpp::NodeOptions &options)
         motion_name_ = msg->data;
         motion_name_time_ = std::chrono::steady_clock::now();
       });
+  velocity_stream_sub_ = create_subscription<std_msgs::msg::String>(
+      "/go2w/motion/velocity_update", rclcpp::QoS(1).best_effort(),
+      [this](const std_msgs::msg::String::SharedPtr msg) {
+        if (msg->data.size()>1024) return;
+        try {
+          const auto p=nlohmann::json::parse(msg->data);
+          if (p.at("version").get<int>()!=1) return;
+          const StreamVelocity command{p.at("vx").get<double>(),p.at("vy").get<double>(),
+                                       p.at("yaw_rate").get<double>()};
+          if (std::abs(command.vx)>parameters_.goal_limits.max_abs_vx+1e-6 ||
+              std::abs(command.vy)>parameters_.goal_limits.max_abs_vy+1e-6 ||
+              std::abs(command.yaw)>parameters_.goal_limits.max_abs_yaw_rate_timed+1e-6) return;
+          const double received=std::chrono::duration<double>(
+              std::chrono::steady_clock::now().time_since_epoch()).count();
+          std::lock_guard<std::mutex> lock(velocity_stream_mutex_);
+          velocity_stream_.update(p.at("token").get<std::string>(),
+              command,
+              p.at("stamp").get<double>(),now().seconds(),received);
+        } catch (const std::exception &) { /* invalid input cannot renew */ }
+      });
 
   action_group_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   arm_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -151,7 +171,7 @@ MotionActionServer::Parameters MotionActionServer::LoadParameters() {
   p.final_stationary_timeout_sec =
       declare_parameter<double>("final_stationary_timeout_sec", 3.0);
   declare_parameter<bool>("reject_concurrent_goals", true);
-  p.goal_limits.max_abs_vx = declare_parameter<double>("max_abs_vx", 0.20);
+  p.goal_limits.max_abs_vx = declare_parameter<double>("max_abs_vx", 0.30);
   p.goal_limits.max_abs_vy = declare_parameter<double>("max_abs_vy", 0.0);
   p.goal_limits.max_abs_yaw_rate_timed =
       declare_parameter<double>("max_abs_yaw_rate_timed", 0.20);
@@ -171,7 +191,7 @@ MotionActionServer::Parameters MotionActionServer::LoadParameters() {
       declare_parameter<double>("stationary_max_abs_yaw_rate", 0.03);
   p.stationary_stable_samples =
       declare_parameter<int>("stationary_stable_samples", 5);
-  p.timed_refresh_hz = declare_parameter<double>("timed_refresh_hz", 2.0);
+  p.timed_refresh_hz = declare_parameter<double>("timed_refresh_hz", 20.0);
   p.turn_control_hz = declare_parameter<double>("turn_control_hz", 20.0);
   p.turn_publish_max_hz =
       declare_parameter<double>("turn_publish_max_hz", 5.0);
@@ -521,6 +541,34 @@ void MotionActionServer::RunTimedVelocity(
   }
 }
 
+void MotionActionServer::RunStreamingVelocity(
+    const std::shared_ptr<GoalHandle> &goal_handle, ExecutionState &execution,
+    const std::shared_ptr<GoalLogger> &logger) {
+  const auto goal=goal_handle->get_goal();
+  while (true) {
+    CheckRuntimeSafety(goal_handle,logger);
+    const auto at=std::chrono::steady_clock::now();
+    execution.elapsed_sec=std::chrono::duration<float>(at-execution.started).count();
+    if (execution.elapsed_sec>=goal->timeout_sec) break;  // finite stream renewal
+    std::optional<StreamVelocity> command;
+    {
+      std::lock_guard<std::mutex> lock(velocity_stream_mutex_);
+      command=velocity_stream_.current(std::chrono::duration<double>(at.time_since_epoch()).count(),
+                                      goal->duration_sec);
+    }
+    if (!command) throw MotionFailure{MotionCommand::Result::ERROR_TIMEOUT,
+        "velocity stream update expired",false};
+    const auto response=sport_client_->SendMove(command->vx,command->vy,command->yaw,
+        std::chrono::milliseconds(100));
+    execution.last_move_status=response.status_code;
+    if (!response.response_received || response.status_code!=0)
+      throw MotionFailure{MotionCommand::Result::ERROR_MOVE_REJECTED,
+          "stream Move RPC failed",false};
+    PublishFeedback(goal_handle,execution,0,0,0,logger);
+    std::this_thread::sleep_for(50ms);
+  }
+}
+
 void MotionActionServer::RunRelativeYaw(
     const std::shared_ptr<GoalHandle> &goal_handle, ExecutionState &execution,
     const std::shared_ptr<GoalLogger> &logger) {
@@ -742,6 +790,11 @@ void MotionActionServer::RunRelativeYaw(
 void MotionActionServer::Execute(
     const std::shared_ptr<GoalHandle> goal_handle, const std::string &goal_id) {
   const auto goal = goal_handle->get_goal();
+  {
+    std::lock_guard<std::mutex> lock(velocity_stream_mutex_);
+    velocity_stream_.reset(goal->mode==MotionCommand::Goal::MODE_STREAMING_VELOCITY
+        ? goal->velocity_stream_token : "");
+  }
   nlohmann::json goal_json = {{"goal_id", goal_id},
                               {"mode", goal->mode},
                               {"vx", goal->vx},
@@ -792,6 +845,8 @@ void MotionActionServer::Execute(
     execution.started = std::chrono::steady_clock::now();
     if (goal->mode == MotionCommand::Goal::MODE_TIMED_VELOCITY) {
       RunTimedVelocity(goal_handle, execution, logger);
+    } else if (goal->mode == MotionCommand::Goal::MODE_STREAMING_VELOCITY) {
+      RunStreamingVelocity(goal_handle, execution, logger);
     } else {
       RunRelativeYaw(goal_handle, execution, logger);
     }
@@ -804,6 +859,10 @@ void MotionActionServer::Execute(
     logger->LogSafety("exception", caught.what());
   }
 
+  {
+    std::lock_guard<std::mutex> lock(velocity_stream_mutex_);
+    velocity_stream_.reset("");
+  }
   const bool stopped =
       StopAndVerify("final", &execution.last_stop_status, logger);
   const auto final_state = state_monitor_->Snapshot();

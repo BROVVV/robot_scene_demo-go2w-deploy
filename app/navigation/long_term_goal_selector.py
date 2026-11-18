@@ -68,6 +68,7 @@ class LongTermGoalSelector:
         observation_memory_weight: float = 0.10,
         commonsense_weight: float = 0.10,
         traversal_failure_penalty: float = 0.15,
+        blacklist_penalty_weight: float = 0.6,
     ) -> None:
         self.psg_weights = {
             MATCH_ZERO: psg_zero_weight,
@@ -90,6 +91,14 @@ class LongTermGoalSelector:
             "observation_memory": float(observation_memory_weight),
             "commonsense": float(commonsense_weight),
             "traversal_failure": float(traversal_failure_penalty),
+            # 2026-10-14：``SpatialMemory.blacklist`` 在整份代码里原本**零消费者**
+            # —— ``mark_frontier_visited`` 也是零调用点，所以"试过但到不了的前沿
+            # 会被拉黑"这条链两端都断着。这里补上唯一的读取点。
+            # 注意是**扣分**不是**剔除**：候选集里少了前沿会让
+            # ``run_semantic_exploration`` 的 ``reachable_frontier_count`` 变小，
+            # 而那个数喂给 ``_classify_empty_candidates`` 决定 PLANNING_ERROR 还是
+            # SEARCH_EXHAUSTED —— 硬过滤会把"只剩一个前沿的房间"判成搜索穷尽。
+            "blacklist": float(blacklist_penalty_weight),
         }
 
     def select(
@@ -99,21 +108,48 @@ class LongTermGoalSelector:
         frontiers: list[FrontierCandidate],
         place_graph: PlaceGraph | None = None,
         semantic_map: SemanticObjectMap | None = None,
+        target_object_ids: list[str] | None = None,
         psg_prior: SemanticPrior | None = None,
         frontier_memory: dict[str, dict[str, Any]] | None = None,
         route_costs: dict[str, dict[str, Any]] | None = None,
         semantic_relevance: dict[str, float] | None = None,
         current_yaw_deg: float = 0.0,
+        current_position: tuple[float, float] | None = None,
         memory_context: dict[str, Any] | None = None,
         common_sense: dict[str, Any] | None = None,
+        preferred_candidate_id: str | None = None,
     ) -> ScoredIntent | None:
         match_state = match_state.upper()
+        unbound_match_state = None
         if match_state in {MATCH_STRONG, MATCH_VERIFY}:
-            return self._select_verify(semantic_map=semantic_map, match_state=match_state)
-        if match_state == MATCH_PARTIAL and psg_prior is not None and psg_prior.region_hypotheses:
+            verified_direction = self._select_verify(
+                semantic_map=semantic_map, match_state=match_state,
+                target_object_ids=target_object_ids or [],
+                current_yaw_deg=current_yaw_deg, current_position=current_position,
+            )
+            if verified_direction is not None:
+                return verified_direction
+            # A graph label alone is not an identified current target. Keep
+            # exploring observed frontiers rather than manufacturing a target
+            # bearing or failing despite reachable space remaining.
+            unbound_match_state, match_state = match_state, MATCH_ZERO
+        if (
+            preferred_candidate_id is None
+            and match_state == MATCH_PARTIAL
+            and psg_prior is not None
+            and psg_prior.region_hypotheses
+        ):
             return self._select_anchor_region(psg_prior)
-        return self._select_frontier(
-            frontiers=frontiers,
+        eligible_frontiers = frontiers
+        if preferred_candidate_id is not None:
+            preferred = [
+                item for item in frontiers
+                if item.frontier_id == str(preferred_candidate_id)
+            ]
+            if preferred:
+                eligible_frontiers = preferred
+        selected = self._select_frontier(
+            frontiers=eligible_frontiers,
             match_state=match_state,
             place_graph=place_graph,
             psg_prior=psg_prior,
@@ -123,6 +159,22 @@ class LongTermGoalSelector:
             current_yaw_deg=current_yaw_deg,
             memory_context=memory_context or {},
             common_sense=common_sense or {},
+        )
+        if selected is not None and unbound_match_state is not None:
+            selected.intent.provenance['unbound_target_match_state'] = unbound_match_state
+            selected.reasons.append('no current identified target; explore observed frontier')
+        return selected
+
+    def rank_frontiers(self, *, frontiers: list[FrontierCandidate], **kwargs: Any) -> list[ScoredIntent]:
+        """Rank program-generated candidates without changing their geometry."""
+        ranked = [
+            self._select_frontier(frontiers=[frontier], **kwargs)
+            for frontier in frontiers
+        ]
+        return sorted(
+            (item for item in ranked if item is not None),
+            key=lambda item: item.score,
+            reverse=True,
         )
 
     def _select_frontier(
@@ -232,12 +284,23 @@ class LongTermGoalSelector:
             components["commonsense_prior"] = cs_prior
 
             # Traversal failures along the route should lower the score.
+            #
+            # 键名修正在 2026-10-14：``frontier_memory`` 来自
+            # ``SpatialMemory.frontiers[*].to_dict()``，它写的是 ``fail_count``；
+            # 这里读 ``failure_count`` 于是**恒为 0**（那个键属于拓扑前沿
+            # ``frontier:{place}:{sector}`` 的另一套命名空间，不是这一套）。
             failure_penalty = min(
                 1.0,
                 float(route_info.get("failure_count", 0) or 0) * 0.3
-                + float(memory.get("failure_count", 0) or 0) * 0.3,
+                + float(memory.get("fail_count", 0) or 0) * 0.3,
             )
             components["traversal_failure_penalty"] = failure_penalty
+
+            # 被拉黑的前沿：扣一大笔分，但**留在候选集里**。留下是刻意的——
+            # 候选集少一个前沿会让 reachable_frontier_count 变小，那正是
+            # "卡住"被误判成"穷尽"的入口。
+            blacklisted = 1.0 if memory.get("blacklisted") else 0.0
+            components["blacklist_penalty"] = blacklisted
 
             score = (
                 self.weights["semantic_relevance"] * components["semantic_relevance"]
@@ -252,6 +315,7 @@ class LongTermGoalSelector:
                 - self.weights["visited_penalty"] * components["visited_penalty"]
                 - self.weights["negative_evidence"] * components["negative_evidence_penalty"]
                 - self.weights["traversal_failure"] * components["traversal_failure_penalty"]
+                - self.weights["blacklist"] * components["blacklist_penalty"]
             )
             reasons = []
             if semantic > 0:
@@ -274,6 +338,8 @@ class LongTermGoalSelector:
                 reasons.append(f"common sense {cs_prior:.2f}")
             if failure_penalty > 0:
                 reasons.append(f"traversal failure {failure_penalty:.2f}")
+            if blacklisted > 0:
+                reasons.append(f"blacklisted frontier {-self.weights['blacklist']:.2f}")
             intent = ExplorationIntent(
                 intent_id=f"intent_{len(scored) + 1:03d}",
                 intent_type=INTENT_EXPLORE_FRONTIER,
@@ -287,6 +353,9 @@ class LongTermGoalSelector:
                 travel_cost=route_cost,
                 provenance={
                     "frontier": frontier.to_dict(),
+                    "source": str(
+                        (frontier.provenance or {}).get("source") or "frontier"
+                    ),
                     "match_state": match_state,
                     "route_plan": route_info,
                     "current_place_id": current_place_id,
@@ -326,21 +395,37 @@ class LongTermGoalSelector:
             reasons=["PARTIAL match", "anchor spatially located", "PSG region"],
         )
 
-    def _select_verify(self, *, semantic_map: SemanticObjectMap | None, match_state: str) -> ScoredIntent:
+    def _select_verify(
+        self, *, semantic_map: SemanticObjectMap | None, match_state: str,
+        target_object_ids: list[str],
+        current_yaw_deg: float, current_position: tuple[float, float] | None,
+    ) -> ScoredIntent | None:
         intent_type = INTENT_VERIFY_TARGET if match_state == MATCH_VERIFY else INTENT_APPROACH_TARGET
-        bearing = None
-        object_id = None
-        confidence = 0.9
-        if semantic_map is not None:
-            best = max(
-                semantic_map.objects.values(),
-                key=lambda item: item.confidence,
-                default=None,
-            )
-            if best is not None:
-                bearing = best.bearing_deg
-                object_id = best.object_id
-                confidence = best.confidence
+        # Graph strength does not identify a persistent object. In particular,
+        # the highest-scoring scene object can be an unrelated chair or anchor.
+        # Missing target identity must not manufacture a navigation bearing.
+        allowed = set(target_object_ids)
+        best = max(
+            (item for item in semantic_map.objects.values()
+             if item.object_id in allowed and item.status not in {"STALE", "REJECTED"}
+             and math.isfinite(item.confidence)
+             and item.bearing_deg is not None and math.isfinite(item.bearing_deg)),
+            key=lambda item: item.confidence, default=None,
+        ) if semantic_map is not None else None
+        if best is None:
+            return None
+        object_id, confidence = best.object_id, best.confidence
+        if (current_position is not None and best.map_xyz is not None
+                and best.provenance.get('map_frame') == 'map'
+                and all(math.isfinite(v) for v in (*current_position, *best.map_xyz))):
+            bearing = math.degrees(math.atan2(best.map_xyz[1]-current_position[1],
+                                             best.map_xyz[0]-current_position[0]))
+            bearing_source = 'current_map_position_to_target'
+        else:
+            # Depth-localizer bearing is camera optical +x (RIGHT), whereas
+            # navigation yaw is +z (LEFT). A forward camera gives yaw-bearing.
+            bearing = (current_yaw_deg-best.bearing_deg+180.) % 360.-180.
+            bearing_source = 'optical_bearing_forward_camera_assumption'
         intent = ExplorationIntent(
             intent_id="intent_verify_target",
             intent_type=intent_type,
@@ -351,7 +436,8 @@ class LongTermGoalSelector:
             psg_score=0.0,
             spatial_gain=0.0,
             travel_cost=0.0,
-            provenance={"source": "semantic_navigation_v2", "match_state": match_state},
+            provenance={"source": "semantic_navigation_v2", "match_state": match_state,
+                        "bearing_source": bearing_source},
         )
         return ScoredIntent(
             intent,

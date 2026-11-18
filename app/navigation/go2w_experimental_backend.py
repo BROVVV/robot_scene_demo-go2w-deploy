@@ -46,6 +46,13 @@ class Go2WBackendConfig:
     turn_confirm_tolerance_deg: float = 8.0
     forward_step_m: float = 0.20
     max_forward_step_m: float = 0.30
+    # Optional trial-only observed displacement ceiling.  The action server's
+    # requested distance can overshoot in wheel odometry; stop the sequence
+    # and fail the goal if a finished segment crosses this ceiling.
+    max_observed_forward_m: float | None = None
+    # Session-wide physical primitive attempt cap, including corrective turns
+    # and recovery. A logical navigation goal can consume several primitives.
+    max_motion_commands: int = 0
     allow_lateral: bool = False
     motion_timeout_sec: float = 60.0
     # Opportunistic request-vs-observed correction learning (never a blocker).
@@ -72,6 +79,24 @@ GO2W_OPERATOR_SUPERVISED_PRIMITIVES = (
     "BACKWARD_RECOVERY",
     "ROTATE_LEFT",
     "ROTATE_RIGHT",
+)
+
+#: 相对后端的支撑能力，唯一真值来源。理由同
+#: ``nav2_search_backend.NAV2_CAPABILITIES``：启动自检要在后端实例建起来之前
+#: 按后端**种类**出报告，所以不能把这张表写在 ``capabilities()`` 里面。
+GO2W_EXPERIMENTAL_CAPABILITIES = RobotCapabilities(
+    supports_global_pose=False,
+    supports_metric_navigation=False,
+    supports_relative_translation=True,
+    supports_relative_rotation=True,
+    supports_heading_control=True,
+    supports_navigation_cancel=True,
+    supports_navigation_feedback=True,
+    supports_platform_obstacle_avoidance=False,
+    emergency_collision_stop_supported=False,
+    clearance_aware_navigation_supported=True,
+    autonomous_obstacle_bypass_supported=False,
+    allowed_motion_primitives=GO2W_OPERATOR_SUPERVISED_PRIMITIVES,
 )
 
 
@@ -105,7 +130,8 @@ class Go2WExperimentalBackend(RobotBackend):
         config: Go2WBackendConfig | None = None,
         now: Callable[[], float] = time.time,
     ) -> None:
-        self._execute_step = execute_step
+        self._step_executor = execute_step
+        self._motion_command_attempts = 0
         self._odometry = odometry
         self._stop = stop or (lambda: None)
         self._cancel = cancel or (lambda: None)
@@ -117,23 +143,25 @@ class Go2WExperimentalBackend(RobotBackend):
         self._executed_goals: list[dict[str, Any]] = []
         self._last_health: dict[str, Any] = field(default_factory=dict)
 
+    def _execute_step(self, step: str) -> tuple[bool, str, dict[str, Any]]:
+        cap = max(0, int(self.config.max_motion_commands))
+        if cap and self._motion_command_attempts >= cap:
+            self.stop()
+            return False, "MOTION_COMMAND_LIMIT_REACHED", {
+                "error_type": "MOTION_COMMAND_LIMIT_REACHED",
+                "attempts": self._motion_command_attempts,
+                "limit": cap,
+                "step": step,
+            }
+        # Count attempts before dispatch: a failed/indeterminate command must
+        # never refund permission to move again.
+        self._motion_command_attempts += 1
+        return self._step_executor(step)
+
     # ---- RobotBackend -----------------------------------------------------
 
     def capabilities(self) -> RobotCapabilities:
-        return RobotCapabilities(
-            supports_global_pose=False,
-            supports_metric_navigation=False,
-            supports_relative_translation=True,
-            supports_relative_rotation=True,
-            supports_heading_control=True,
-            supports_navigation_cancel=True,
-            supports_navigation_feedback=True,
-            supports_platform_obstacle_avoidance=False,
-            emergency_collision_stop_supported=False,
-            clearance_aware_navigation_supported=True,
-            autonomous_obstacle_bypass_supported=False,
-            allowed_motion_primitives=GO2W_OPERATOR_SUPERVISED_PRIMITIVES,
-        )
+        return GO2W_EXPERIMENTAL_CAPABILITIES
 
     def get_pose(self) -> RobotPose | None:
         try:
@@ -637,6 +665,22 @@ class Go2WExperimentalBackend(RobotBackend):
                     f"forward segment {len(segments)} failed"
                 )
                 detail = segment_detail
+                break
+            segment_pose = self._odometry()
+            observed_so_far = math.hypot(
+                segment_pose[0] - before[0], segment_pose[1] - before[1],
+            )
+            limit = self.config.max_observed_forward_m
+            if limit is not None and observed_so_far > limit:
+                ok = False
+                reason = (
+                    f"FORWARD_OVERSHOOT: observed {observed_so_far:.3f}m "
+                    f"> {limit:.3f}m trial limit"
+                )
+                detail = {"error_type": "FORWARD_OVERSHOOT",
+                          "observed_distance_m": observed_so_far,
+                          "limit_m": limit}
+                self._stop()
                 break
             remaining -= segment_m
         elapsed = max(0.0, self._now() - started)

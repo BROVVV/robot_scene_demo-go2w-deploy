@@ -70,6 +70,25 @@ class DecisionRecord:
     hard_safety_rejections: list[dict[str, Any]] = field(default_factory=list)
     recovery_decision: dict[str, Any] | None = None
     target_approach: dict[str, Any] | None = None
+    # Coherent world-version envelope shared with the semantic selector's
+    # StructuredDecisionRecord.  These fields remain optional for legacy
+    # replay rows but are populated by the production explorer.
+    snapshot_id: str | None = None
+    map_id: str | None = None
+    map_epoch: str | None = None
+    graph_revision: int | None = None
+    grid_revision: int | None = None
+    semantic_revision: int | None = None
+    sensor_profile_id: str | None = None
+    source_observation_ids: list[str] = field(default_factory=list)
+    evidence_age_ms: float | None = None
+    candidates: list[dict[str, Any]] = field(default_factory=list)
+    selected_candidate_id: str | None = None
+    downstream_selected_id: str | None = None
+    downstream_rejection: str | None = None
+    execution_result: dict[str, Any] | None = None
+    arrival_verified: bool = False
+    target_verified: bool = False
 
     @classmethod
     def create(
@@ -122,6 +141,8 @@ class DecisionRecord:
         requested_motion: dict[str, Any] | None = None,
         observed_motion: dict[str, Any] | None = None,
         replan_reason: str | None = None,
+        arrival_verified: bool | None = None,
+        target_verified: bool | None = None,
     ) -> "DecisionRecord":
         values = asdict(self)
         values.update(
@@ -131,6 +152,13 @@ class DecisionRecord:
                 "requested_motion": requested_motion if requested_motion is not None else self.requested_motion,
                 "observed_motion": observed_motion if observed_motion is not None else self.observed_motion,
                 "replan_reason": replan_reason,
+                "execution_result": {"status": status, "message": message},
+                "arrival_verified": (
+                    self.arrival_verified if arrival_verified is None else bool(arrival_verified)
+                ),
+                "target_verified": (
+                    self.target_verified if target_verified is None else bool(target_verified)
+                ),
             }
         )
         return type(self)(**values)

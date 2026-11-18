@@ -31,6 +31,8 @@ class FrameObject:
     is_obstacle: bool = False
     is_landmark: bool = False
     evidence_type: str = "visual"
+    mask_rle: list[list[int]] | None = None
+    mask_size: tuple[int, int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

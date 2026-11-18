@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
+from app.config import get_settings
 from app.live_robot.ui_status import blockers_for_mode, load_live_ui_status
 from streamlit.testing.v1 import AppTest
 
@@ -25,6 +26,11 @@ class Go2wLiveUiStatusTest(unittest.TestCase):
         self.assertIn("operator_not_armed", blockers)
 
     def test_streamlit_live_mode_shows_fail_closed_controls(self):
+        # get_settings 带 lru_cache：先跑过的用例会把「真实环境里有 API key」的
+        # settings 留在进程里，这条用例的 SILICONFLOW_API_KEY="" 就失效，app 会
+        # 走完整工作区并在启动时打两次真实 LLM（实测 43.9 s）撞破 30 s 超时。
+        get_settings.cache_clear()
+        self.addCleanup(get_settings.cache_clear)
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(
                 "os.environ",
@@ -33,7 +39,10 @@ class Go2wLiveUiStatusTest(unittest.TestCase):
                     "GO2W_FRAME_SPOOL_DIR": str(Path(directory) / "spool"),
                 },
             ):
-                app = AppTest.from_file("streamlit_app.py", default_timeout=30).run()
+                app = AppTest.from_file(
+                    str(Path(__file__).resolve().parents[1] / "streamlit_app.py"),
+                    default_timeout=30,
+                ).run()
                 app.radio[0].set_value("Go2-W 实时目标搜索").run(timeout=30)
         self.assertEqual(len(app.exception), 0)
         self.assertIn("实时搜索模式", [item.label for item in app.selectbox])

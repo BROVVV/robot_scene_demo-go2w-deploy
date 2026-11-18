@@ -31,6 +31,39 @@ body {
 }
 
 .hidden { display: none !important; }
+.mapping-alert { margin: 8px 16px; padding: 10px 14px; border: 1px solid #ef4444; border-radius: 6px; background: #4b1c24; color: #fff; font-weight: 700; }
+.mapping-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 8px 16px; color: var(--muted); }
+.mapping-tools b.fixed { color: #38bdf8; }
+.mapping-tools b.semi { color: #fb923c; }
+.mapping-tools b.hazard, .mapping-hazard { color: #f87171; }
+.mapping-tools button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+.runtime-admin-tools {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: 8px 16px; padding: 9px 12px; border: 1px solid var(--border);
+  border-radius: 7px; background: var(--panel); color: var(--muted);
+}
+.runtime-admin-tools button {
+  border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px;
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+}
+.runtime-admin-tools button:disabled { opacity: .55; cursor: wait; }
+.runtime-admin-tools .danger-outline { border-color: #ef4444; color: #fca5a5; }
+.runtime-admin-tools .sub { font-size: 12px; }
+.mapping-mode #search-target, .mapping-mode #btn-search-start,
+.mapping-mode #search-active-controls, .mapping-mode .search-advanced { display: none !important; }
+.mapping-evidence { display: block; max-width: 100%; max-height: 180px; margin-top: 8px; border-radius: 4px; }
+.mapping-target-watch { margin: 8px 16px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.target-watch-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.target-watch-head small { color: var(--muted); }
+.target-watch-badge { margin-left: 10px; padding: 2px 7px; border-radius: 999px; background: #334155; color: #e2e8f0; font-size: 12px; }
+.target-watch-badge[data-state="VERIFYING"] { background: #1d4ed8; }
+.target-watch-badge[data-state="CONFIRMED"] { background: #15803d; }
+.target-watch-badge[data-state="REJECTED"] { background: #4b5563; }
+.target-watch-badge[data-state="UNKNOWN"], .target-watch-badge[data-state="DEGRADED"] { background: #9a3412; }
+.target-watch-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.target-watch-controls input { flex: 1 1 320px; min-width: 220px; padding: 8px 10px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; }
+.target-watch-controls button { padding: 7px 10px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; }
+.target-watch-summary { margin-top: 10px; color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
 
 /* ---------- top bar ---------- */
 .topbar {
@@ -141,6 +174,18 @@ td.empty { color: var(--muted); text-align: center; }
   word-break: break-all;
 }
 
+/* ---------- 实体遥控器只读模式 ---------- */
+/* 后端已经在 API/WS 入口硬挡（403 / 拒收），这里的置灰只是让操作员一眼看出
+   "这一块现在按不动"，并且不去点它。绝不能只靠 CSS —— 它挡不住 curl。 */
+.display-only-banner {
+  background: rgba(56, 189, 248, 0.14); border: 1px solid var(--accent);
+  color: var(--text); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px;
+  font-weight: 700;
+}
+.control-bar.display-only {
+  opacity: 0.45; filter: grayscale(0.6); pointer-events: none;
+}
+
 /* ---------- control bar ---------- */
 .control-bar {
   display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
@@ -225,6 +270,8 @@ button.disable {
 .search-advanced { color: var(--muted); font-size: 12px; }
 .search-advanced summary { cursor: pointer; user-select: none; }
 .search-advanced .debug-toggle { margin: 8px 4px 2px; }
+.detector-select { display: flex; align-items: center; gap: 6px; margin: 8px 4px 4px; }
+.detector-select select { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 5px; }
 #search-target {
   flex: 1; min-width: 280px;
   background: var(--panel-2); color: var(--text);
@@ -280,9 +327,26 @@ button.danger { background: var(--yellow) !important; color: #1a1200 !important;
 .cell-decision { grid-area: decision; }
 .cell-map { grid-area: map; }
 .cell-slam3d { grid-area: slam3d; }
+.cell-map2d { grid-area: slam3d; }
+.slam2d-wrap { position: relative; width: 100%; height: 380px; overflow: hidden;
+  border-radius: 6px; background: #101923; border: 1px solid #1e3446; }
+#slam-map-2d { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+.slam2d-state { position: absolute; left: 10px; top: 9px; padding: 4px 8px;
+  color: #bbf7d0; background: rgba(7, 15, 24, .8); border-radius: 5px; font-size: 11px; pointer-events: none; }
+.slam2d-state.stale { color: #fbbf24; }
+.slam2d-legend { margin-top: 6px; font-size: 11px; color: #cbd5e1; }
 .cell-timeline { grid-area: timeline; }
 .cell-history { grid-area: history; }
 .cell-debug { grid-area: debug; }
+.web-3d-disabled .search-layout {
+  grid-template-areas:
+    "camera status decision"
+    "camera obs decision"
+    "camera obs timeline"
+    "map map timeline"
+    "history history timeline"
+    "debug debug debug";
+}
 
 .search-history { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .history-item {
@@ -294,8 +358,54 @@ button.danger { background: var(--yellow) !important; color: #1a1200 !important;
 .history-item .history-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
 .history-item .history-result { float: right; color: var(--accent); }
 
+/* ---- search replay panel (history detail) ---------------------------- */
+.replay-panel {
+  margin-top: 10px; border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px; background: var(--panel-2); display: flex;
+  flex-direction: column; gap: 8px;
+}
+.replay-panel.hidden { display: none; }
+.replay-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.replay-head .replay-title { font-weight: 700; font-size: 13px; }
+.replay-head .sub { color: var(--muted); font-size: 12px; }
+.replay-speeds { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.replay-speed, .replay-link {
+  border: 1px solid var(--border); background: transparent; color: var(--text);
+  border-radius: 6px; padding: 3px 9px; cursor: pointer; font-size: 12px;
+  text-decoration: none; line-height: 1.6;
+}
+.replay-speed:hover, .replay-link:hover { border-color: var(--accent); }
+.replay-speed.active { border-color: var(--accent); color: var(--accent); }
+.replay-video { width: 100%; max-height: 460px; border-radius: 6px; background: #000; }
+.replay-video.hidden { display: none; }
+.replay-placeholder { font-size: 12px; line-height: 1.6; }
+.replay-reasons {
+  font-size: 12px; line-height: 1.6; color: #e8be5c;
+  border-left: 2px solid #e8be5c; padding-left: 8px;
+}
+.replay-reasons.hidden { display: none; }
+.replay-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.replay-link.hidden { display: none; }
+
 .cell-title { font-weight: 700; font-size: 13px; color: var(--muted); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cell-title .sub { font-weight: 400; }
+.camera-record-controls { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; }
+.camera-record-controls button {
+  border: 1px solid var(--border); border-radius: 5px; padding: 4px 9px;
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+}
+.camera-record-controls button:hover { border-color: var(--accent); }
+.camera-record-controls button.danger { border-color: var(--red); color: #fecaca; }
+.camera-record-controls button:disabled { opacity: .55; cursor: wait; }
+#camera-record-status.recording { color: #f87171; font-weight: 700; }
+.camera-record-downloads { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.camera-record-downloads.hidden { display: none; }
+.camera-record-download {
+  border: 1px solid var(--accent); border-radius: 5px; padding: 3px 7px;
+  color: var(--accent); text-decoration: none; font-size: 11px; font-weight: 600;
+  white-space: nowrap;
+}
+.camera-record-download:hover { background: rgba(56, 189, 248, .12); }
 
 /* camera + canvas overlay */
 .cell-camera .camera-wrap { aspect-ratio: 16 / 9; max-height: 420px; }
@@ -335,8 +445,44 @@ button.danger { background: var(--yellow) !important; color: #1a1200 !important;
 .task-understanding { font-size: 12px; line-height: 1.55; color: var(--muted); max-height: 150px; overflow-y: auto; }
 .task-understanding b { color: var(--text); }
 .decision-history { font-size: 12px; line-height: 1.45; max-height: 150px; overflow-y: auto; }
-.decision-history-row { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px dashed var(--border); padding: 3px 0; }
+.decision-history-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; border-bottom: 1px dashed var(--border); padding: 3px 0; }
 .decision-history-row .cnt { color: var(--muted); white-space: nowrap; }
+/* §5.4：Agent 依据独占一行，不挤占原有的「指令 / decision id」两列。 */
+.decision-history-agent { flex-basis: 100%; color: var(--muted); font-size: 11px; }
+
+/* 任务 Agent 解释层（计划书 §5）。它是解释层：字号比主候选区小一号，
+   不抢"下一步决策 / 地图 / 安全状态"的视觉权重。 */
+.agent-safety, .agent-choice, .agent-downstream, .agent-plan,
+.agent-inputs, .agent-uncertainties { font-size: 12px; line-height: 1.5; }
+.agent-kv { display: flex; gap: 8px; padding: 1px 0; }
+.agent-kv .k { color: var(--muted); flex: 0 0 66px; }
+.agent-kv .v { min-width: 0; word-break: break-word; }
+.agent-badge {
+  display: inline-block; background: var(--yellow); color: #101418;
+  font-weight: 700; border-radius: 4px; padding: 0 6px; margin-right: 6px;
+}
+.agent-badge.live { background: var(--panel-2); color: var(--muted); font-weight: 400; }
+.agent-schema { color: var(--muted); font-size: 11px; }
+/* 计划状态一律"图标 + 文字"，不靠颜色单独表意（§5.2）。 */
+.agent-plan-row { display: flex; gap: 6px; padding: 1px 0; }
+.agent-plan-row.active { font-weight: 700; }
+.agent-plan-row .agent-status { flex: 0 0 auto; color: var(--muted); }
+.agent-plan-row.active .agent-status { color: var(--accent); }
+.agent-detail { color: var(--muted); }
+.agent-active-subtask { margin-top: 3px; color: var(--accent); }
+.agent-note { color: var(--muted); font-size: 11px; margin-top: 3px; }
+.agent-note.warn { color: var(--yellow); }
+.agent-cands { max-height: 220px; overflow: auto; }
+.agent-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.agent-table th {
+  text-align: left; color: var(--muted); font-weight: 400;
+  border-bottom: 1px solid var(--border); padding: 2px 4px; white-space: nowrap;
+}
+.agent-table td { border-bottom: 1px dashed var(--border); padding: 2px 4px; vertical-align: top; }
+.agent-table tr.selected td { color: var(--accent); font-weight: 700; }
+.agent-table .agent-rank { font-family: ui-monospace, Menlo, Consolas, monospace; white-space: nowrap; }
+.agent-know { border-bottom: 1px dashed var(--border); padding: 3px 0; }
+.agent-status { color: var(--muted); font-size: 11px; }
 
 /* candidates */
 #dec-candidates .cand { border-bottom: 1px dashed var(--border); padding: 3px 0; font-size: 12px; }
@@ -427,10 +573,18 @@ button.danger { background: var(--yellow) !important; color: #1a1200 !important;
       "debug debug";
   }
   .manual-layout { grid-template-columns: 1fr; }
+  .web-3d-disabled .search-layout {
+    grid-template-areas: "camera status" "camera obs" "decision timeline"
+      "map map" "history history" "debug debug";
+  }
 }
 @media (max-width: 760px) {
   .search-layout { grid-template-columns: 1fr; grid-template-areas: "camera" "status" "obs" "decision" "timeline" "map" "slam3d" "history" "debug"; }
   .slam3d-wrap { height: 300px; }
+  .web-3d-disabled .search-layout {
+    grid-template-areas: "camera" "status" "obs" "decision"
+      "timeline" "map" "history" "debug";
+  }
   .search-history { grid-template-columns: 1fr; }
   .status-lights { flex-wrap: wrap; gap: 6px; }
 }

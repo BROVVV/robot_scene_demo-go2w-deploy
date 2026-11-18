@@ -14,6 +14,7 @@ Run under the ROS2 system Python (Humble):
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -43,6 +44,13 @@ def _capture_stamp_seconds(frame) -> tuple[float, str]:
 
     返回 (stamp_seconds, timestamp_quality)。
     """
+    if frame.timestamp_quality == 'host_clock_aligned':
+        clock = frame.provenance.get('capture_clock', {})
+        uncertainty = float(clock.get('uncertainty_seconds', float('inf')))
+        stamp = float(frame.timestamp)
+        if not (0 <= uncertainty <= .03 and _HOST_TIMESTAMP_MIN_S <= stamp <= _HOST_TIMESTAMP_MAX_S):
+            raise ValueError('unbounded camera acquisition clock')
+        return stamp, 'host_clock_aligned'
     host_ts = frame.host_timestamp
     try:
         host_value = float(host_ts)
@@ -57,7 +65,7 @@ def _capture_stamp_seconds(frame) -> tuple[float, str]:
 
 
 class D435RGBDBridge(Node):
-    def __init__(self, base_url: str, rate_hz: float = 10.0) -> None:
+    def __init__(self, base_url: str, rate_hz: float = 10.0, *, on_demand: bool = False) -> None:
         super().__init__("go2w_d435_rgbd_bridge")
         self.source = RealSenseHTTPRGBDSource(
             base_url,
@@ -77,25 +85,42 @@ class D435RGBDBridge(Node):
         self.front_info_pub = self.create_publisher(CameraInfo, "/camera/front/camera_info", 10)
         self.health_pub = self.create_publisher(String, "/go2w/d435/rgbd_health", 10)
         self.rate_hz = max(1.0, float(rate_hz))
+        self.on_demand = bool(on_demand)
         self._last_frame_id: str | None = None
+        self._last_capture_identity = None
 
     def spin_once(self) -> None:
+        on_demand = getattr(self, 'on_demand', False)
+        color_needed = (not on_demand or self.color_pub.get_subscription_count() > 0
+                        or self.front_color_pub.get_subscription_count() > 0)
+        depth_needed = not on_demand or self.depth_pub.get_subscription_count() > 0
+        compressed_needed = not on_demand or self.front_compressed_pub.get_subscription_count() > 0
         try:
-            frame = self.source.get_latest(timeout_seconds=2.0)
+            if color_needed or depth_needed or compressed_needed:
+                frame = self.source.get_latest(timeout_seconds=2.0)
+            else:
+                frame = self.source.get_latest_metadata(timeout_seconds=2.0)
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn(f"RGB-D unavailable: {exc}")
             self.health_pub.publish(String(data=f"error: {exc}"))
             return
-        if frame.frame_id == self._last_frame_id:
+        provenance = getattr(frame, 'provenance', {}) or {}
+        capture_id = provenance.get('capture_id') or provenance.get('cache_nonce')
+        capture_identity = (('capture', capture_id) if capture_id else
+            ('legacy', frame.frame_id, frame.host_timestamp,
+             getattr(frame, 'device_timestamp_ms', None)))
+        if capture_identity == getattr(self, '_last_capture_identity', None):
             return
-        self._last_frame_id = frame.frame_id
 
-        color = cv2.imread(frame.color_ref, cv2.IMREAD_COLOR)
-        depth_mm = cv2.imread(frame.depth_ref, cv2.IMREAD_UNCHANGED)
-        if color is None or depth_mm is None:
+        # In the robot's 2D mode, the Web worker consumes only compressed
+        # color. Avoid decoding depth and serializing unused raw images.
+        # Publishers remain present and a newly attached raw-image consumer
+        # receives the next frame. Desktop defaults retain eager publishing.
+        color = cv2.imread(frame.color_ref, cv2.IMREAD_COLOR) if color_needed else None
+        depth_mm = cv2.imread(frame.depth_ref, cv2.IMREAD_UNCHANGED) if depth_needed else None
+        if (color_needed and color is None) or (depth_needed and depth_mm is None):
             self.get_logger().warn(f"frame {frame.frame_id} image read failed")
             return
-        depth_m = depth_mm.astype(np.float32) * float(frame.depth_unit_m or 0.001)
 
         # 计划书 §11.1：用真实采集时间（host_timestamp）打 ROS 时间戳；
         # 不可用时回退接收时间并显式标记 timestamp_quality。
@@ -106,20 +131,6 @@ class D435RGBDBridge(Node):
         if stamp.nanosec >= 1_000_000_000:
             stamp.sec += 1
             stamp.nanosec -= 1_000_000_000
-        color_msg = self.bridge.cv2_to_imgmsg(color, encoding="bgr8")
-        color_msg.header.stamp = stamp
-        color_msg.header.frame_id = "d435_color_optical_frame"
-        depth_msg = self.bridge.cv2_to_imgmsg(depth_m, encoding="32FC1")
-        depth_msg.header.stamp = stamp
-        # 计划书 §11.2：aligned depth 实际处于 color camera geometry，因此
-        # frame_id 使用 color optical frame（depth↔color 无独立 TF 时不能
-        # 假装是 depth optical frame）。
-        depth_msg.header.frame_id = (
-            "d435_color_optical_frame"
-            if frame.depth_aligned_to_color
-            else "d435_depth_optical_frame"
-        )
-
         info = CameraInfo()
         info.header.stamp = stamp
         info.header.frame_id = "d435_color_optical_frame"
@@ -131,17 +142,42 @@ class D435RGBDBridge(Node):
         info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
         info.p = [frame.fx, 0.0, frame.cx, 0.0, 0.0, frame.fy, frame.cy, 0.0, 0.0, 0.0, 1.0, 0.0]
 
-        self.color_pub.publish(color_msg)
-        self.depth_pub.publish(depth_msg)
+        if color_needed:
+            color_msg = self.bridge.cv2_to_imgmsg(color, encoding="bgr8")
+            color_msg.header = info.header
+            if not on_demand or self.color_pub.get_subscription_count() > 0:
+                self.color_pub.publish(color_msg)
+            if not on_demand or self.front_color_pub.get_subscription_count() > 0:
+                self.front_color_pub.publish(color_msg)
+        if depth_needed:
+            depth_m = depth_mm.astype(np.float32) * float(frame.depth_unit_m or 0.001)
+            depth_msg = self.bridge.cv2_to_imgmsg(depth_m, encoding="32FC1")
+            depth_msg.header.stamp = stamp
+            depth_msg.header.frame_id = (
+                "d435_color_optical_frame" if frame.depth_aligned_to_color
+                else "d435_depth_optical_frame")
+            self.depth_pub.publish(depth_msg)
         self.info_pub.publish(info)
-        self.front_color_pub.publish(color_msg)
-        compressed = CompressedImage()
-        compressed.header = color_msg.header
-        compressed.format = "jpeg"
-        ok, encoded = cv2.imencode(".jpg", color)
-        if ok:
-            compressed.data = encoded.tobytes()
-            self.front_compressed_pub.publish(compressed)
+        if compressed_needed:
+            compressed = CompressedImage()
+            compressed.header = info.header
+            compressed.format = "jpeg"
+            if on_demand:
+                try:
+                    data = Path(frame.color_ref).read_bytes()
+                except OSError as exc:
+                    self.get_logger().warn(f"frame {frame.frame_id} JPEG read failed: {exc}")
+                    return
+                if not (data.startswith(b'\xff\xd8') and data.endswith(b'\xff\xd9')):
+                    self.get_logger().warn(f"frame {frame.frame_id} JPEG is incomplete")
+                    return
+                compressed.data = data
+                self.front_compressed_pub.publish(compressed)
+            else:
+                ok, encoded = cv2.imencode(".jpg", color)
+                if ok:
+                    compressed.data = encoded.tobytes()
+                    self.front_compressed_pub.publish(compressed)
         self.front_info_pub.publish(info)
         self.health_pub.publish(
             String(
@@ -155,15 +191,19 @@ class D435RGBDBridge(Node):
         self.get_logger().info(
             f"published D435 frame {frame.frame_id} color={frame.width}x{frame.height}"
         )
+        self._last_frame_id = frame.frame_id
+        self._last_capture_identity = capture_identity
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://192.168.123.18:8080")
     parser.add_argument("--rate", type=float, default=10.0)
+    parser.add_argument("--on-demand", action="store_true",
+                        default=os.environ.get('GO2W_ROS_CAMERA_ON_DEMAND') == '1')
     args = parser.parse_args()
     rclpy.init()
-    node = D435RGBDBridge(args.base_url, args.rate)
+    node = D435RGBDBridge(args.base_url, args.rate, on_demand=args.on_demand)
     try:
         while rclpy.ok():
             node.spin_once()

@@ -50,6 +50,22 @@ def test_psg_prior_affects_ranking():
     assert result.intent.target_frontier_id == "F2"
 
 
+def test_valid_strategic_candidate_id_selects_only_program_candidate():
+    selector = LongTermGoalSelector()
+    result = selector.select(
+        match_state=MATCH_ZERO,
+        frontiers=_frontiers(),
+        preferred_candidate_id="F2",
+    )
+    assert result.intent.target_frontier_id == "F2"
+    invalid = selector.select(
+        match_state=MATCH_ZERO,
+        frontiers=_frontiers(),
+        preferred_candidate_id="invented",
+    )
+    assert invalid.intent.target_frontier_id == "F1"
+
+
 def test_partial_anchor_region_preferred():
     selector = LongTermGoalSelector()
     region = SemanticRegion(

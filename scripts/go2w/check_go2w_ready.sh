@@ -86,42 +86,21 @@ set -u
 command -v ros2 >/dev/null 2>&1 && ros_ok="true"
 
 topic_alive() {
-  # ros2 topic hz never exits; treat any captured rate output as alive.
-  local out
-  out="$(timeout 5 ros2 topic hz "$1" --window 2 2>/dev/null)"
-  if [[ -n "${out}" && "${out}" != *"does not appear to be published yet"* ]]; then
-    return 0
-  fi
-  # Foxy CLI can fail to print a rate when the endpoint is discovered through
-  # a remote DDS participant.  The publisher-count fallback still verifies
-  # that the expected live endpoint exists, while the WebUI performs the
-  # stricter freshness checks from its own worker.
-  timeout 5 ros2 topic info "$1" 2>/dev/null \
-    | awk '/Publisher count:/ { found = ($3 + 0 > 0); exit } END { exit !found }' \
-    && return 0
-  return 1
+  # Read one sample first: active topics normally return immediately. Fall
+  # back to the graph for sparse topics, without waiting for a hz window.
+  timeout 2 ros2 topic echo --once "$1" >/dev/null 2>&1 && return 0
+  timeout 2 ros2 topic info "$1" 2>/dev/null \
+    | awk '/Publisher count:/ { found = ($3 + 0 > 0); exit } END { exit !found }'
 }
 
 service_ok() {
-  local service="$1" node info
-  while IFS= read -r node; do
-    [[ -z "$node" ]] && continue
-    info="$(timeout 5 ros2 node info "$node" 2>/dev/null || true)"
-    if awk -v service="$service" '
-      /^  Service Servers:/ { in_servers=1; next }
-      /^  Service Clients:/ { in_servers=0 }
-      in_servers && $1 == service ":" { found=1 }
-      END { exit !found }
-    ' <<<"$info"; then
-      return 0
-    fi
-  done < <(timeout 5 ros2 node list 2>/dev/null || true)
-  return 1
+  local services="$1"
+  grep -Fxq "$2" <<<"$services"
 }
 
 action_server_ok() {
   local info
-  info="$(timeout 5 ros2 action info "$1" 2>/dev/null || true)"
+  info="$(timeout 2 ros2 action info "$1" 2>/dev/null || true)"
   grep -Eq 'Action servers:[[:space:]]*[1-9][0-9]*' <<<"$info"
 }
 
@@ -130,7 +109,7 @@ if [[ "${ros_ok}" == "true" ]]; then
   sport_ok="false"
   # Foxy has no --once/--field options.  Read one bounded full sample and
   # extract the two scalar fields, which is compatible with Foxy and Humble.
-  sport_sample="$(timeout 6 ros2 topic echo --qos-reliability reliable /lf/sportmodestate 2>/dev/null || true)"
+  sport_sample="$(timeout 3 ros2 topic echo --once --qos-reliability reliable /lf/sportmodestate 2>/dev/null || true)"
   sport_mode="$(printf '%s\n' "$sport_sample" | awk '$1 == "mode:" {print $2; exit}' | tr -d '[:space:]')"
   sport_error="$(printf '%s\n' "$sport_sample" | awk '$1 == "error_code:" {print $2; exit}' | tr -d '[:space:]')"
   if [[ "${sport_mode}" == "1" && "${sport_error}" == "0" ]]; then
@@ -155,11 +134,11 @@ if [[ "${ros_ok}" == "true" ]]; then
 
   # safety topics
   lidar_fresh="false"
-  fresh_value="$(timeout 6 ros2 topic echo --qos-reliability reliable /go2w/safety/lidar_fresh 2>/dev/null | awk '$1 == "data:" {print $2; exit}' | tr -d '[:space:]')"
+  fresh_value="$(timeout 3 ros2 topic echo --once --qos-reliability reliable /go2w/safety/lidar_fresh 2>/dev/null | awk '$1 == "data:" {print $2; exit}' | tr -d '[:space:]')"
   [[ "${fresh_value}" == "True" || "${fresh_value}" == "true" ]] && lidar_fresh="true"
   set_check lidar_fresh "${lidar_fresh}"
   rotation_clearance="false"
-  rc_value="$(timeout 6 ros2 topic echo --qos-reliability reliable /go2w/safety/rotation_clearance_valid 2>/dev/null | awk '$1 == "data:" {print $2; exit}' | tr -d '[:space:]')"
+  rc_value="$(timeout 3 ros2 topic echo --once --qos-reliability reliable /go2w/safety/rotation_clearance_valid 2>/dev/null | awk '$1 == "data:" {print $2; exit}' | tr -d '[:space:]')"
   [[ "${rc_value}" == "True" || "${rc_value}" == "true" ]] && rotation_clearance="true"
   set_check rotation_clearance_valid "${rotation_clearance}"
 
@@ -167,8 +146,9 @@ if [[ "${ros_ok}" == "true" ]]; then
   motion="false"
   action_server_ok /go2w/motion && motion="true"
   set_check motion_action "${motion}"
-  set_check arm_service "$(service_ok /go2w/arm && echo true || echo false)"
-  set_check emergency_stop_service "$(service_ok /go2w/emergency_stop && echo true || echo false)"
+  service_list="$(timeout 2 ros2 service list 2>/dev/null || true)"
+  set_check arm_service "$(service_ok "$service_list" /go2w/arm && echo true || echo false)"
+  set_check emergency_stop_service "$(service_ok "$service_list" /go2w/emergency_stop && echo true || echo false)"
 else
   set_check ros unavailable
 fi
@@ -243,7 +223,10 @@ print(json.dumps({
     "ready": ready,
     "degraded": degraded,
     "checks": checks,
-    "backend": "go2w_experimental",
+    # 计划书 §4.3：真机只有一个后端 nav2。这里报的是「这些机器狗侧前置项是
+    # 为哪个后端的链路把关的」，不是「nav2 已经验证可用」—— nav2 自身的
+    # 活性由 start_nav2_autonomous_search.sh 的就绪闸门检查，本脚本查不到。
+    "backend": "nav2",
 }, ensure_ascii=False))
 PYEOF
 )"

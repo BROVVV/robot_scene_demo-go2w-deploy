@@ -2,10 +2,11 @@
 """Capture network ROS LowState for the localhost-only motion graph.
 
 The Jetson's safety action server intentionally uses a localhost-only Foxy
-participant.  This process runs in the network ROS graph and copies only the
-read-only wheel encoder fields to an atomically replaced JSON file.  It has no
-Unitree command client and never publishes a motion or low-level control
-message.
+participant.  This process runs in the network ROS graph and copies the
+read-only 16-motor posture plus IMU fields to an atomically replaced JSON
+file.  The legacy four-wheel fields remain in the payload for existing motion
+consumers.  It has no Unitree command client and never publishes a motion or
+low-level control message.
 """
 
 from __future__ import annotations
@@ -14,11 +15,20 @@ import argparse
 import json
 import os
 import signal
+import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any
+
+# An explicitly selected, natively built backend replaces only this process.
+# Imports for reference/tests retain the Python implementation below.
+if __name__ == "__main__" and os.environ.get("GO2W_NATIVE_LOW_STATE_CAPTURE"):
+    native = Path(os.environ["GO2W_NATIVE_LOW_STATE_CAPTURE"]).expanduser().resolve(strict=True)
+    if not native.is_file() or not os.access(native, os.X_OK):
+        raise SystemExit("Native LowState capture is not executable")
+    os.execv(str(native), [str(native), *sys.argv[1:]])
 
 import rclpy
 from rclpy.node import Node
@@ -47,6 +57,7 @@ class NetworkLowStateCapture(Node):
     def __init__(self, output: Path, topic: str) -> None:
         super().__init__("go2w_network_low_state_capture")
         self._output = output
+        self._topic = topic
         self._lock = threading.Lock()
         self._latest: dict[str, Any] | None = None
         qos = QoSProfile(depth=20)
@@ -55,11 +66,23 @@ class NetworkLowStateCapture(Node):
         self.get_logger().info(f"capturing read-only {topic} -> {output}")
 
     def _on_state(self, message: LowState) -> None:
+        motor_q = [float(message.motor_state[i].q) for i in range(16)]
+        motor_dq = [float(message.motor_state[i].dq) for i in range(16)]
         payload = {
+            "schema": "go2w.network_low_state.v2",
+            "source_topic": self._topic,
             "capture_monotonic": time.monotonic(),
             "capture_wall_time": time.time(),
-            "wheel_q": [float(message.motor_state[i].q) for i in range(12, 16)],
-            "wheel_dq": [float(message.motor_state[i].dq) for i in range(12, 16)],
+            "motor_q": motor_q,
+            "motor_dq": motor_dq,
+            "wheel_q": motor_q[12:16],
+            "wheel_dq": motor_dq[12:16],
+            "imu_quaternion": [float(value) for value in message.imu_state.quaternion],
+            "imu_gyroscope": [float(value) for value in message.imu_state.gyroscope],
+            "imu_accelerometer": [float(value) for value in message.imu_state.accelerometer],
+            "imu_rpy": [float(value) for value in message.imu_state.rpy],
+            "imu_temperature": int(message.imu_state.temperature),
+            "battery_soc": int(message.bms_state.soc),
         }
         with self._lock:
             self._latest = payload

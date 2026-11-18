@@ -130,7 +130,7 @@ class ManualWebDemoWorker:
     def __init__(self) -> None:
         import rclpy  # noqa: PLC0415
         from rclpy.action import ActionClient  # noqa: PLC0415
-        from rclpy.executors import MultiThreadedExecutor  # noqa: PLC0415
+        from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor  # noqa: PLC0415
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy  # noqa: PLC0415
         from sensor_msgs.msg import CompressedImage  # noqa: PLC0415
         from std_msgs.msg import Bool, Float32  # noqa: PLC0415
@@ -153,10 +153,15 @@ class ManualWebDemoWorker:
         from app.manual_web_demo.config import get_manual_demo_settings  # noqa: PLC0415
 
         self.settings = get_manual_demo_settings()
+        if self.settings.camera_owner not in ("ros", "http_preferred"):
+            raise ValueError("MANUAL_DEMO_CAMERA_OWNER must be ros or http_preferred")
+        if self.settings.ros_executor not in ("multi", "single"):
+            raise ValueError("MANUAL_DEMO_ROS_EXECUTOR must be multi or single")
         self.node = rclpy.create_node("manual_web_demo_ros_worker")
         self.rclpy = rclpy
         self.ActionClient = ActionClient
         self.MultiThreadedExecutor = MultiThreadedExecutor
+        self.SingleThreadedExecutor = SingleThreadedExecutor
         self.SetBool = SetBool
         self.Trigger = Trigger
         self.MotionCommand = MotionCommand
@@ -199,12 +204,19 @@ class ManualWebDemoWorker:
             history=HistoryPolicy.KEEP_LAST,
             reliability=ReliabilityPolicy.RELIABLE,
         )
-        self.node.create_subscription(
-            CompressedImage,
-            "/camera/front/image_raw/compressed",
-            self._on_camera,
-            sensor_qos,
-        )
+        self._camera_message_type = CompressedImage
+        self._camera_qos = sensor_qos
+        self._camera_subscription = None
+        self._using_http_camera = False
+        self._last_http_received = None
+        self._http_camera_status_path = runtime_dir / "camera_http_status.json"
+        try:
+            self._camera_boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+        except OSError:
+            self._camera_boot_id = ""
+        self._camera_source_tick()
+        if self.settings.camera_owner == "http_preferred":
+            self._camera_owner_timer = self.node.create_timer(.5, self._camera_source_tick)
         self.node.create_subscription(
             SportModeState, "/lf/sportmodestate", self._on_sport, state_qos
         )
@@ -263,7 +275,37 @@ class ManualWebDemoWorker:
     # ------------------------------------------------------------------ #
     # subscriptions                                                       #
     # ------------------------------------------------------------------ #
+    def _camera_source_tick(self) -> None:
+        from app.manual_web_demo.camera_source_health import fresh_http_camera
+
+        status = None
+        if self.settings.camera_owner == "http_preferred":
+            status = fresh_http_camera(self._http_camera_status_path,
+                latest_path=self._latest_path, boot_id=self._camera_boot_id,
+                now=time.monotonic(), max_age=self.settings.camera_stale_seconds)
+        self._using_http_camera = status is not None
+        if status is not None:
+            if self._camera_subscription is not None:
+                self.node.destroy_subscription(self._camera_subscription)
+                self._camera_subscription = None
+            self._camera_available = True
+            self._last_camera_monotonic = status["received_at"]
+            if status["received_at"] != self._last_http_received:
+                emit(status)
+                self._last_http_received = status["received_at"]
+        else:
+            if self.settings.camera_owner == "http_preferred":
+                received = self._last_camera_monotonic
+                self._camera_available = (received is not None and
+                    0 <= time.monotonic() - received <= self.settings.camera_stale_seconds)
+            if self._camera_subscription is None:
+                self._camera_subscription = self.node.create_subscription(
+                    self._camera_message_type, "/camera/front/image_raw/compressed",
+                    self._on_camera, self._camera_qos)
+
     def _on_camera(self, msg) -> None:
+        if self._using_http_camera:
+            return  # A callback queued before the ownership transfer.
         data = bytes(msg.data)
         try:
             temporary = self._latest_path.with_name("latest.tmp.jpg")
@@ -651,7 +693,8 @@ class ManualWebDemoWorker:
     # lifecycle                                                           #
     # ------------------------------------------------------------------ #
     def run_forever(self) -> int:
-        executor = self.MultiThreadedExecutor(num_threads=4)
+        executor = (self.SingleThreadedExecutor() if self.settings.ros_executor == "single"
+                    else self.MultiThreadedExecutor(num_threads=4))
         executor.add_node(self.node)
         spinner = threading.Thread(target=executor.spin, daemon=True)
         spinner.start()

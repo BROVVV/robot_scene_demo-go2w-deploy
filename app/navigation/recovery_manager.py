@@ -7,6 +7,7 @@ a valid breadcrumb there is no autonomous backward.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -15,7 +16,11 @@ from app.live_robot.recovery_motion import (
     SafeMotionSegment,
     evaluate_backward_safety,
 )
-from app.navigation.models import GOAL_RELATIVE_MOVE, ExplorationGoal
+from app.navigation.models import (
+    GOAL_NAVIGATE_POSE,
+    GOAL_RELATIVE_MOVE,
+    ExplorationGoal,
+)
 from app.navigation.robot_backend import NavigationResult, NavigationStatus
 from app.navigation.safety_models import SWEPT_HALF_ANGLE_DEG, LocalSafetySnapshot
 
@@ -94,6 +99,7 @@ class RecoveryManager:
         stuck_state: Any = None,
         goal_id: str = "recovery",
         recovery_reason: str = "",
+        metric_navigation: bool = False,
     ) -> RecoveryDecision:
         if not self.config.enabled:
             return RecoveryDecision(reason="recovery disabled")
@@ -129,15 +135,23 @@ class RecoveryManager:
                 reason=safety.reason,
                 safety=safety,
             )
+        goal = self._backward_goal(
+            breadcrumb=breadcrumb,
+            distance_m=safety.distance_m,
+            trigger=trigger,
+            recovery_reason=recovery_reason,
+            goal_id=goal_id,
+            metric_navigation=metric_navigation,
+        )
+        if goal is None:
+            # 计量不到目标就不算用掉预算：没动过，不该扣次数。
+            return RecoveryDecision(
+                trigger=trigger,
+                reason="NO_METRIC_BACKWARD_TARGET: metric 后端下表达不出后退目标位姿",
+                safety=safety,
+            )
         self._consecutive += 1
         self._total_m = round(self._total_m + safety.distance_m, 4)
-        goal = ExplorationGoal(
-            goal_id=f"{goal_id}_{self._consecutive:03d}",
-            goal_type=GOAL_RELATIVE_MOVE,
-            relative_dx=-safety.distance_m,
-            semantic_reason=f"recovery {trigger} -> backward {safety.distance_m:.2f}m",
-            provenance={"recovery_reason": trigger or recovery_reason},
-        )
         return RecoveryDecision(
             trigger=trigger,
             should_stop=False,
@@ -145,6 +159,44 @@ class RecoveryManager:
             backward_goal=goal,
             reason="backward_recovery_allowed",
             safety=safety,
+        )
+
+    def _backward_goal(
+        self,
+        *,
+        breadcrumb: SafeMotionSegment | None,
+        distance_m: float,
+        trigger: str,
+        recovery_reason: str,
+        goal_id: str,
+        metric_navigation: bool,
+    ) -> ExplorationGoal | None:
+        """计划书 §6.7：倒车恢复也要表达成地图系 NAVIGATE_POSE。
+
+        倒车走的正是刚刚成功走过的那段（breadcrumb），所以它的 ``start_pose``
+        就是合法的地图系目标；只有拿不到这段面包屑时才返回 ``None``，宁可
+        停在原地重选，也不发相对后退。
+        """
+        sequence = f"{goal_id}_{self._consecutive + 1:03d}"
+        if metric_navigation:
+            if breadcrumb is None:
+                return None
+            x, y, yaw = breadcrumb.start_pose
+            return ExplorationGoal(
+                goal_id=sequence,
+                goal_type=GOAL_NAVIGATE_POSE,
+                position=(float(x), float(y)),
+                yaw=math.degrees(float(yaw)),
+                frame="map",
+                semantic_reason=f"recovery {trigger} -> back out {distance_m:.2f}m",
+                provenance={"recovery_reason": trigger or recovery_reason},
+            )
+        return ExplorationGoal(
+            goal_id=sequence,
+            goal_type=GOAL_RELATIVE_MOVE,
+            relative_dx=-distance_m,
+            semantic_reason=f"recovery {trigger} -> backward {distance_m:.2f}m",
+            provenance={"recovery_reason": trigger or recovery_reason},
         )
 
     @staticmethod

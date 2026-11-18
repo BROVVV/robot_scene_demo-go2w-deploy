@@ -12,6 +12,7 @@ from app.manual_web_demo.config import (
 
 def test_defaults_are_fail_closed() -> None:
     settings = ManualDemoSettings()
+    assert settings.ros_executor == "multi"
     assert settings.control_enabled_default is False
     assert settings.allow_backward is False
     assert settings.allow_strafe is False
@@ -44,6 +45,14 @@ def test_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.deadman_ms == 400
 
 
+def test_executor_selection_requires_explicit_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MANUAL_DEMO_ROS_EXECUTOR", "single")
+    assert get_manual_demo_settings().ros_executor == "single"
+    monkeypatch.setenv("MANUAL_DEMO_ROS_EXECUTOR", "unsupported")
+    # Keep invalid input visible so the ROS worker rejects it before readiness.
+    assert get_manual_demo_settings().ros_executor == "unsupported"
+
+
 def test_env_bool_tolerates_common_forms(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.manual_web_demo import config as config_module
 
@@ -68,6 +77,6 @@ def test_siliconflow_is_not_redefined() -> None:
 def test_hold_mode_params() -> None:
     settings = ManualDemoSettings()
     assert settings.hold_duration_sec == 30.0
-    assert settings.turn_yaw_rate == 0.15
+    assert settings.turn_yaw_rate == 1.0
     assert settings.pulse_vx == 0.12
     assert settings.pulse_vy == 0.06

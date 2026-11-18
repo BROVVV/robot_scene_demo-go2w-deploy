@@ -1,0 +1,18 @@
+{
+  "current": {
+    "raw_points": 303574,
+    "removed": 6824,
+    "near_before": 6920,
+    "near_after": 290,
+    "marker_region_before": 0,
+    "marker_region_after": 0
+  },
+  "marker": {
+    "raw_points": 308834,
+    "removed": 7024,
+    "near_before": 7053,
+    "near_after": 237,
+    "marker_region_before": 9087,
+    "marker_region_after": 9087
+  }
+}

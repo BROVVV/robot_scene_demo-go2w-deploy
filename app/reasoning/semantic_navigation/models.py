@@ -112,6 +112,10 @@ class SearchDirective:
     safety_intent: str = "observe"
     requires_rotation_clearance: bool = False
     requires_front_clearance: bool = False
+    # 任务 Agent 的结构化决策依据（计划书 §5.2）。冻结导航消费者只读
+    # kind / heading / anchor 三个字段，多出来的字段它一概不看 —— 所以这个
+    # 可选字段对下游是无损的。默认 None 保证旧调用者不受影响。
+    decision_trace: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -137,6 +141,22 @@ class SearchReasoningContext:
     legacy_scan_candidate: Any = None
     observed_heading_sectors: list[int] = field(default_factory=list)
     semantic_observation: Any = None
+    # 计划书 §5.1：把已经存在、但此前没有送进推理器的输入显式带进来。
+    # 四项都是可选的，默认值保证现有 4 个调用点一个字都不用改。
+    #   task_context     —— SearchTaskContext.to_dict() 的结果（任务、子任务、约束）
+    #   knowledge_items  —— 本地知识库检索结果。**缺失是 []，不是"负证据"**：
+    #                       空列表只表示"本轮没检索到"，不能反推某方向不可能。
+    #   topology_summary —— 只读拓扑摘要（当前地点/相邻地点/前沿数/图版本）。
+    #                       **拿不到就是 None**，绝不用 0 或 {} 冒充"测量值为零"。
+    #   run_mode         —— live / offline_replay / test。离线评估必须能自证离线。
+    task_context: dict[str, Any] | None = None
+    knowledge_items: list[dict[str, Any]] = field(default_factory=list)
+    topology_summary: dict[str, Any] | None = None
+    run_mode: str = "live"
+    # The last coherent map/object/topology/candidate snapshot.  It is built
+    # by the production goal generator after real path checks, then supplied
+    # to the next reasoning cycle; None means no complete snapshot exists yet.
+    world_state_snapshot: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -149,7 +169,27 @@ class SearchReasoningContext:
             "safety_context": self.safety_context,
             "observed_heading_sectors": self.observed_heading_sectors,
             "observation_memory_count": len(self.observation_memory),
-            "observation_memory_ids": observation_memory_ids,
+            "observation_memory_ids": _memory_ids(self.observation_memory),
             "auxiliary_hint_count": len(self.auxiliary_hints),
             "auxiliary_status": self.auxiliary_status,
+            "task_context": self.task_context,
+            "knowledge_item_count": len(self.knowledge_items),
+            # 缺失与"空"必须可分辨：None 原样透出，不折叠成 {}。
+            "topology_summary": self.topology_summary,
+            "run_mode": self.run_mode,
+            "world_state_snapshot": self.world_state_snapshot,
         }
+
+
+def _memory_ids(items: list[dict[str, Any]]) -> list[str]:
+    """从观测记忆里取稳定 ID。
+
+    这里原先引用了一个从未定义的 `observation_memory_ids`，`to_dict()` 一调用
+    就抛 NameError。取值口径对齐既有写法 step_search_runner.py:300-304 的
+    `memory_ids`：只认带 `memory_id` 的字典项，缺 ID 的条目跳过而不是补一个假 ID。
+    """
+    return [
+        str(item.get("memory_id"))
+        for item in items
+        if isinstance(item, dict) and item.get("memory_id")
+    ]

@@ -1,0 +1,21 @@
+{
+  "architecture": "aarch64",
+  "artifacts": [
+    {
+      "name": "unitree_sdk2py CRC native library",
+      "source_path": "unitree_go2w_control/vendor/unitree_sdk2_python/unitree_sdk2py/utils/lib/crc_aarch64.so",
+      "runtime_path": "/home/unitree/robotscene_runtime/wheelhouse/sdk-native/crc_aarch64.so",
+      "sha256": "a4db103653db78540d141ff4dc55216b83e5298280e639b2ad54a84ac2fae9a5",
+      "elf_machine": 183,
+      "size_bytes": 7928
+    },
+    {
+      "name": "SDK-only CycloneDDS 0.10.2, selected by the existing motion launcher",
+      "runtime_path": "/home/unitree/cyclonedds_0.10.2/lib/libddsc.so.0.10.2",
+      "sha256": "eab742c2231a76eaa802e15841a29bf578076d26c400d4abb76081236cef10e1",
+      "elf_machine": 183,
+      "size_bytes": 1488392,
+      "scope": "SDK subprocess LD_LIBRARY_PATH only; never prepend to Foxy ROS processes"
+    }
+  ]
+}

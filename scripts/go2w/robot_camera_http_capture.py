@@ -11,10 +11,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+try:
+    _BOOT_ID = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+except OSError:
+    _BOOT_ID = ""
 
 
 def _jpeg_dimensions(data: bytes) -> tuple[int | None, int | None]:
@@ -95,6 +101,17 @@ def _write_frame(data: bytes, latest: Path, status_path: Path) -> None:
     status_tmp = status_path.with_name(status_path.name + ".http.tmp")
     status_tmp.write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
     status_tmp.replace(status_path)
+    # A separate writer-owned heartbeat cannot be overwritten by ROS fallback.
+    # Legacy camera_status.json and latest.jpg retain their existing contract.
+    health_path = status_path.with_name("camera_http_status.json")
+    health_tmp = health_path.with_name(health_path.name + ".tmp")
+    try:
+        health_tmp.write_text(json.dumps(dict(status, owner_boot_id=_BOOT_ID,
+            owner_pid=os.getpid(), latest_path=str(latest.resolve()))), encoding="utf-8")
+        health_tmp.replace(health_path)
+    except OSError:
+        # An unavailable auxiliary heartbeat keeps ROS fallback active.
+        pass
 
 
 def parse_args() -> argparse.Namespace:

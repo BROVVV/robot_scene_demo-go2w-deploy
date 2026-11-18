@@ -1,0 +1,15 @@
+/**:
+  ros__parameters:
+    # WebUI 地图源切换（保守版）：rko 回环层输出到 /go2w/rko_slam/*，
+    # frame 契约与上层一致（WebUI 只接受 pslam_map），由 web_cloud_relay 指向这里。
+    deskewed_scan_cloud_topic: /go2w/rko_slam/deskewed_scan
+    filtered_map_cloud_topic: /go2w/rko_slam/map_3d
+    graph_nodes_topic: /go2w/rko_slam/pose_graph_nodes
+    graph_poses_topic: /go2w/rko_slam/pose_graph_poses
+    imu_pose_topic: /go2w/rko_slam/imu_pose
+    loop_edges_topic: /go2w/rko_slam/pose_graph_loop_edges
+    odom_edges_topic: /go2w/rko_slam/pose_graph_odom_edges
+    map_frame: pslam_map
+    odom_frame: pslam_odom
+    map_cloud_dir: /tmp/go2w_rko_slam/
+    param_files_dir: /home/mxt/robotscene/runtime/go2w/plain_slam

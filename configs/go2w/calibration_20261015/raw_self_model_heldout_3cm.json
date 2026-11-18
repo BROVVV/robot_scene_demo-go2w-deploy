@@ -1,0 +1,51 @@
+{
+  "radius_m": 0.03,
+  "region_definition": {
+    "near_body_xy_radius_m": 0.75,
+    "near_z_m": [
+      -0.4,
+      0.5
+    ],
+    "box_body_xyz_bounds_m": [
+      [
+        0.5,
+        2.0
+      ],
+      [
+        -0.5,
+        0.5
+      ],
+      [
+        -0.3,
+        1.2
+      ]
+    ]
+  },
+  "motion_sent": false,
+  "captures": {
+    "current": {
+      "raw_points": 303574,
+      "near_before": 7269,
+      "near_after": 393,
+      "removed": 6955,
+      "box_region_before": 0,
+      "box_region_after": 0
+    },
+    "box": {
+      "raw_points": 308834,
+      "near_before": 7379,
+      "near_after": 344,
+      "removed": 7125,
+      "box_region_before": 8754,
+      "box_region_after": 8754
+    },
+    "independent_after": {
+      "raw_points": 185313,
+      "near_before": 7050,
+      "near_after": 2690,
+      "removed": 4418,
+      "box_region_before": 0,
+      "box_region_after": 0
+    }
+  }
+}

@@ -20,6 +20,7 @@ setup(
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
+            "lidar_freshness_watchdog = go2w_lidar_preprocessor.freshness_watchdog:main",
             "lidar_preprocessor = go2w_lidar_preprocessor.preprocessor_node:main",
             "hesai_pandarxt16_preprocessor = "
             "go2w_lidar_preprocessor.hesai_pandarxt16_preprocessor:main",

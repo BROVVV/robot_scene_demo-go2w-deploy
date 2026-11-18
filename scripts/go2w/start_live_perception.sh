@@ -22,6 +22,12 @@ export GO2W_INTERFACE="$go2w_interface"
 go2w_conda_python="${GO2W_CONDA_PYTHON:-${GO2W_CONTROL_PYTHON:-$project_root/unitree_go2w_control/.venv/bin/python}}"
 go2w_sdk_path="${GO2W_SDK_PYTHON_PATH:-$project_root/unitree_go2w_control/vendor/unitree_sdk2_python}"
 camera_source="${GO2W_CAMERA_SOURCE:-auto}"
+perception_mode="${GO2W_PERCEPTION_MODE:-full}"
+case "$perception_mode" in
+  full) publish_pointclouds=true; forward_imu=true; floor_visibility_2d=false ;;
+  2d) publish_pointclouds=false; forward_imu=false; floor_visibility_2d=true ;;
+  *) printf 'ERROR: GO2W_PERCEPTION_MODE must be full or 2d.\n' >&2; exit 2 ;;
+esac
 d435_base_url="${D435_BASE_URL:-http://192.168.123.18:8080}"
 session_id="live_$(date +%Y%m%d_%H%M%S)"
 spool_root="${GO2W_FRAME_SPOOL_DIR:-${project_root}/runtime/go2w/spool}"
@@ -57,7 +63,14 @@ process_ids=()
 start_read_only_node() {
   local name="$1"
   shift
-  setsid "$@" >"${log_root}/${name}.log" 2>&1 &
+  if [[ "$1" == ros2 ]]; then
+    shift
+    # Bash background jobs inherit ignored SIGINT. Restore it before exec so
+    # the same owned PID/group can stop ROS children normally.
+    setsid /usr/bin/python3 "$script_dir/exec_ros2.py" "$@" >"${log_root}/${name}.log" 2>&1 &
+  else
+    setsid "$@" >"${log_root}/${name}.log" 2>&1 &
+  fi
   local process_id=$!
   process_ids+=("${process_id}")
   printf '%s\n' "${process_id}" >"${pid_root}/${name}.pid"
@@ -99,14 +112,15 @@ cleanup() {
     fi
     wait "${process_id}" 2>/dev/null || true
   done
-  for name in description camera time lidar fusion live_bridge; do
+  for name in description camera time lidar lidar_watchdog fusion live_bridge; do
     rm -f "${pid_root}/${name}.pid"
   done
 }
 trap cleanup EXIT INT TERM
 
 start_read_only_node description ros2 launch go2w_description official_sensor_frames.launch.py \
-  "reference_file:=${project_root}/configs/go2w/official_reference.yaml"
+  "reference_file:=${project_root}/configs/go2w/official_reference.yaml" \
+  "sensor_profile:=${project_root}/configs/go2w/navigation_sensor_profile.yaml"
 if [[ "$camera_source" == d435 ]]; then
   start_read_only_node camera env -u http_proxy -u https_proxy \
     -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
@@ -123,10 +137,18 @@ else
     -p "calibration_file:=${project_root}/configs/go2w/camera_intrinsics.yaml"
 fi
 start_read_only_node time ros2 run go2w_sensor_time_bridge time_bridge --ros-args \
+  -p timestamp_policy:=host_receive \
+  -p "publish_raw_lio:=${publish_pointclouds}" \
+  -p "forward_imu:=${forward_imu}" \
   -p "config_file:=${project_root}/configs/go2w/time_sync.yaml"
+start_read_only_node lidar_watchdog ros2 run go2w_lidar_preprocessor lidar_freshness_watchdog
 start_read_only_node lidar ros2 run go2w_lidar_preprocessor lidar_preprocessor --ros-args \
+  -p "publish_pointclouds:=${publish_pointclouds}" \
+  -p "publish_floor_visibility_2d:=${floor_visibility_2d}" \
   -p "config_file:=${project_root}/configs/go2w/lidar_preprocess.yaml" \
-  -p "geometry_file:=${project_root}/configs/go2w/official_reference.yaml"
+  -p "geometry_file:=${project_root}/configs/go2w/official_reference.yaml" \
+  -p "sensor_profile:=${project_root}/configs/go2w/navigation_sensor_profile.yaml"
+if [[ "$perception_mode" == full ]]; then
 start_read_only_node fusion ros2 run go2w_rgb_lidar_fusion fusion_node --ros-args \
   -p "fusion_config:=${project_root}/configs/go2w/rgb_lidar_fusion.yaml" \
   -p "camera_config:=${project_root}/configs/go2w/camera_intrinsics.yaml" \
@@ -136,9 +158,11 @@ start_read_only_node live_bridge ros2 run robot_scene_live_bridge live_bridge --
   -p "spool_root:=${spool_root}" \
   -p "session_id:=${session_id}" \
   -p sensor_timeout_seconds:=0.3
+fi
 
 printf 'Read-only Go2-W perception session: %s\n' "${session_id}"
 printf 'Spool: %s\nLogs: %s\n' "${spool_root}" "${log_root}"
 printf 'Camera source: %s\n' "${camera_source}"
+printf 'Perception mode: %s (3D fusion/cloud outputs: %s)\n' "$perception_mode" "$publish_pointclouds"
 printf 'Motion/lease/Nav2 execution nodes: NOT STARTED\n'
 wait

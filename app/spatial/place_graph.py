@@ -46,7 +46,7 @@ class PlaceGraph:
     def __init__(
         self,
         *,
-        merge_distance_m: float = 0.35,
+        merge_distance_m: float = 0.6,
         relocation_min_displacement_m: float = 0.10,
     ) -> None:
         self.merge_distance_m = float(merge_distance_m)
@@ -124,6 +124,10 @@ class PlaceGraph:
         for object_id in persistent_object_ids:
             if object_id and object_id not in place.observed_object_ids:
                 place.observed_object_ids.append(object_id)
+
+    def break_continuity(self) -> None:
+        """End a travelled segment without inventing an edge across pose loss."""
+        self._current_place_id = None
 
     def _resolve_place(
         self,

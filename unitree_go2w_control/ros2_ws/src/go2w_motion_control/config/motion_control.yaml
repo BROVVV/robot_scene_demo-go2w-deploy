@@ -46,32 +46,36 @@ go2w_motion_action_server:
 
     reject_concurrent_goals: true
 
-    max_abs_vx: 0.20
+    # Operator-authorized 2026-10-27 short calibration ceiling.  Continuous
+    # navigation remains constrained by the upstream bridge/profile.
+    max_abs_vx: 0.30
     max_abs_vy: 0.10
-    max_abs_yaw_rate_timed: 0.20
+    max_abs_yaw_rate_timed: 1.0
     max_duration_sec: 30.0
 
     max_abs_relative_yaw_deg: 180.0
-    max_abs_yaw_rate_turn: 0.25
-    min_abs_yaw_rate_turn: 0.05
+    max_abs_yaw_rate_turn: 1.0
+    min_abs_yaw_rate_turn: 0.15
 
     stationary_max_abs_vx: 0.02
     stationary_max_abs_vy: 0.02
     stationary_max_abs_yaw_rate: 0.03
     stationary_stable_samples: 5
 
-    timed_refresh_hz: 2.0
+    # A 0.25 s Nav2 slice needs repeated Move RPCs before its final STOP.
+    # This changes refresh frequency, not slice duration or speed limits.
+    timed_refresh_hz: 20.0
     turn_control_hz: 20.0
-    turn_publish_max_hz: 5.0
+    turn_publish_max_hz: 10.0
     command_change_threshold: 0.01
 
-    turn_kp: 0.8
+    turn_kp: 2.0
     # The measured Go2-W yaw sample/command loop has about 1 deg of crossing
     # jitter. Keep the controller's documented 2 deg convergence tolerance so
     # a harmless one-degree crossing is settled instead of aborted, while the
     # final action acceptance remains 5 deg and the Stage-C closure gate is 10.
     turn_tolerance_deg: 2.0
-    turn_slow_zone_deg: 20.0
+    turn_slow_zone_deg: 8.0
     turn_stable_samples: 5
     maximum_overshoot_deg: 8.0
     final_yaw_acceptance_deg: 5.0

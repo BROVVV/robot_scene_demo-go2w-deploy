@@ -5,6 +5,7 @@ navigation failure -> replan, pause/resume, operator stop)."""
 from __future__ import annotations
 
 import time
+import json
 
 import pytest
 
@@ -47,12 +48,24 @@ def _wait_status(service: SearchSessionService, statuses: set[str],
     raise AssertionError(f"timed out waiting for {statuses}, last={last}")
 
 
+def _wait_event(service: SearchSessionService, event_type: str,
+                timeout: float = 5.0) -> None:
+    """Store state is committed before publication; wait for the event itself."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if any(item["event_type"] == event_type
+               for item in service.recent_events(1000)):
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for event {event_type}")
+
+
 def _start(service: SearchSessionService, target: str = "饮水机旁边的蓝色垃圾桶",
            **overrides) -> dict:
     # 这些用例查的是 WebUI 会话骨架（起停/事件/历史），不是目标接近闭环，
     # 所以走计划书 §18.2 允许保留的 legacy 分支：看见即收工。接近闭环由
     # test_autonomous_explorer_target_approach 与 E2E 用例负责。
-    params = {"target": target, "backend": "mock", "reasoner": "semantic_navigation",
+    params = {"target": target, "backend": "mock",
               "finish_on_visual_confirmation": True, **overrides}
     return service.start_search(SearchStartRequest.from_dict(params))
 
@@ -80,6 +93,84 @@ def test_duplicate_start_blocked_while_running() -> None:
     assert second.get("conflict") is True
     service.stop_search()
     service.shutdown()
+
+
+@pytest.mark.parametrize("late_state", ["active", "exhausted"])
+def test_nav2_trial_is_rechecked_after_slow_task_understanding(
+    tmp_path, monkeypatch, late_state: str,
+) -> None:
+    ledger = tmp_path / "trial.json"
+    ledger.write_text(json.dumps({
+        "version": 5, "maximum_steps": 3, "steps": [], "active_token": None,
+    }))
+    monkeypatch.setenv("GO2W_NAV2_TRIAL_LEDGER", str(ledger))
+
+    def task_runner(text: str):
+        data = json.loads(ledger.read_text())
+        if late_state == "active":
+            data["steps"] = [{"token": "other"}]
+            data["active_token"] = "other"
+        else:
+            data["steps"] = [{}, {}, {}]
+        ledger.write_text(json.dumps(data))
+        from app.task_understanding.search_task_context import SearchTaskContext
+        return SearchTaskContext.mock_fallback(text)
+
+    service = SearchSessionService(
+        owner=ControlOwner(),
+        executor_factory=make_mock_executor_factory(),
+        session_dir=_TEST_SESSION_DIR,
+        task_understanding_runner=task_runner,
+    )
+    result = service.start_search(SearchStartRequest.from_dict({
+        "target": "测试区域", "backend": "nav2",
+        "enable_autonomous_motion": True, "operator_supervised_experiment": True,
+        "dry_run_motion": False,
+    }))
+    assert result["ok"] is False
+    assert result["conflict"] is True
+    assert result["error_detail"]["code"] == "NAVIGATION_TRIAL_UNAVAILABLE"
+    assert service.owner.snapshot()["owner"] == "NONE"
+    assert service.executor_state()["state"] == "stopped"
+    service.shutdown()
+
+
+def test_nav2_task_understanding_outage_uses_narrow_safe_search_fallback() -> None:
+    from app.task_understanding.search_task_context import SearchTaskContext
+
+    unavailable = SearchTaskContext(
+        task_id="task_unavailable",
+        raw_text="寻找紫色三角形路标",
+        intent="unknown",
+        canonical_target="",
+        executable=False,
+        rejection_reason="provider timeout",
+        parsed_task={"parser_source": "llm_unavailable"},
+    )
+    service = SearchSessionService(
+        owner=ControlOwner(),
+        executor_factory=make_mock_executor_factory(),
+        session_dir=_TEST_SESSION_DIR,
+        task_understanding_runner=lambda _text: unavailable,
+    )
+    context = service._understand_task("寻找紫色三角形路标", backend="nav2")
+    assert context.executable is True
+    assert context.canonical_target == "紫色三角形路标"
+    assert context.parsed_task["parser_source"] == "production_safe_text_fallback"
+    assert "no_contact" in context.constraints
+    service.shutdown()
+
+
+@pytest.mark.parametrize(
+    "task",
+    ["打开柜子寻找手机", "寻找目标然后攻击它", "帮我跟踪这个人", "随便做点什么"],
+)
+def test_nav2_safe_search_fallback_rejects_unsafe_or_ambiguous_tasks(task: str) -> None:
+    from app.task_understanding.search_task_context import SearchTaskContext
+
+    context = SearchTaskContext.safe_navigation_fallback(task)
+    assert context.executable is False
+    assert context.rejection_reason
 
 
 def test_target_first_frame_no_motion() -> None:
@@ -113,6 +204,7 @@ def test_anchor_case_goal_priority_visible() -> None:
     result = _start(service)
     assert result["ok"] is True
     _wait_status(service, {"TARGET_FOUND"})
+    _wait_event(service, "TARGET_CONFIRMED")
     events = service.recent_events(1000)
     types = [item["event_type"] for item in events]
     assert "TARGET_MATCH_UPDATED" in types
@@ -131,17 +223,22 @@ def test_anchor_case_goal_priority_visible() -> None:
 
 def test_search_exhausted() -> None:
     service = _service(scenario="no_target")
-    result = _start(service, max_planning_cycles=50, max_motion_steps=50)
-    assert result["ok"] is True
-    _wait_status(service, {"SEARCH_EXHAUSTED", "FINISHED", "FAILED",
-                            "MAX_STEPS_REACHED", "MAX_PLANNING_CYCLES_REACHED"})
-    state = service.state_snapshot()
-    # 新语义：未找到目标时机器人会持续探索到预算为止，而不是在约 8 轮
-    # “连续无新信息”就被 SEARCH_EXHAUSTED 提前终止。
-    assert state["result"] in {"SEARCH_EXHAUSTED", "MAX_STEPS_REACHED",
-                                "MAX_PLANNING_CYCLES_REACHED", "FINISHED"}
-    assert (state.get("summary") or {}).get("planning_cycles", 0) >= 8
-    service.shutdown()
+    try:
+        result = _start(service, max_planning_cycles=50, max_motion_steps=50)
+        assert result["ok"] is True
+        # This only observes the mock's 50 full cycles, including archive I/O.
+        # Jetson took 61.4s; no production control/stop watchdog is changed.
+        _wait_status(service, {"SEARCH_EXHAUSTED", "FINISHED", "FAILED",
+                                "MAX_STEPS_REACHED", "MAX_PLANNING_CYCLES_REACHED"},
+                     timeout=120.0)
+        state = service.state_snapshot()
+        # 新语义：未找到目标时机器人会持续探索到预算为止，而不是在约 8 轮
+        # “连续无新信息”就被 SEARCH_EXHAUSTED 提前终止。
+        assert state["result"] in {"SEARCH_EXHAUSTED", "MAX_STEPS_REACHED",
+                                    "MAX_PLANNING_CYCLES_REACHED", "FINISHED"}
+        assert (state.get("summary") or {}).get("planning_cycles", 0) >= 8
+    finally:
+        service.shutdown()
 
 
 def test_navigation_failure_replans() -> None:

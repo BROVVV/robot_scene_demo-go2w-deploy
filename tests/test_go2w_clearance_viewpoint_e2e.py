@@ -18,6 +18,7 @@ import time
 from typing import Any
 
 from app.live_robot.autonomous_explorer import (
+    _MIN_COMMANDED_TRANSLATION_M,
     AutonomousExplorer,
     SemanticMatch,
     VerificationOutcome,
@@ -593,3 +594,107 @@ def test_embodiment_snapshot_reaches_webui() -> None:
     assert embodiment["selected_viewpoint"]["path_min_clearance_m"] >= 0.40
     assert embodiment["target_approach"]["status"] == "REACHED", embodiment
     assert store.snapshot()["status"] == "TARGET_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# E2E-7：默认（地图系）后端上，命令窗口记的必须是**命令**，不是**落点**
+# ---------------------------------------------------------------------------
+def test_metric_command_window_records_the_command_not_the_arrival() -> None:
+    """取位姿的时机错了，Fix #3 的两条判据会在默认路径上一起变成空操作。
+
+    ``_commanded_translation_m`` / ``_commanded_turn_deg`` 都是「目标点 − 当前
+    位姿」。生产原来在 ``execute_goal`` **之后**才 ``get_pose()``，于是这个差
+    变成"最后停在离目标多远"：走到位了就是 0。
+
+    ``MockMetricBackend`` 成功时把位姿**精确搬到目标点**，所以这里能把它逼到
+    极限：走完 3 m 的导航算出 distance=0.000 ⇒ ``_did_translate`` 判"没动"；
+    90° 原地转向算出 dyaw=0.000 ⇒ ``_last_command_was_in_place_turn`` 判"不是
+    原地转向"。**两条判据同时失灵**，而它们就是 Fix #3 的全部内容。
+
+    真机 Nav2 只是因为控制器有到位容差（xy/yaw 不会精确为 0）才偶然还能动，
+    而且判据的含义是反的（"离目标还差多少"被当成"命令要走多远"）。这条臂钉的
+    是判据的**含义**，所以用会精确到位的 mock；真机容差掩盖不了它。
+    """
+    backend = MockMetricBackend()
+    obstacles = _corridor_points()
+    policy = load_exploration_policy()
+    policy.budget = _budget(max_planning_cycles=2)
+    pin = FrontierPin(
+        [_frontier("frontier:p1:00", (3.0, 0.0))],
+        lambda obs, safety: clearance_map_from_points(
+            obstacles, known_bounds=(-2.0, -2.0, 6.0, 2.0)))
+    explorer = AutonomousExplorer(
+        target=TARGET,
+        observer=SearchScene(backend, visible_after=99).observer(),
+        matcher=lambda obs: SemanticMatch(has_candidate=False, target_score=0.0,
+                                          target_match_level="none",
+                                          target_match={}),
+        verifier=lambda obs, result: VerificationOutcome(
+            confirmed=False, attempts=1, reason_zh="没有目标"),
+        backend=backend,
+        policy=policy,
+        graph=ExplorationGraph(session_id="e2e_metric_window"),
+        negative_target_key=TARGET,
+        local_safety_provider=lambda obs: _snapshot(),
+        perception_quality_provider=lambda obs, gain: _perception(
+            camera_blocked=False, gain=float(gain)),
+        clearance_map_provider=pin,
+    )
+    pin.explorer = explorer
+
+    recorded: list[dict[str, Any]] = []
+    original = explorer._record_execution_history
+
+    def spy(goal, pose, result):  # 生产签名：(goal, pose, result)
+        original(goal, pose, result)
+        recorded.append(dict(explorer._command_history[-1]))
+
+    explorer._record_execution_history = spy  # type: ignore[method-assign]
+    explorer.run()
+
+    assert recorded, "整场一条运动都没执行，这条臂什么都没测到"
+    moved = [entry for entry in recorded
+             if entry["distance_m"] > _MIN_COMMANDED_TRANSLATION_M]
+    assert moved, (
+        "默认后端上没有任何一条命令被记成'要走一段距离'——命令窗口记成了落点。"
+        f" 记录到的命令窗口：{recorded}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E2E-8：地图系后端的**接近闭环**也要按命令记窗口（第二处取样点）
+# ---------------------------------------------------------------------------
+def test_metric_approach_records_commanded_distance() -> None:
+    """接近闭环里 ``_record_execution_history`` 是第二处位姿取样点。
+
+    同一类错误：地图系后端下接近动作走的是 ``_metric_approach_goal``（地图系
+    NAVIGATE_POSE），取执行之后的位姿同样会把"命令要走多远"算成"还差多远"。
+    E2E-4/E2E-5 用的是相对后端（``MockBackend``），命令里带着 ``relative_dx``，
+    位姿根本不参与换算 —— 所以它们**测不出**这一处。
+    """
+    backend = MockMetricBackend()
+    wall = _vertical_wall(3.30, y_min=-2.0, y_max=2.0)
+    scene = SearchScene(backend, target_x=3.0, spatial_quality="METRIC_RGBD",
+                        obstacles=wall, known_bounds=(-1.0, -2.0, 4.0, 2.0))
+    explorer = _approach_explorer(
+        scene, clearance_map_provider=scene.clearance_map_provider())
+
+    recorded: list[dict[str, Any]] = []
+    original = explorer._record_execution_history
+
+    def spy(goal, pose, result):
+        original(goal, pose, result)
+        recorded.append(dict(explorer._command_history[-1]))
+
+    explorer._record_execution_history = spy  # type: ignore[method-assign]
+    explorer.run()
+
+    steps = _events(explorer, "approach_step")
+    assert steps, "场景没进接近闭环，这条臂什么都没测到"
+    assert recorded, "接近闭环一条运动都没执行"
+    moved = [entry for entry in recorded
+             if entry["distance_m"] > _MIN_COMMANDED_TRANSLATION_M]
+    assert moved, (
+        "地图系接近闭环里没有任何一条命令被记成'要走一段距离'——"
+        f" 第二处取样点记成了落点。命令窗口：{recorded}"
+    )

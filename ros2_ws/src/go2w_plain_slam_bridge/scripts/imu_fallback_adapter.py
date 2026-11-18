@@ -90,7 +90,16 @@ def main() -> None:
     parser.add_argument("--passthrough-tolerance-s", type=float, default=5.0)
     parser.add_argument("--offset-lock-samples", type=int, default=500,
                         help="startup samples used to estimate and then lock "
-                             "the sensor->ROS clock offset (500 Hz IMU: ~1 s)")
+                             "the sensor->ROS clock offset (248 Hz IMU: ~2 s)")
+    parser.add_argument("--max-offset-step-s", type=float, default=0.05,
+                        help="post-lock clock-step tolerance; a step larger than "
+                             "this re-locks the offset on the startup window. Must "
+                             "stay below the consumer's tolerance: LIO only takes "
+                             "IMU inside the scan's own span (measured p50 0.099 s, "
+                             "minus the -25 ms stamp bias = ~0.075 s budget), so a "
+                             "larger threshold lets a step silently freeze the IMU "
+                             "axis. Measured arrival jitter is p50 4.482 ms / max "
+                             "8.994 ms, so 0.05 s has 5.5x headroom")
     parser.add_argument("--gyro-sign", default="1,1,-1",
                         help="per-axis angular_velocity sign correction; the "
                              "Go2-W lidar IMU reports yaw rate inverted")
@@ -98,6 +107,10 @@ def main() -> None:
                         help="startup samples used to estimate and then lock "
                              "the gyro bias; the robot MUST be stationary for "
                              "these samples (0 disables bias removal)")
+    parser.add_argument("--stamp-offset-s", type=float, default=0.0,
+                        help="constant offset added to the published IMU stamp; "
+                             "used to test the measured LiDAR-IMU skew "
+                             "(0 = current behaviour)")
     # launch_ros appends ROS arguments to the executable command.
     raw = sys.argv[1:]
     if "--ros-args" in raw:
@@ -130,6 +143,7 @@ def main() -> None:
     aligner = ImuTimestampAligner(
         passthrough_tolerance_s=args.passthrough_tolerance_s,
         lock_after_samples=args.offset_lock_samples,
+        max_offset_step_s=args.max_offset_step_s,
     )
 
     def ros_now_seconds() -> float:
@@ -190,7 +204,8 @@ def main() -> None:
                     f"to LIO until the mapping session is restarted")
             return
         # 只改 header stamp、陀螺符号与零偏，其余字段原样转发（500 Hz 上不做整包深拷贝）。
-        message.header.stamp = ros_stamp(result.corrected_sec)
+        message.header.stamp = ros_stamp(
+            result.corrected_sec + args.stamp_offset_s)
         gyro = [message.angular_velocity.x * gyro_sign[0],
                 message.angular_velocity.y * gyro_sign[1],
                 message.angular_velocity.z * gyro_sign[2]]

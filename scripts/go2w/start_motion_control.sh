@@ -8,6 +8,15 @@ set -Eeuo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd -- "${script_dir}/../.." && pwd)"
 control_root="${GO2W_CONTROL_ROOT:-${project_root}/unitree_go2w_control}"
+remote_override_cleared="${GO2W_REMOTE_OVERRIDE_CLEARED:-false}"
+case "$remote_override_cleared" in
+  true|false) ;;
+  *)
+    printf 'ERROR: GO2W_REMOTE_OVERRIDE_CLEARED must be true or false, got: %s\n' \
+      "$remote_override_cleared" >&2
+    exit 2
+    ;;
+esac
 
 existing_servers="$(ps -eo pid=,args= | awk '{ exe=$2; sub(/^.*\//, "", exe); if (exe == "go2w_motion_action_server") print $1 }')"
 if [[ -n "$existing_servers" ]]; then
@@ -24,5 +33,12 @@ fi
 
 # shellcheck disable=SC1090
 source "${control_root}/scripts/setup_go2w_ros2.sh"
+if [[ "${GO2W_JETSON_PROFILE:-0}" == "1" ]]; then
+  : "${GO2W_RUNTIME_ROOT:?Jetson profile requires GO2W_RUNTIME_ROOT}"
+  # Foxy's node-specific YAML can take precedence over launch dictionary
+  # overrides. Its relative `log_root: logs` must resolve outside the release.
+  cd -- "${GO2W_RUNTIME_ROOT}"
+fi
 exec ros2 launch go2w_motion_control go2w_motion_control.launch.py \
-  "robot_ip:=${GO2W_ROBOT_IP:-192.168.123.18}"
+  "robot_ip:=${GO2W_ROBOT_IP:-192.168.123.18}" \
+  "remote_override_cleared:=${remote_override_cleared}"

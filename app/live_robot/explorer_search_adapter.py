@@ -54,10 +54,6 @@ from app.live_robot.search_event import (
 from app.live_robot.search_event_bus import SearchEventBus
 from app.live_robot.search_state_store import SearchStateStore
 
-# Explorer events that are map-relevant: their payload may carry a "graph"
-# field (injected by the search worker) which becomes MAP_UPDATED.
-_MAP_RELEVANT = frozenset({"observation", "memory_update", "navigation_result"})
-
 # Explorer stages that are recoverable by design.  They must remain warnings:
 # the explorer either retries or falls back and only ``session_finish`` knows
 # whether the whole task ultimately failed.
@@ -200,8 +196,25 @@ class ExplorerSearchAdapter:
         """Handle one raw explorer event and publish SearchEvents."""
         events = self._convert(event)
         for search_event in events:
-            self._bus.publish(search_event)
             self._store.apply(search_event)
+            self._bus.publish(search_event)
+
+    def on_graph_snapshot(self, graph: dict[str, Any]) -> bool:
+        """Install the session's single graph, then notify clients (计划书 §2.1).
+
+        The graph itself never rides a SearchEvent: the store keeps it, and the
+        bus only carries a lightweight ``MAP_UPDATED`` with the revision so the
+        browser pulls ``/api/search/state`` once.  Returns whether the revision
+        was accepted.
+        """
+        if not self._store.set_graph(graph):
+            return False
+        event = self._emit(MAP_UPDATED, payload={
+            "revision": int(graph.get("revision") or 0),
+        })
+        self._store.apply(event)
+        self._bus.publish(event)
+        return True
 
     def _emit(self, event_type: str, *, payload: dict[str, Any] | None = None,
               cycle: int | None = None) -> SearchEvent:
@@ -294,7 +307,6 @@ class ExplorerSearchAdapter:
                     "current": payload.get("scene_objects") or [],
                     "phase": "OBSERVE",
                 }),
-                *self._map_events(event, payload, state),
             ]
         if name == "semantic_status":
             # 计划书 §13：语义健康状态单独透传（Quick VLM / Full Semantic /
@@ -368,7 +380,6 @@ class ExplorerSearchAdapter:
                     "unique_nodes": payload.get("unique_nodes", 0),
                     "phase": "UPDATE_MEMORY",
                 }),
-                *self._map_events(event, payload, state),
             ]
         if name == "candidates":
             candidates = list(payload.get("candidates") or [])
@@ -413,13 +424,16 @@ class ExplorerSearchAdapter:
                     "goal_id": payload.get("goal_id"),
                     "status": payload.get("status"),
                     "message": payload.get("message") or "",
+                    "dry_run": payload.get("dry_run") is True,
+                    "path_checked": payload.get("path_checked") is True,
                     "requested_motion": payload.get("requested_motion") or {},
                     "observed_motion": payload.get("observed_motion") or {},
                     "elapsed_sec": payload.get("elapsed_sec"),
+                    # 计划书 §14 的候选决策记录（走廊判定/净空/速度上限）。
+                    "candidate_decision": payload.get("candidate_decision"),
                     "phase_detail": payload.get("message") or "动作已结束",
                     "phase": "WAIT_RESULT",
                 }),
-                *self._map_events(event, payload, state),
             ]
         if name == "replan":
             return [
@@ -553,97 +567,6 @@ class ExplorerSearchAdapter:
             ]
         # Unknown explorer events still surface as state changes.
         return [self._emit(SEARCH_STATE_CHANGED, payload=payload)]
-
-    # ------------------------------------------------------------------ #
-    # helpers                                                            #
-    # ------------------------------------------------------------------ #
-    def _map_events(self, raw: dict[str, Any], payload: dict[str, Any],
-                    state: str) -> list[SearchEvent]:
-        """MAP_UPDATED for map-relevant explorer events (payload carries the
-        full graph snapshot injected by the search worker)."""
-        graph = payload.get("semantic_navigation_graph")
-        semantic = isinstance(graph, dict)
-        if not semantic:
-            graph = payload.get("graph")
-        if not isinstance(graph, dict) or (not semantic and not graph.get("session_id")):
-            return []
-        nodes = list(graph.get("nodes") or [])
-        if not nodes:
-            # Pre-memory observation (e.g. target found on the first frame):
-            # reflect the current observation node so the map is never empty.
-            bundle_id = payload.get("bundle_id")
-            pose = payload.get("pose")
-            nodes = [
-                {
-                    "node_id": f"node_{bundle_id}" if bundle_id else "node",
-                    "timestamp": payload.get("host_s") or 0.0,
-                    "objects": list(
-                        payload.get("objects") or payload.get("scene_objects") or []
-                    ),
-                    "pose": pose,
-                    "pose_quality": "relative" if isinstance(pose, dict) else "unavailable",
-                    "reachable_state": "OBSERVED",
-                    "visited_count": 0,
-                    "target_match_level": "none",
-                    "semantic_relevance": 0.0,
-                    "information_gain": 0.0,
-                }
-            ]
-            graph = {**graph, "nodes": nodes}
-        current_node_id = graph.get("current_place_id") if semantic else None
-        bundle_id = payload.get("bundle_id")
-        if bundle_id and not semantic:
-            current_node_id = f"node_{bundle_id}"
-        robot = None
-        pose = payload.get("pose")
-        if isinstance(pose, dict):
-            robot = {
-                "x": pose.get("x"),
-                "y": pose.get("y"),
-                "yaw": pose.get("yaw_rad", pose.get("yaw")),
-                "pose_quality": "relative",
-            }
-        # Flatten x/y/yaw to node top level (plan book §47) for consumers that
-        # expect the documented node schema; pose stays nested for depth.
-        normalized_nodes: list[dict[str, Any]] = []
-        for node in nodes:
-            item = dict(node)
-            node_type = str(item.get("node_type") or "PLACE").upper()
-            node_pose = item.get("pose")
-            if isinstance(node_pose, dict):
-                item["x"] = node_pose.get("x")
-                item["y"] = node_pose.get("y")
-                item["yaw"] = node_pose.get("yaw")
-            # Keep the documented legacy map envelope consumable while the
-            # node IDs and graph source are now semantic PLACE/OBJECT/
-            # FRONTIER nodes. ``graph_mode`` below identifies the projection.
-            item.setdefault("timestamp", item.get("last_seen") or item.get("first_seen") or 0.0)
-            item.setdefault("visited_count", item.get("visit_count", 0))
-            item.setdefault("objects", [item.get("label")] if node_type == "OBJECT" and item.get("label") else [])
-            item.setdefault("reachable_state", "VISITED" if item.get("current") else "OBSERVED")
-            item.setdefault(
-                "target_match_level",
-                "confirmed" if item.get("target_confirmed") else (
-                    "candidate" if item.get("target_candidate") else "none"
-                ),
-            )
-            item.setdefault("semantic_relevance", item.get("association_score", 0.0))
-            item.setdefault("information_gain", item.get("confidence", 0.0))
-            normalized_nodes.append(item)
-        normalized_graph = {**graph, "nodes": normalized_nodes}
-        return [
-            self._emit(MAP_UPDATED, payload={
-                "graph": normalized_graph,
-                # ``map_mode`` is the stable outer WebUI contract. New
-                # clients should use graph_mode/semantic_navigation_graph.
-                "map_mode": "topological",
-                "graph_mode": "semantic_navigation" if semantic else "topological",
-                "semantic_navigation_graph": normalized_graph if semantic else None,
-                "current_node_id": current_node_id,
-                "robot": robot,
-                "phase": state,
-            })
-        ]
 
 
 def _finish_to_error_type(result: str) -> str:

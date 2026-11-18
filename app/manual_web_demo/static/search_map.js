@@ -1,12 +1,17 @@
-/* SearchMapRenderer: SVG map renderer with two display modes
- *   "semantic_topology" (default) - stable persistent OBJECT relation graph
- *   "spatial_map"                 - original metric exploration map
+/* SearchMapRenderer: SVG renderer for the semantic topology page.
+ *
+ * 只有一个显示模式：语义拓扑。计量"空间地图"模式已于 2026-08-26 移除，
+ * 其入口按钮 / 模式开关 / 图例于 2026-09-15 一并删除；文件末尾那段
+ * renderSpatialMap 及其专属辅助函数因此**不可达**，留着只是没清理。
+ * 页内可切换的是两个投影视图（见 this.topologyView）：
+ *   "objects"    默认 - 只有 OBJECT 节点与物体间关系
+ *   "navigation"      - 额外含 PLACE 中转站与 OBSERVED_FROM
  *
  * Semantic topology (plan §16-§24):
  *   - nodes are only persistent OBJECT ids (obj_xxx)
  *   - edges are backend-persisted OBJECT->OBJECT relations only
- *   - node screen positions come from a deterministic BFS/layered display
- *     layout; they NEVER use map_xyz / camera_xyz (pure display)
+ *   - node screen positions come from a deterministic relation-constrained
+ *     display layout; they NEVER use map_xyz / camera_xyz (pure display)
  *   - live updates keep the same structure at the same positions
  *
  * Spatial map keeps the original RTAB / Place / Frontier / Route / map_xyz
@@ -14,30 +19,6 @@
  */
 (function () {
   "use strict";
-
-  var STATE_SYMBOLS = {
-    CURRENT: "▲",
-    VISITED: "●",
-    OBSERVED: "○",
-    UNSEEN: "○",
-    SEMANTIC_INTEREST: "★",
-    NEGATIVE: "◌",
-    UNREACHABLE: "✕",
-    TARGET_CANDIDATE: "◎",
-    TARGET_CONFIRMED: "✓",
-  };
-
-  var STATE_COLORS = {
-    CURRENT: "#38bdf8",
-    VISITED: "#34d399",
-    OBSERVED: "#8b95a3",
-    UNSEEN: "#4b5563",
-    SEMANTIC_INTEREST: "#fbbf24",
-    NEGATIVE: "#6b7280",
-    UNREACHABLE: "#f87171",
-    TARGET_CANDIDATE: "#c084fc",
-    TARGET_CONFIRMED: "#34d399",
-  };
 
   var WIDTH = 600;
   var HEIGHT = 400;
@@ -53,6 +34,15 @@
   var NODE_WIDTH = 124;
   var NODE_HEIGHT = 56;
   var NODE_RX = 8;
+  // The SVG uses a downward-positive Y axis.  Directional topology facts are
+  // therefore real layout constraints, not just edge labels: ``above`` means
+  // a smaller Y value and ``left_of`` means a smaller X value.  The gaps are
+  // larger than the node cards so related cards never visually overlap.
+  var DIRECTION_GAP_X = NODE_WIDTH + 48;
+  var DIRECTION_GAP_Y = NODE_HEIGHT + 42;
+  var FRONT_BACK_GAP_Y = NODE_HEIGHT + 24;
+  var COLLISION_GAP_X = NODE_WIDTH + 28;
+  var COLLISION_GAP_Y = NODE_HEIGHT + 20;
 
   var TOPO_STATUS_COLOR = {
     CONFIRMED: "#34d399",
@@ -62,6 +52,8 @@
 
   var RELATION_ZH = {
     near: "邻近",
+    spatial_neighbor: "空间邻接",
+    co_visible: "共同观测",
     adjacent_to: "相邻",
     left_of: "左侧",
     right_of: "右侧",
@@ -80,9 +72,22 @@
 
   var RELATION_DIRECTED = {
     left_of: true, right_of: true, in_front_of: true, behind: true,
-    above: true, below: true, under: true, contains: true, inside: true,
+    above: true, below: true, on: true, under: true, contains: true, inside: true,
     in: true,
   };
+
+  var RELATION_INVERSE = {
+    left_of: "right_of", right_of: "left_of",
+    in_front_of: "behind", behind: "in_front_of",
+    above: "below", below: "above",
+    on: "under", under: "on",
+    inside: "contains", in: "contains", contains: "inside",
+  };
+
+  function lifecycleZh(value) {
+    return ({active: "当前有效", stale: "待复查", missing_candidate: "疑似不在",
+      removed: "原位置已失效"})[String(value || "active")] || "待复查";
+  }
 
   // ------------------------------------------------------------------ //
   // SVG viewport helpers (pure, testable) - wheel zoom + drag pan      //
@@ -137,15 +142,29 @@
   function SearchMapRenderer(svg, detailEl) {
     this.svg = svg;
     this.detailEl = detailEl;
-    this.data = null;
+    // 计划书 §2.2：唯一图就是 `state.graph`（含 object_topology / places /
+    // objects / frontiers / current_place_id）。前端不再持有第二份图。
+    this.graph = null;
     this.spatial = null;
 
-    // View mode: "semantic_topology" (default) or "spatial_map".
-    this.mode = "semantic_topology";
+    // 语义拓扑页的投影视图。两份计划在这页画什么上冲突，裁决见
+    // docs/GO2W_三维建图重影_与_拓扑碎片化_修复计划书_20260903.md 步骤 2.1/2.2：
+    //   "objects"    = 只有 OBJECT 节点与物体间关系（默认；计划1 §7.4 的验收契约）
+    //   "navigation" = 再加上 PLACE 中转站与 OBSERVED_FROM（计划3 判据 T2 连通分量==1）
+    // 默认取 objects：物体关系没提出来时，界面呈现孤立点（难看但诚实），
+    // 而不是用 "都从 P1 看到" 把关系提取失败糊成一张连通的图。
+    this.topologyView = "objects";
 
     // Stable display layout cache for the semantic topology (pure display).
     this.topologyPositions = {};
+    this.pinnedTopologyNodes = {};
     this.lastTopologyFingerprint = null;
+    this.selectedObjectId = "";
+    var self = this;
+    window.addEventListener("semantic-object-select", function (event) {
+      self.selectedObjectId = String(event.detail && event.detail.objectId || "");
+      self.render(self.graph, self.spatial);
+    });
 
     // Interactive viewport: once the operator zooms/pans, the viewBox is kept
     // across live re-renders instead of being re-fit every frame.
@@ -203,7 +222,14 @@
     this._view = null;
     this._drag = null;
     // Re-render so the next render() auto-fits the content.
-    this.render(this.data, this.spatial);
+    this.render(this.graph, this.spatial);
+  };
+
+  SearchMapRenderer.prototype.resetTopologyLayout = function () {
+    this.topologyPositions = {};
+    this.pinnedTopologyNodes = {};
+    this.lastTopologyFingerprint = null;
+    this._resetViewport();
   };
 
   SearchMapRenderer.prototype._bindViewportGestures = function () {
@@ -271,34 +297,34 @@
   };
 
   // ------------------------------------------------------------------ //
-  // Mode switching                                                     //
+  // Topology view switching                                            //
   // ------------------------------------------------------------------ //
-  SearchMapRenderer.prototype.setMode = function (mode) {
-    // The 2026-08-26 plan removes the metric spatial-map mode entirely.
-    this.mode = "semantic_topology";
-    void mode;
-    this.render(this.data, this.spatial);
+  SearchMapRenderer.prototype.setTopologyView = function (view) {
+    this.topologyView = view === "navigation" ? "navigation" : "objects";
+    this.render(this.graph, this.spatial);
   };
 
-  SearchMapRenderer.prototype.getMode = function () {
-    return this.mode;
+  SearchMapRenderer.prototype.getTopologyView = function () {
+    return this.topologyView;
   };
 
   // ------------------------------------------------------------------ //
   // Main render dispatch                                               //
   // ------------------------------------------------------------------ //
-  SearchMapRenderer.prototype.render = function (mapData, spatialData) {
-    this.data = mapData || this.data || {};
+  SearchMapRenderer.prototype.render = function (graphData, spatialData) {
+    this.graph = graphData || this.graph || {};
     this.spatial = spatialData || this.spatial || {};
 
     // 计划书 §7.2：语义拓扑页只投影"对象拓扑"。禁止优先把整张
     // semantic_navigation_graph_v1 交给 renderObjectTopology()，否则 P1/F01
     // 这些内部导航节点会漏到界面上。内部导航图仍然保留给规划器使用。
-    var graph = this.spatial.semantic_graph || null;
-    var topology = graph && graph.object_topology ? graph.object_topology : null;
+    var topology = this.topologyView === "navigation"
+      ? (this.graph.integrated_topology || this.graph.object_topology || null)
+      : (this.graph.object_topology || null);
+    var project = this.topologyView === "navigation" ? objectTopologyOnly : objectTopologyStrict;
     this.renderObjectTopology(
-      objectTopologyOnly(topology),
-      this.spatial.semantic_objects || []
+      project(topology),
+      this.graph.objects || []
     );
   };
 
@@ -315,13 +341,25 @@
       return;
     }
     var nodes = topology.nodes || [];
-    var edges = topology.edges || [];
+    // 新侧车会直接给出方向关系。对升级前已在内存中的图，则用持久物体的
+    // pslam_map 坐标补一个显示标签，这样修复不要求清空当前真机地图。
+    var edges = decorateTopologyEdges(topology.edges || [], semanticObjects || []);
+    // Keep view-relative facts available to labels and the detail panel, but
+    // draw only structural lines by default. Hundreds of left/front/above
+    // edges otherwise hide the cross-view near/spatial skeleton.
+    var visibleEdges = edges.filter(function (edge) {
+      return String(edge.relation_scope || "STRUCTURAL").toUpperCase() !== "VIEW_RELATIVE";
+    });
 
     // Stable layout: recompute only when the graph structure changes; label /
     // status only refreshes in place otherwise (no jitter on every WS message).
+    // Directional edges are intentionally hidden as individual lines, but
+    // they still drive node coordinates.  They must therefore participate in
+    // the fingerprint or a newly learned ``above``/``left_of`` fact would not
+    // trigger a layout refresh.
     var fingerprint = topologyFingerprint(nodes, edges);
     if (fingerprint !== this.lastTopologyFingerprint) {
-      this.topologyPositions = computeTopologyLayout(nodes, edges, this.topologyPositions);
+      this.topologyPositions = computeTopologyLayout(nodes, edges, this.topologyPositions, this.pinnedTopologyNodes);
       this.lastTopologyFingerprint = fingerprint;
     }
     var positions = this.topologyPositions;
@@ -349,7 +387,7 @@
     this.svg.appendChild(defs);
 
     // 1) edges (under nodes)
-    edges.forEach(function (edge) {
+    visibleEdges.forEach(function (edge) {
       this.drawTopologyEdge(edge, positions, ns, edges);
     }.bind(this));
 
@@ -370,10 +408,10 @@
     }.bind(this));
 
     // 3) empty-relation hint
-    if (!edges.length && nodes.length) {
+    if (!visibleEdges.length && nodes.length) {
       drawTopologyCaption(svg, ns, "已识别 " + nodes.length + " 个物体，暂未获得可靠物体关系");
     } else {
-      var tentative = edges.filter(function (e) {
+      var tentative = visibleEdges.filter(function (e) {
         return String(e.status || "").toUpperCase() === "TENTATIVE";
       }).length;
       if (tentative > 0) {
@@ -413,11 +451,16 @@
     line.setAttribute("y1", ay);
     line.setAttribute("x2", bx);
     line.setAttribute("y2", by);
-    var color = blocked ? "#f87171" : (structural ? "#34d399" : "#c084fc");
+    var color = blocked ? "#f87171" : (edge.relation === "co_visible" ? "#7890a8" :
+      (edge.relation === "spatial_neighbor" ? "#22d3ee" : (structural ? "#34d399" : "#c084fc")));
     line.setAttribute("stroke", color);
-    line.setAttribute("stroke-width", confirmed ? 1.6 : 1.1);
-    line.setAttribute("stroke-opacity", confirmed ? 0.9 : (blocked ? 0.75 : 0.45));
-    line.setAttribute("stroke-dasharray", blocked ? "4 3" : (structural ? "none" : "5 4"));
+    line.setAttribute("stroke-width", structural ? (confirmed ? 1.6 : 1.1) : 0.8);
+    line.setAttribute("stroke-opacity", structural ?
+      (confirmed ? 0.9 : (blocked ? 0.75 : 0.45)) : 0.18);
+    line.setAttribute("stroke-dasharray", blocked ? "4 3" : (edge.relation === "co_visible" ? "3 5" : (structural ? "none" : "5 4")));
+    var edgeTitle = document.createElementNS(ns, "title");
+    edgeTitle.textContent = RELATION_ZH[edge.relation] || edge.relation;
+    line.appendChild(edgeTitle);
     if (edge.directed && RELATION_DIRECTED[edge.relation]) {
       line.setAttribute("marker-end", "url(#topo-arrow)");
     }
@@ -425,7 +468,7 @@
 
     // Edge label (merged for a pair with multiple relations).
     var labelText = edgeLabelZh(edge, allEdges);
-    if (labelText) {
+    if (labelText && (edge.show_label || edge._show_relation_label)) {
       var mx = (ax + bx) / 2, my = (ay + by) / 2;
       var rect = document.createElementNS(ns, "rect");
       var w = 8 + labelText.length * 6.6;
@@ -461,17 +504,23 @@
     var g = document.createElementNS(ns, "g");
     g.setAttribute("transform", "translate(" + pos.x + "," + pos.y + ")");
     var nodeType = String(node.node_type || (node.is_object ? "OBJECT" : "OBJECT")).toUpperCase();
+    var lifecycle = String(node.lifecycle_state || "active").toUpperCase();
     var status = String(node.status || node.state || "TENTATIVE").toUpperCase();
+    if (lifecycle === "STALE") status = "STALE";
+    if (lifecycle === "MISSING_CANDIDATE") status = "MISSING_CANDIDATE";
     if (nodeType === "PLACE") {
       status = node.current ? "CURRENT" : (node.visit_count > 0 ? "VISITED" : "UNSEEN");
     } else if (nodeType === "FRONTIER") {
       status = node.status || node.state || "OPEN";
     }
     status = String(status).toUpperCase();
-    var color = TOPO_STATUS_COLOR[status] || (nodeType === "PLACE" ? "#38bdf8" : "#8b95a3");
+    var color = node.is_hazard ? "#f87171" : (node.mobility_class === "fixed" ? "#38bdf8" :
+      (node.mobility_class === "semi_static" ? "#fb923c" :
+        (TOPO_STATUS_COLOR[status] || (nodeType === "PLACE" ? "#38bdf8" : "#8b95a3"))));
     var confirmed = status === "CONFIRMED" || status === "CURRENT";
     var tentative = status === "TENTATIVE" || status === "OPEN" || status === "UNSEEN";
     var stale = status === "STALE" || status === "BLOCKED";
+    var missing = status === "MISSING_CANDIDATE";
 
     var rect = document.createElementNS(ns, "rect");
     rect.setAttribute("width", NODE_WIDTH);
@@ -480,8 +529,12 @@
     rect.setAttribute("fill", "rgba(20,27,36,0.92)");
     rect.setAttribute("stroke", color);
     rect.setAttribute("stroke-width", confirmed ? 1.6 : 1.1);
-    rect.setAttribute("stroke-dasharray", tentative ? "4 3" : "none");
-    rect.setAttribute("opacity", stale ? 0.45 : (tentative ? 0.72 : 1));
+    rect.setAttribute("stroke-dasharray", missing ? "2 3" : (tentative ? "4 3" : "none"));
+    rect.setAttribute("opacity", stale ? 0.45 : (missing ? 0.68 : (tentative ? 0.72 : 1)));
+    if (String(node.node_id || "") === this.selectedObjectId) {
+      rect.setAttribute("stroke-width", 3);
+      rect.setAttribute("filter", "drop-shadow(0 0 4px rgba(255,255,255,.8))");
+    }
     g.appendChild(rect);
 
     var title = document.createElementNS(ns, "text");
@@ -498,6 +551,7 @@
     if (node.is_target_confirmed || node.is_target_candidate) {
       titleText = "★ " + titleText;
     }
+    if (node.is_hazard) titleText = "⚠ " + titleText;
     title.textContent = titleText;
     g.appendChild(title);
 
@@ -514,7 +568,9 @@
     meta.setAttribute("y", 46);
     meta.setAttribute("fill", "#8b95a3");
     meta.setAttribute("font-size", "8.5");
-    var metaText = status;
+    var metaText = (node.mobility_class === "fixed" ? "固定地标" :
+      (node.mobility_class === "semi_static" ? "暂时静止" : "待复核")) +
+      " · " + lifecycleZh(node.lifecycle_state);
     if (node.observation_count != null) metaText += " · ×" + node.observation_count;
     meta.textContent = metaText;
     g.appendChild(meta);
@@ -522,6 +578,29 @@
     g.addEventListener("click", function (event) {
       event.stopPropagation();
       this.showTopologyNodeDetail(node, edges, objectEntry);
+      window.dispatchEvent(new CustomEvent("semantic-object-select", {
+        detail: { objectId: String(node.node_id || ""), source: "topology" }
+      }));
+    }.bind(this));
+    g.addEventListener("mousedown", function (event) {
+      if (event.button !== 0) return;
+      event.stopPropagation(); event.preventDefault();
+      var self = this, startX = event.clientX, startY = event.clientY;
+      var origin = {x: pos.x, y: pos.y};
+      var size = self._svgSize(), view = self._readView();
+      function move(e) {
+        pos.x = origin.x + (e.clientX - startX) * view.width / size.w;
+        pos.y = origin.y + (e.clientY - startY) * view.height / size.h;
+        g.setAttribute("transform", "translate(" + pos.x + "," + pos.y + ")");
+      }
+      function end() {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", end);
+        self.pinnedTopologyNodes[node.node_id] = true;
+        self.render(self.graph, self.spatial);
+      }
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", end);
     }.bind(this));
     svg.appendChild(g);
   };
@@ -539,6 +618,15 @@
       "<div>置信度 " + (node.confidence || 0).toFixed(2) + "</div>" +
       "<div>观测次数 " + (node.observation_count || 0) + "</div>" +
       "<div>空间质量 " + esc(node.spatial_quality || "-") + "</div>";
+    html += "<div>档次 " + esc(node.mobility_class === "fixed" ? "固定地标" :
+      (node.mobility_class === "semi_static" ? "暂时静止" : "待复核")) + "</div>";
+    html += "<div>分类依据 " + esc(node.mobility_reason || "待复核") + "</div>";
+    html += "<div>存在状态 " + esc(lifecycleZh(node.lifecycle_state)) + "</div>";
+    if (node.last_seen) html += "<div>最近观测 " + fmtTime(node.last_seen) + "</div>";
+    if (node.is_hazard) html += "<div style='color:#f87171'>⚠ " + esc(node.hazard_label || "危险物体") + "</div>";
+    if (node.is_hazard && node.hazard_position_status) html += "<div>位置：" + esc(node.hazard_position_status) + "</div>";
+    if (node.hazard_event_id && node.hazard_evidence_available) html += "<img class='mapping-evidence' alt='危险识别截图' src='/api/mapping/evidence/" +
+      encodeURIComponent(node.hazard_event_id) + "'>";
     if (objectEntry) {
       if (objectEntry.first_seen) html += "<div>首次观测 " + fmtTime(objectEntry.first_seen) + "</div>";
       if (objectEntry.last_seen) html += "<div>最近观测 " + fmtTime(objectEntry.last_seen) + "</div>";
@@ -599,387 +687,6 @@
     this.detailEl.classList.remove("hidden");
   };
 
-  // ================================================================== //
-  // SPATIAL MAP VIEW (original metric map, unchanged behavior)        //
-  // ================================================================== //
-  SearchMapRenderer.prototype.renderSpatialMap = function (mapData, spatialData) {
-    this.data = mapData || this.data || {};
-    var map = this.data;
-    var nodes = Array.isArray(map.nodes) ? map.nodes.slice() : [];
-    var edges = Array.isArray(map.edges) ? map.edges.slice() : [];
-    var robot = map.robot || {};
-    var currentId = map.current_node_id || null;
-
-    // Merge PlaceGraph places into the node set so the SVG viewBox and base
-    // topology include real spatial Places (plan §91-§95).
-    var spatial = spatialData || null;
-    if (spatial && spatial.place_graph && Array.isArray(spatial.place_graph.places)) {
-      spatial.place_graph.places.forEach(function (place) {
-        var node = placeToNode(place);
-        if (!nodes.some(function (n) { return n.node_id === node.node_id; })) {
-          nodes.push(node);
-        }
-      });
-    }
-
-    var layout = computeLayout(nodes, robot);
-
-    // fit
-    var bounds = fitBounds(layout, robot, spatial);
-    this._fitViewBox(bounds);
-
-    var ns = "http://www.w3.org/2000/svg";
-    this.svg.textContent = "";
-
-    // grid hint
-    drawGrid(this.svg, ns, bounds);
-
-    // edges
-    edges.forEach(function (edge) {
-      var a = layout[edge.source_node_id];
-      var b = layout[edge.target_node_id];
-      if (!a || !b) return;
-      var line = document.createElementNS(ns, "line");
-      line.setAttribute("x1", a.x); line.setAttribute("y1", a.y);
-      line.setAttribute("x2", b.x); line.setAttribute("y2", b.y);
-      var failed = edge.navigation_result && edge.navigation_result !== "succeeded";
-      line.setAttribute("stroke", failed ? "#f87171" : "#2b333e");
-      line.setAttribute("stroke-width", failed ? 1.6 : 1);
-      line.setAttribute("stroke-dasharray", failed ? "4 3" : "none");
-      this.svg.appendChild(line);
-    }.bind(this));
-
-    // nodes
-    nodes.forEach(function (node) {
-      var pos = layout[node.node_id];
-      if (!pos) return;
-      var g = document.createElementNS(ns, "g");
-      g.setAttribute("transform", "translate(" + pos.x + "," + pos.y + ")");
-      var state = resolveState(node, currentId);
-      var color = STATE_COLORS[state] || "#8b95a3";
-      var symbol = STATE_SYMBOLS[state] || "●";
-      var r = node.node_id === currentId ? 12 : 7;
-      var circle = document.createElementNS(ns, "circle");
-      circle.setAttribute("r", r);
-      circle.setAttribute("fill", color);
-      circle.setAttribute("fill-opacity", "0.18");
-      circle.setAttribute("stroke", color);
-      circle.setAttribute("stroke-width", "1.5");
-      g.appendChild(circle);
-      var text = document.createElementNS(ns, "text");
-      text.setAttribute("text-anchor", "middle");
-      text.setAttribute("dominant-baseline", "central");
-      text.setAttribute("fill", color);
-      text.setAttribute("font-size", node.node_id === currentId ? "14" : "11");
-      text.textContent = symbol;
-      g.appendChild(text);
-      var label = document.createElementNS(ns, "text");
-      label.setAttribute("y", r + 12);
-      label.setAttribute("text-anchor", "middle");
-      label.setAttribute("fill", "#8b95a3");
-      label.setAttribute("font-size", "9");
-      label.textContent = shortNodeLabel(node);
-      g.appendChild(label);
-      g.addEventListener("click", function (event) {
-        event.stopPropagation();
-        this.showDetail(node);
-      }.bind(this));
-      this.svg.appendChild(g);
-    }.bind(this));
-
-    // robot heading (arrow)
-    if (robot && robot.x !== undefined && robot.y !== undefined) {
-      var yaw = Number(robot.yaw || 0);
-      var len = 22;
-      var x2 = robot.x + len * Math.cos(yaw);
-      var y2 = robot.y - len * Math.sin(yaw);
-      var line = document.createElementNS(ns, "line");
-      line.setAttribute("x1", robot.x); line.setAttribute("y1", robot.y);
-      line.setAttribute("x2", x2); line.setAttribute("y2", y2);
-      line.setAttribute("stroke", "#38bdf8");
-      line.setAttribute("stroke-width", "2.5");
-      line.setAttribute("marker-end", "url(#arrow)");
-      this.svg.appendChild(line);
-      var dot = document.createElementNS(ns, "circle");
-      dot.setAttribute("cx", robot.x); dot.setAttribute("cy", robot.y);
-      dot.setAttribute("r", "4"); dot.setAttribute("fill", "#38bdf8");
-      this.svg.appendChild(dot);
-    }
-
-    // spatial overlays (frontiers / semantic objects / PSG regions / goal)
-    if (spatial) {
-      this.drawSpatialOverlay(spatial, layout, robot);
-      this.drawSemanticEdges(spatial, layout);
-      this.drawRoute(spatial, layout);
-    }
-
-    // arrow marker def
-    var defs = document.createElementNS(ns, "defs");
-    var marker = document.createElementNS(ns, "marker");
-    marker.setAttribute("id", "arrow");
-    marker.setAttribute("markerWidth", "6"); marker.setAttribute("markerHeight", "6");
-    marker.setAttribute("refX", "4"); marker.setAttribute("refY", "3");
-    marker.setAttribute("orient", "auto");
-    var path = document.createElementNS(ns, "path");
-    path.setAttribute("d", "M0,0 L6,3 L0,6 z");
-    path.setAttribute("fill", "#38bdf8");
-    marker.appendChild(path);
-    defs.appendChild(marker);
-    this.svg.insertBefore(defs, this.svg.firstChild);
-
-    // topology arrow marker (used only by semantic topology edges)
-    var topoDefs = document.createElementNS(ns, "defs");
-    var tm = document.createElementNS(ns, "marker");
-    tm.setAttribute("id", "topo-arrow");
-    tm.setAttribute("markerWidth", "7"); tm.setAttribute("markerHeight", "7");
-    tm.setAttribute("refX", "6"); tm.setAttribute("refY", "3.5");
-    tm.setAttribute("orient", "auto");
-    var tp = document.createElementNS(ns, "path");
-    tp.setAttribute("d", "M0,0 L7,3.5 L0,7 z");
-    tp.setAttribute("fill", "#c084fc");
-    tm.appendChild(tp);
-    topoDefs.appendChild(tm);
-    this.svg.insertBefore(topoDefs, this.svg.firstChild);
-  };
-
-  SearchMapRenderer.prototype.drawSpatialOverlay = function (spatial, layout, robot) {
-    var ns = "http://www.w3.org/2000/svg";
-    var svg = this.svg;
-
-    // Occupancy / explored background (plan §92)
-    var smap = spatial.spatial_map;
-    if (smap && smap.origin && smap.resolution_m > 0) {
-      var ox = smap.origin[0];
-      var oy = smap.origin[1];
-      var res = smap.resolution_m;
-      var totalCells = (Array.isArray(smap.free) ? smap.free.length : 0) +
-                       (Array.isArray(smap.occupied) ? smap.occupied.length : 0);
-      if (totalCells > 0 && totalCells < 4000) {
-        function cellRect(cell, fill) {
-          var rect = document.createElementNS(ns, "rect");
-          var x = ox + (cell[0] + 0.5) * res;
-          var y = oy + (cell[1] + 0.5) * res;
-          rect.setAttribute("x", x - res / 2);
-          rect.setAttribute("y", -y - res / 2);
-          rect.setAttribute("width", res);
-          rect.setAttribute("height", res);
-          rect.setAttribute("fill", fill);
-          rect.setAttribute("opacity", "0.35");
-          svg.appendChild(rect);
-        }
-        (smap.free || []).forEach(function (cell) { cellRect(cell, "#1e293b"); });
-        (smap.occupied || []).forEach(function (cell) { cellRect(cell, "#f87171"); });
-      }
-    }
-
-    // Frontiers (plan §94)
-    var frontiers = Array.isArray(spatial.frontiers) ? spatial.frontiers : [];
-    frontiers.forEach(function (f) {
-      if (!f.position) return;
-      var g = document.createElementNS(ns, "g");
-      g.setAttribute("transform", "translate(" + f.position[0] + "," + (-f.position[1]) + ")");
-      var circle = document.createElementNS(ns, "circle");
-      circle.setAttribute("r", "7");
-      circle.setAttribute("fill", "#fbbf24");
-      circle.setAttribute("fill-opacity", "0.25");
-      circle.setAttribute("stroke", "#fbbf24");
-      circle.setAttribute("stroke-width", "1.5");
-      g.appendChild(circle);
-      var text = document.createElementNS(ns, "text");
-      text.setAttribute("text-anchor", "middle");
-      text.setAttribute("dominant-baseline", "central");
-      text.setAttribute("fill", "#fbbf24");
-      text.setAttribute("font-size", "8");
-      text.textContent = f.frontier_id.replace("frontier_", "F").replace("relative_f_", "F");
-      g.appendChild(text);
-      svg.appendChild(g);
-    });
-
-    // Semantic objects with a real map position (plan §95, §12.2).
-    // CONFIRMED entities are primary solid nodes; TENTATIVE are semi-transparent
-    // and visually distinct; STALE are muted.
-    var objects = Array.isArray(spatial.semantic_objects) ? spatial.semantic_objects : [];
-    objects.forEach(function (obj) {
-      if (!obj.map_xyz) return;
-      var x = obj.map_xyz[0];
-      var y = -obj.map_xyz[1];
-      var status = String(obj.status || "TENTATIVE").toUpperCase();
-      var confirmed = status === "CONFIRMED";
-      var stale = status === "STALE";
-      var g = document.createElementNS(ns, "g");
-      g.setAttribute("transform", "translate(" + x + "," + y + ")");
-      var diamond = document.createElementNS(ns, "rect");
-      diamond.setAttribute("x", "-4"); diamond.setAttribute("y", "-4");
-      diamond.setAttribute("width", "8"); diamond.setAttribute("height", "8");
-      diamond.setAttribute("transform", "rotate(45)");
-      if (confirmed) {
-        diamond.setAttribute("fill", obj.spatial_quality === "METRIC_RGBD" ? "#34d399" : "#38bdf8");
-        diamond.setAttribute("fill-opacity", "0.9");
-        diamond.setAttribute("stroke", "#ecfdf5");
-        diamond.setAttribute("stroke-width", "1");
-      } else if (stale) {
-        diamond.setAttribute("fill", "#6b7280");
-        diamond.setAttribute("fill-opacity", "0.35");
-      } else {
-        // TENTATIVE
-        diamond.setAttribute("fill", "#38bdf8");
-        diamond.setAttribute("fill-opacity", "0.3");
-        diamond.setAttribute("stroke", "#38bdf8");
-        diamond.setAttribute("stroke-width", "0.8");
-      }
-      g.appendChild(diamond);
-      // Object id + label + obs count (plan §12.2)
-      var idText = document.createElementNS(ns, "text");
-      idText.setAttribute("y", "-8");
-      idText.setAttribute("text-anchor", "middle");
-      idText.setAttribute("fill", confirmed ? "#34d399" : "#94a3b8");
-      idText.setAttribute("font-size", "7");
-      idText.textContent = String(obj.object_id || "");
-      g.appendChild(idText);
-      var label = document.createElementNS(ns, "text");
-      label.setAttribute("y", "12");
-      label.setAttribute("text-anchor", "middle");
-      label.setAttribute("fill", "#8b95a3");
-      label.setAttribute("font-size", "8");
-      label.textContent = String(obj.label || "").slice(0, 8) + (obj.observation_count ? "·" + obj.observation_count : "");
-      g.appendChild(label);
-      g.addEventListener("click", function (event) {
-        event.stopPropagation();
-        this.showObjectDetail(obj);
-      }.bind(this));
-      svg.appendChild(g);
-    });
-
-    // PSG predicted regions (plan §96)
-    var prior = spatial.psg_prior || {};
-    var regions = Array.isArray(prior.region_hypotheses) ? prior.region_hypotheses : [];
-    regions.forEach(function (region) {
-      if (!region.center || region.state === "REJECTED") return;
-      var circle = document.createElementNS(ns, "circle");
-      circle.setAttribute("cx", region.center[0]);
-      circle.setAttribute("cy", -region.center[1]);
-      var radius = (region.radius_max_m || 1.0) * 40;
-      circle.setAttribute("r", radius);
-      circle.setAttribute("fill", "#c084fc");
-      circle.setAttribute("fill-opacity", "0.08");
-      circle.setAttribute("stroke", "#c084fc");
-      circle.setAttribute("stroke-dasharray", "4 3");
-      svg.appendChild(circle);
-    });
-
-    // Selected long-term goal (plan §97)
-    var goal = spatial.long_term_goal;
-    if (goal && goal.preferred_position) {
-      var x = goal.preferred_position[0];
-      var y = -goal.preferred_position[1];
-      var g = document.createElementNS(ns, "g");
-      g.setAttribute("transform", "translate(" + x + "," + y + ")");
-      var star = document.createElementNS(ns, "text");
-      star.setAttribute("text-anchor", "middle");
-      star.setAttribute("dominant-baseline", "central");
-      star.setAttribute("fill", "#f472b6");
-      star.setAttribute("font-size", "16");
-      star.textContent = "★";
-      g.appendChild(star);
-      svg.appendChild(g);
-    }
-  };
-
-  // Semantic graph edges (MOVED_TO / OBSERVED_FROM) with Place <-> object
-  // links (plan §8) - only used in spatial_map mode.
-  SearchMapRenderer.prototype.drawSemanticEdges = function (spatial, layout) {
-    var ns = "http://www.w3.org/2000/svg";
-    var svg = this.svg;
-    var graph = spatial.semantic_graph || null;
-    var edges = (graph && Array.isArray(graph.edges)) ? graph.edges : [];
-    var objects = Array.isArray(spatial.semantic_objects) ? spatial.semantic_objects : [];
-    var objectById = {};
-    objects.forEach(function (obj) { objectById[obj.object_id] = obj; });
-
-    // OBSERVED_FROM edges: object -> place thin lines
-    edges.forEach(function (edge) {
-      var rel = String(edge.relation || "").toUpperCase();
-      if (rel !== "OBSERVED_FROM") return;
-      var aId = edge.from;
-      var bId = edge.to;
-      var placeLayout = layout[aId] || layout[bId];
-      var objLayout = null;
-      var objId = String(aId).indexOf("P") === 0 ? bId : aId;
-      if (objectById[objId] && objectById[objId].map_xyz) {
-        objLayout = { x: objectById[objId].map_xyz[0], y: -objectById[objId].map_xyz[1] };
-      } else if (layout[objId]) {
-        objLayout = layout[objId];
-      }
-      var placeId = String(aId).indexOf("P") === 0 ? aId : bId;
-      placeLayout = layout[placeId];
-      if (!placeLayout || !objLayout) return;
-      var line = document.createElementNS(ns, "line");
-      line.setAttribute("x1", placeLayout.x); line.setAttribute("y1", placeLayout.y);
-      line.setAttribute("x2", objLayout.x); line.setAttribute("y2", objLayout.y);
-      line.setAttribute("stroke", "#64748b");
-      line.setAttribute("stroke-width", "0.8");
-      line.setAttribute("stroke-dasharray", "2 3");
-      line.setAttribute("stroke-opacity", "0.5");
-      svg.appendChild(line);
-    });
-  };
-
-  // Route overlay: robot -> waypoints -> target (plan §12.4).
-  SearchMapRenderer.prototype.drawRoute = function (spatial, layout) {
-    var ns = "http://www.w3.org/2000/svg";
-    var svg = this.svg;
-    var route = spatial.route_plan || null;
-    // Legacy fallback: a route may be nested inside semantic_graph.route_plan.
-    if (!route && spatial.semantic_graph && spatial.semantic_graph.route_plan) {
-      route = spatial.semantic_graph.route_plan;
-    }
-    if (!route || !Array.isArray(route.waypoints) || !route.waypoints.length) return;
-    var pts = route.waypoints.map(function (wp) {
-      return { x: wp[0], y: -wp[1] };
-    });
-    if (pts.length < 2) return;
-    var poly = document.createElementNS(ns, "polyline");
-    var points = pts.map(function (p) { return p.x.toFixed(2) + "," + p.y.toFixed(2); }).join(" ");
-    poly.setAttribute("points", points);
-    poly.setAttribute("fill", "none");
-    poly.setAttribute("stroke", "#22d3ee");
-    poly.setAttribute("stroke-width", "3");
-    poly.setAttribute("stroke-opacity", "0.8");
-    poly.setAttribute("stroke-linejoin", "round");
-    svg.appendChild(poly);
-    // Target marker
-    if (route.target_position) {
-      var g = document.createElementNS(ns, "g");
-      g.setAttribute("transform", "translate(" + route.target_position[0] + "," + (-route.target_position[1]) + ")");
-      var star = document.createElementNS(ns, "text");
-      star.setAttribute("text-anchor", "middle");
-      star.setAttribute("dominant-baseline", "central");
-      star.setAttribute("fill", "#22d3ee");
-      star.setAttribute("font-size", "14");
-      star.textContent = "◎";
-      g.appendChild(star);
-      svg.appendChild(g);
-    }
-  };
-
-  SearchMapRenderer.prototype.showDetail = function (node) {
-    if (!this.detailEl) return;
-    var state = resolveState(node, this.data.current_node_id);
-    var html =
-      "<div><b>" + esc(node.node_id) + "</b> <span style='color:" +
-      (STATE_COLORS[state] || "#8b95a3") + "'>" + esc(state) + "</span></div>" +
-      "<div>时间 " + fmtTime(node.timestamp) + "</div>" +
-      "<div>Pose 质量 " + esc(node.pose_quality || "unavailable") + "</div>" +
-      "<div>访问次数 " + (node.visited_count || 0) + "</div>" +
-      "<div>负证据 " + (node.negative_evidence_count || 0) + "</div>" +
-      "<div>导航失败 " + (node.navigation_fail_count || 0) + "</div>" +
-      "<div>目标匹配 " + esc(node.target_match_level || "none") + "</div>" +
-      "<div>语义相关 " + (node.semantic_relevance || 0).toFixed(2) + "</div>" +
-      "<div>信息增益 " + (node.information_gain || 0).toFixed(2) + "</div>" +
-      "<div>Objects: " + esc((node.objects || []).join(", ") || "-") + "</div>";
-    this.detailEl.innerHTML = html;
-    this.detailEl.classList.remove("hidden");
-  };
 
   SearchMapRenderer.prototype.showObjectDetail = function (obj) {
     if (!this.detailEl) return;
@@ -1002,38 +709,7 @@
   // ------------------------------------------------------------------ //
   // helpers                                                            //
   // ------------------------------------------------------------------ //
-  function resolveState(node, currentId) {
-    if (node.node_id === currentId) return "CURRENT";
-    var s = String(node.reachable_state || "").toUpperCase();
-    if (STATE_COLORS[s]) return s;
-    if (node.visited_count > 0) return "VISITED";
-    return "OBSERVED";
-  }
 
-  function computeLayout(nodes, robot) {
-    var layout = {};
-    var hasPose = false;
-    nodes.forEach(function (node) {
-      var pose = node.pose || {};
-      if (pose.x !== undefined && isFinite(pose.x) && pose.y !== undefined && isFinite(pose.y)) {
-        layout[node.node_id] = { x: pose.x, y: -pose.y };
-        hasPose = true;
-      }
-    });
-    if (robot && robot.x !== undefined && robot.y !== undefined) hasPose = true;
-    if (hasPose) return layout;
-    // layout-only polar fallback by heading sector (display only)
-    nodes.forEach(function (node) {
-      var sector = node.heading_sector;
-      var angle = ((sector == null ? 0 : sector) / 12) * 2 * Math.PI - Math.PI / 2;
-      var radius = 60 + ((hashCode(node.node_id) % 3) * 24);
-      layout[node.node_id] = {
-        x: radius * Math.cos(angle),
-        y: radius * Math.sin(angle),
-      };
-    });
-    return layout;
-  }
 
   // ------------------------------------------------------------------ //
   // Semantic topology layout (deterministic, display-only)            //
@@ -1041,16 +717,17 @@
 
   // 计划书 §7.3：前端最小契约检查。后端 object_topology_snapshot() 已经按对象
   // 过滤，这里只做一层不信任上游的兜底：
-  //   - 节点只接受 node_type === "OBJECT"（绝不用 ID 前缀猜类型）；
-  //   - 边的 from/to 必须都在当前对象节点集合内；
-  //   - 拒绝 OBSERVED_FROM / FRONTIER_TO / MOVED_TO 这类导航关系；
+  //   - 节点接受 node_type === "OBJECT" 或 "PLACE"（绝不用 ID 前缀猜类型）；
+  //     PLACE 是跨视角中转站，去掉它对象图必然碎成多个连通分量；
+  //   - 边的 from/to 必须都在当前节点集合内；
+  //   - 拒绝 FRONTIER_TO / MOVED_TO 这类纯导航关系；
   //   - 没有关系时显示孤立对象节点，但绝不退回导航图。
-  var NON_OBJECT_RELATIONS = { OBSERVED_FROM: 1, FRONTIER_TO: 1, MOVED_TO: 1 };
+  var NON_OBJECT_RELATIONS = { FRONTIER_TO: 1, MOVED_TO: 1 };
 
   function objectTopologyOnly(topology) {
     if (!topology || !Array.isArray(topology.nodes)) return null;
     var nodes = topology.nodes.filter(function (node) {
-      return node && node.node_type === "OBJECT" && node.node_id;
+      return node && (node.node_type === "OBJECT" || node.node_type === "PLACE") && node.node_id;
     });
     var objectIds = {};
     nodes.forEach(function (node) { objectIds[node.node_id] = true; });
@@ -1068,10 +745,35 @@
     };
   }
 
+  // 计划1 §7.3 的严格契约：节点只收 OBJECT，边只连接两个物体。
+  // OBSERVED_FROM / FRONTIER_TO / MOVED_TO 三类边都有一端是 PLACE 或 FRONTIER，
+  // 被"节点集合"这一步自然剔除——不需要再单列一张关系黑名单。
+  function objectTopologyStrict(topology) {
+    if (!topology || !Array.isArray(topology.nodes)) return null;
+    var nodes = topology.nodes.filter(function (node) {
+      return node && node.node_type === "OBJECT" && node.node_id;
+    });
+    var objectIds = {};
+    nodes.forEach(function (node) { objectIds[node.node_id] = true; });
+    var rawEdges = Array.isArray(topology.edges) ? topology.edges : [];
+    var edges = rawEdges.filter(function (edge) {
+      return edge && objectIds[edge.from] && objectIds[edge.to];
+    });
+    return {
+      schema_version: topology.schema_version || "semantic_object_topology_v1",
+      revision: topology.revision || 0,
+      nodes: nodes,
+      edges: edges,
+      // 按过滤后的集合重算：objectTopologyOnly 直接透传上层 stats，
+      // 会让 "N 个物体" 的数与画出来的节点数不一致（PLACE 被算成一个物体）。
+      stats: { node_count: nodes.length, edge_count: edges.length },
+    };
+  }
+
   function topologyFingerprint(nodes, edges) {
     var nodeIds = (nodes || []).map(function (n) { return n.node_id; }).sort();
     var edgeKeys = (edges || []).map(function (e) {
-      return [e.from, e.to, e.relation].join("~");
+      return [e.from, e.to, e.relation, e.relation_scope || "", e.status || ""].join("~");
     }).sort();
     return JSON.stringify({ nodes: nodeIds, edges: edgeKeys });
   }
@@ -1165,82 +867,270 @@
     });
   }
 
-  function computeTopologyLayout(nodes, edges, previousPositions) {
-    previousPositions = previousPositions || {};
-    var nodeById = {};
-    nodes.forEach(function (n) { nodeById[n.node_id] = n; });
-    var adj = buildAdjacency(nodes, edges);
-    var comps = findConnectedComponents(nodes, adj);
-
-    // Deterministic component ordering: target confirmed, target candidate,
-    // then size desc, then lexicographic stable id.
-    function componentRank(comp) {
-      var hasTarget = false, hasCandidate = false, size = comp.length;
-      comp.forEach(function (id) {
-        var node = nodeById[id];
-        if (node && node.is_target_confirmed) hasTarget = true;
-        if (node && node.is_target_candidate) hasCandidate = true;
-      });
-      var minId = comp.slice().sort()[0];
-      return [hasTarget ? 0 : 1, hasCandidate ? 0 : 1, -size, minId];
+  function relationConstraint(edge, verticalPairs) {
+    var relation = String(edge && edge.relation || "").toLowerCase();
+    var status = String(edge && edge.status || "CONFIRMED").toUpperCase();
+    var strength = status === "TENTATIVE" ? 0.72 : 1.0;
+    if (relation === "left_of") return {axis: "x", sign: -1, gap: DIRECTION_GAP_X * strength};
+    if (relation === "right_of") return {axis: "x", sign: 1, gap: DIRECTION_GAP_X * strength};
+    if (relation === "above" || relation === "on") {
+      return {axis: "y", sign: -1, gap: DIRECTION_GAP_Y * strength};
     }
-    comps.sort(function (a, b) {
-      var ra = componentRank(a), rb = componentRank(b);
-      for (var i = 0; i < ra.length; i++) {
-        if (ra[i] !== rb[i]) return ra[i] < rb[i] ? -1 : 1;
-      }
-      return 0;
-    });
+    if (relation === "below" || relation === "under") {
+      return {axis: "y", sign: 1, gap: DIRECTION_GAP_Y * strength};
+    }
+    // A 2-D canvas cannot encode height and camera depth on the same axis at
+    // once.  Front/back uses vertical ordering only when that object pair has
+    // no explicit above/below/on/under fact; otherwise height remains the
+    // screen-space contract and front/back stays in the relation label.
+    var pair = topologyPairKey(edge || {});
+    if (!verticalPairs[pair] && relation === "in_front_of") {
+      return {axis: "y", sign: -1, gap: FRONT_BACK_GAP_Y * strength};
+    }
+    if (!verticalPairs[pair] && relation === "behind") {
+      return {axis: "y", sign: 1, gap: FRONT_BACK_GAP_Y * strength};
+    }
+    return null;
+  }
 
-    var positions = {};
-    var yOffset = TOPO_PAD;
-    var connectedIds = {};
-    comps.forEach(function (comp) {
-      if (comp.length === 0) return;
-      var root = selectStableRoot(comp, nodeById);
-      var layers = bfsLayers(root, comp, adj);
-      // Measure component height.
-      var maxRows = 0;
-      layers.forEach(function (layer) {
-        if (layer.length > maxRows) maxRows = layer.length;
-      });
-      var layerGap = LAYER_GAP_X;
-      for (var depth = 0; depth < layers.length; depth++) {
-        var layer = stableSortLayer(layers[depth], previousPositions);
-        for (var row = 0; row < layer.length; row++) {
-          var id = layer[row];
-          positions[id] = {
-            x: TOPO_PAD + depth * layerGap,
-            y: yOffset + row * ROW_GAP_Y,
-          };
-          connectedIds[id] = true;
+  function directionalConstraints(edges) {
+    var verticalPairs = {};
+    (edges || []).forEach(function (edge) {
+      var relation = String(edge && edge.relation || "").toLowerCase();
+      if (relation === "above" || relation === "below" || relation === "on" || relation === "under") {
+        verticalPairs[topologyPairKey(edge)] = true;
+      }
+    });
+    return (edges || []).map(function (edge) {
+      var constraint = relationConstraint(edge, verticalPairs);
+      if (!constraint) return null;
+      return {
+        from: edge.from,
+        to: edge.to,
+        axis: constraint.axis,
+        sign: constraint.sign,
+        gap: constraint.gap,
+      };
+    }).filter(Boolean);
+  }
+
+  function applyDirectionalConstraints(constraints, positions, pinned) {
+    (constraints || []).forEach(function (constraint) {
+      var from = positions[constraint.from], to = positions[constraint.to];
+      if (!from || !to) return;
+      var axis = constraint.axis;
+      var signedDistance = (from[axis] - to[axis]) * constraint.sign;
+      var deficit = constraint.gap - signedDistance;
+      if (deficit <= 0.01) return;
+      var fromPinned = !!pinned[constraint.from];
+      var toPinned = !!pinned[constraint.to];
+      if (fromPinned && toPinned) return;
+      if (fromPinned) {
+        to[axis] -= constraint.sign * deficit;
+      } else if (toPinned) {
+        from[axis] += constraint.sign * deficit;
+      } else {
+        from[axis] += constraint.sign * deficit * 0.5;
+        to[axis] -= constraint.sign * deficit * 0.5;
+      }
+    });
+  }
+
+  function resolveNodeCollisions(nodes, positions, pinned) {
+    for (var i = 0; i < nodes.length; i++) {
+      for (var j = i + 1; j < nodes.length; j++) {
+        var aid = nodes[i].node_id, bid = nodes[j].node_id;
+        var a = positions[aid], b = positions[bid];
+        if (!a || !b) continue;
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var overlapX = COLLISION_GAP_X - Math.abs(dx);
+        var overlapY = COLLISION_GAP_Y - Math.abs(dy);
+        if (overlapX <= 0 || overlapY <= 0) continue;
+        var axis = overlapX < overlapY ? "x" : "y";
+        var delta = axis === "x" ? dx : dy;
+        var amount = axis === "x" ? overlapX : overlapY;
+        var sign = Math.abs(delta) > 0.01 ? (delta > 0 ? 1 : -1) : (aid < bid ? 1 : -1);
+        var aPinned = !!pinned[aid], bPinned = !!pinned[bid];
+        if (aPinned && bPinned) continue;
+        if (aPinned) {
+          b[axis] += sign * amount;
+        } else if (bPinned) {
+          a[axis] -= sign * amount;
+        } else {
+          a[axis] -= sign * amount * 0.5;
+          b[axis] += sign * amount * 0.5;
         }
       }
-      yOffset += maxRows * ROW_GAP_Y + COMPONENT_GAP_Y;
-    });
+    }
+  }
 
-    // Isolated nodes (no relation yet): grid at the bottom.
-    var isolated = nodes.filter(function (n) { return !connectedIds[n.node_id]; });
-    isolated.sort(function (a, b) {
-      var pa = previousPositions[a.node_id], pb = previousPositions[b.node_id];
-      if (pa && pb) return pa.y - pb.y;
-      return a.node_id < b.node_id ? -1 : 1;
+  function constraintAxisBounds(id, axis, constraints, positions, pinned) {
+    if (pinned[id]) return {min: positions[id][axis], max: positions[id][axis]};
+    var min = -Infinity, max = Infinity;
+    (constraints || []).forEach(function (constraint) {
+      if (constraint.axis !== axis) return;
+      var from = positions[constraint.from], to = positions[constraint.to];
+      if (!from || !to) return;
+      if (constraint.from === id) {
+        if (constraint.sign > 0) min = Math.max(min, to[axis] + constraint.gap);
+        else max = Math.min(max, to[axis] - constraint.gap);
+      } else if (constraint.to === id) {
+        if (constraint.sign > 0) max = Math.min(max, from[axis] - constraint.gap);
+        else min = Math.max(min, from[axis] + constraint.gap);
+      }
     });
-    var cols = 4;
-    isolated.forEach(function (node, i) {
-      positions[node.node_id] = {
-        x: TOPO_PAD + (i % cols) * ISOLATED_GAP_X,
-        y: yOffset + Math.floor(i / cols) * ISOLATED_GAP_Y,
-      };
+    return {min: min, max: max};
+  }
+
+  function tryConstraintSafeSeparation(aid, bid, axis, gap, constraints, positions, pinned) {
+    var a = positions[aid], b = positions[bid];
+    if (!a || !b) return false;
+    var delta = b[axis] - a[axis];
+    var sign = Math.abs(delta) > 0.01 ? (delta > 0 ? 1 : -1) : (aid < bid ? 1 : -1);
+    var options = [];
+    if (!pinned[bid]) {
+      var bBounds = constraintAxisBounds(bid, axis, constraints, positions, pinned);
+      var targetB = a[axis] + sign * gap;
+      if (targetB >= bBounds.min - 0.01 && targetB <= bBounds.max + 0.01) {
+        options.push({id: bid, value: targetB, movement: Math.abs(targetB - b[axis])});
+      }
+    }
+    if (!pinned[aid]) {
+      var aBounds = constraintAxisBounds(aid, axis, constraints, positions, pinned);
+      var targetA = b[axis] - sign * gap;
+      if (targetA >= aBounds.min - 0.01 && targetA <= aBounds.max + 0.01) {
+        options.push({id: aid, value: targetA, movement: Math.abs(targetA - a[axis])});
+      }
+    }
+    if (!options.length) return false;
+    options.sort(function (left, right) {
+      if (left.movement !== right.movement) return left.movement - right.movement;
+      return left.id.localeCompare(right.id);
     });
+    positions[options[0].id][axis] = options[0].value;
+    return true;
+  }
+
+  function removeResidualCollisions(nodes, positions, pinned, constraints) {
+    // The main relaxation alternates collision and direction projection.  A
+    // dense relation graph can still finish with a few cards touching because
+    // the last direction projection wins.  This final pass moves one endpoint
+    // only inside the interval allowed by every incident direction constraint.
+    for (var pass = 0; pass < 80; pass++) {
+      var moved = false;
+      for (var i = 0; i < nodes.length; i++) {
+        for (var j = i + 1; j < nodes.length; j++) {
+          var aid = nodes[i].node_id, bid = nodes[j].node_id;
+          var a = positions[aid], b = positions[bid];
+          if (!a || !b) continue;
+          var overlapX = COLLISION_GAP_X - Math.abs(b.x - a.x);
+          var overlapY = COLLISION_GAP_Y - Math.abs(b.y - a.y);
+          if (overlapX <= 0 || overlapY <= 0) continue;
+          var firstAxis = overlapX < overlapY ? "x" : "y";
+          var secondAxis = firstAxis === "x" ? "y" : "x";
+          var separated = tryConstraintSafeSeparation(
+            aid, bid, firstAxis, firstAxis === "x" ? COLLISION_GAP_X : COLLISION_GAP_Y,
+            constraints, positions, pinned
+          ) || tryConstraintSafeSeparation(
+            aid, bid, secondAxis, secondAxis === "x" ? COLLISION_GAP_X : COLLISION_GAP_Y,
+            constraints, positions, pinned
+          );
+          moved = moved || separated;
+        }
+      }
+      if (!moved) break;
+    }
+  }
+
+  function springProfile(edge) {
+    var relation = String(edge && edge.relation || "").toLowerCase();
+    var scope = String(edge && edge.relation_scope || "STRUCTURAL").toUpperCase();
+    if (scope === "VIEW_RELATIVE" || relationConstraint(edge, {})) return null;
+    if (relation === "near" || relation === "spatial_neighbor") {
+      return {distance: 210, strength: 0.014};
+    }
+    if (relation === "co_visible") return {distance: 250, strength: 0.005};
+    return {distance: 220, strength: 0.009};
+  }
+
+  function computeTopologyLayout(nodes, edges, previousPositions, pinned) {
+    previousPositions = previousPositions || {};
+    pinned = pinned || {};
+    nodes = nodes || [];
+    edges = edges || [];
+    var positions = {};
+    var adj = buildAdjacency(nodes, edges);
+    var constraints = directionalConstraints(edges);
+    var components = findConnectedComponents(nodes, adj);
+    components.sort(function (a, b) { return a.slice().sort()[0].localeCompare(b.slice().sort()[0]); });
+    var componentOffset = 0;
+    components.forEach(function (component) {
+      var old = component.filter(function (id) { return previousPositions[id]; });
+      var centerX = old.length ? old.reduce(function (sum, id) { return sum + previousPositions[id].x; }, 0) / old.length : componentOffset;
+      var centerY = old.length ? old.reduce(function (sum, id) { return sum + previousPositions[id].y; }, 0) / old.length : 0;
+      component.sort();
+      component.forEach(function (id, index) {
+        if (previousPositions[id]) {
+          positions[id] = { x: previousPositions[id].x, y: previousPositions[id].y };
+          return;
+        }
+        var neighbor = (adj[id] || []).filter(function (other) { return positions[other] || previousPositions[other]; })[0];
+        var anchor = neighbor ? (positions[neighbor] || previousPositions[neighbor]) : {x: centerX, y: centerY};
+        var angle = (index * 2.399963229728653) % (2 * Math.PI);
+        var radius = neighbor ? 130 : 90 * Math.sqrt(index + 1);
+        positions[id] = {x: anchor.x + Math.cos(angle) * radius, y: anchor.y + Math.sin(angle) * radius};
+      });
+      componentOffset += Math.max(300, Math.sqrt(component.length) * 230);
+    });
+    // Bounded relaxation.  Structural edges keep related nodes nearby;
+    // view-relative direction edges are constraints and never act as hundreds
+    // of extra springs pulling every node into the same central pile.
+    for (var step = 0; step < 52; step++) {
+      var movement = {};
+      nodes.forEach(function (node) { movement[node.node_id] = {x: 0, y: 0}; });
+      for (var i = 0; i < nodes.length; i++) {
+        for (var j = i + 1; j < nodes.length; j++) {
+          var a = nodes[i].node_id, b = nodes[j].node_id;
+          var dx = positions[b].x - positions[a].x, dy = positions[b].y - positions[a].y;
+          var dist = Math.max(1, Math.hypot(dx, dy));
+          var repulsion = 700 / (dist * dist);
+          movement[a].x -= dx / dist * repulsion; movement[a].y -= dy / dist * repulsion;
+          movement[b].x += dx / dist * repulsion; movement[b].y += dy / dist * repulsion;
+        }
+      }
+      edges.forEach(function (edge) {
+        var a = positions[edge.from], b = positions[edge.to];
+        if (!a || !b) return;
+        var profile = springProfile(edge);
+        if (!profile) return;
+        var dx = b.x - a.x, dy = b.y - a.y, dist = Math.max(1, Math.hypot(dx, dy));
+        var attraction = (dist - profile.distance) * profile.strength;
+        movement[edge.from].x += dx / dist * attraction;
+        movement[edge.from].y += dy / dist * attraction;
+        movement[edge.to].x -= dx / dist * attraction;
+        movement[edge.to].y -= dy / dist * attraction;
+      });
+      nodes.forEach(function (node) {
+        var id = node.node_id, factor = pinned[id] ? 0 : (previousPositions[id] ? 0.15 : 1);
+        positions[id].x += Math.max(-8, Math.min(8, movement[id].x)) * factor;
+        positions[id].y += Math.max(-8, Math.min(8, movement[id].y)) * factor;
+      });
+      resolveNodeCollisions(nodes, positions, pinned);
+      applyDirectionalConstraints(constraints, positions, pinned);
+    }
+    // Finish with constraint/collision projection.  This is deterministic and
+    // removes the last few pixels of overlap left by competing springs.
+    for (var settle = 0; settle < 28; settle++) {
+      resolveNodeCollisions(nodes, positions, pinned);
+      applyDirectionalConstraints(constraints, positions, pinned);
+    }
+    removeResidualCollisions(nodes, positions, pinned, constraints);
     return positions;
   }
 
   function topoBounds(positions) {
     var xs = Object.keys(positions).map(function (id) { return positions[id].x; });
     var ys = Object.keys(positions).map(function (id) { return positions[id].y; });
-    xs.push(0); ys.push(0);
-    xs.push(LAYER_GAP_X * 4 + NODE_WIDTH); ys.push(ROW_GAP_Y * 6 + NODE_HEIGHT);
     var minX = Math.min.apply(null, xs);
     var maxX = Math.max.apply(null, xs) + NODE_WIDTH;
     var minY = Math.min.apply(null, ys);
@@ -1258,6 +1148,7 @@
   }
 
   function edgeLabelZh(edge, allEdges) {
+    if (edge && edge._display_relation_label) return edge._display_relation_label;
     var zh = RELATION_ZH[edge.relation] || edge.relation;
     var label = zh + " · ×" + (edge.observation_count || 1);
     if (edge.relation_scope === "VIEW_RELATIVE") {
@@ -1281,6 +1172,86 @@
     return label;
   }
 
+  function topologyPairKey(edge) {
+    return [String(edge.from || ""), String(edge.to || "")].sort().join("\u0000");
+  }
+
+  function shortObjectId(value) {
+    return String(value || "").replace(/^obj_/, "");
+  }
+
+  function relationFromAnchor(edge, anchorFrom, anchorTo) {
+    if (edge.from === anchorFrom && edge.to === anchorTo) return edge.relation;
+    if (edge.from === anchorTo && edge.to === anchorFrom) {
+      return RELATION_INVERSE[edge.relation] || edge.relation;
+    }
+    return edge.relation;
+  }
+
+  function finiteMapXyz(obj) {
+    var xyz = obj && obj.map_xyz;
+    if (!Array.isArray(xyz) || xyz.length < 3) return null;
+    var result = [Number(xyz[0]), Number(xyz[1]), Number(xyz[2])];
+    return result.every(function (value) { return isFinite(value); }) ? result : null;
+  }
+
+  function mapRelativeParts(fromObj, toObj) {
+    var a = finiteMapXyz(fromObj), b = finiteMapXyz(toObj);
+    if (!a || !b) return [];
+    var parts = [];
+    // pslam_map 沿用 ROS 平面轴：+x 为会话起始前方，+y 为左方，+z 为上方。
+    if (Math.abs(a[1] - b[1]) >= 0.15) parts.push(a[1] > b[1] ? "左侧" : "右侧");
+    if (Math.abs(a[0] - b[0]) >= 0.15) parts.push(a[0] > b[0] ? "前方" : "后方");
+    if (Math.abs(a[2] - b[2]) >= 0.25) parts.push(a[2] > b[2] ? "上方" : "下方");
+    return parts;
+  }
+
+  function decorateTopologyEdges(rawEdges, semanticObjects) {
+    var edges = (rawEdges || []).map(function (edge) {
+      var copy = {};
+      Object.keys(edge || {}).forEach(function (key) { copy[key] = edge[key]; });
+      return copy;
+    });
+    var objects = {};
+    (semanticObjects || []).forEach(function (obj) {
+      if (obj && obj.object_id) objects[obj.object_id] = obj;
+    });
+    var groups = {};
+    edges.forEach(function (edge) {
+      var key = topologyPairKey(edge);
+      (groups[key] = groups[key] || []).push(edge);
+    });
+    Object.keys(groups).forEach(function (key) {
+      var pair = groups[key];
+      var directional = pair.filter(function (edge) { return !!RELATION_DIRECTED[edge.relation]; });
+      var spatial = pair.filter(function (edge) {
+        return edge.relation === "near" || edge.relation === "spatial_neighbor";
+      });
+      var candidates = spatial.length ? spatial : pair.filter(function (edge) {
+        return edge.relation === "co_visible";
+      });
+      if (!candidates.length) return;
+      candidates.sort(function (a, b) {
+        return String(a.edge_id || "").localeCompare(String(b.edge_id || ""));
+      });
+      var primary = candidates[0];
+      var parts = [];
+      directional.forEach(function (edge) {
+        var relation = relationFromAnchor(edge, primary.from, primary.to);
+        var zh = RELATION_ZH[relation] || relation;
+        if (parts.indexOf(zh) < 0) parts.push(zh);
+      });
+      // One merged label per pair keeps the graph readable while retaining
+      // the relative-position wording requested for each visible connection.
+      if (!parts.length) parts = mapRelativeParts(objects[primary.from], objects[primary.to]);
+      if (!parts.length) parts.push(RELATION_ZH[primary.relation] || primary.relation);
+      primary._show_relation_label = true;
+      primary._display_relation_label =
+        shortObjectId(primary.from) + "相对" + shortObjectId(primary.to) + "：" + parts.join(" · ");
+    });
+    return edges;
+  }
+
   function drawTopologyCaption(svg, ns, msg) {
     var text = document.createElementNS(ns, "text");
     text.setAttribute("x", 10);
@@ -1296,41 +1267,6 @@
     return text.slice(0, max - 1) + "…";
   }
 
-  function fitBounds(layout, robot, spatial) {
-    var xs = [];
-    var ys = [];
-    Object.keys(layout).forEach(function (id) {
-      xs.push(layout[id].x); ys.push(layout[id].y);
-    });
-    if (robot && robot.x !== undefined && robot.y !== undefined) {
-      xs.push(robot.x); ys.push(-(robot.y || 0));
-    }
-    // Include persistent objects with a map position (plan §12.6).
-    var spatial2 = spatial || null;
-    if (spatial2 && Array.isArray(spatial2.semantic_objects)) {
-      spatial2.semantic_objects.forEach(function (obj) {
-        if (obj.map_xyz) { xs.push(obj.map_xyz[0]); ys.push(-obj.map_xyz[1]); }
-      });
-    }
-    // Include route / frontiers positions.
-    var route = spatial2 && (spatial2.route_plan || (spatial2.semantic_graph && spatial2.semantic_graph.route_plan));
-    if (route && Array.isArray(route.waypoints)) {
-      route.waypoints.forEach(function (wp) { xs.push(wp[0]); ys.push(-wp[1]); });
-    }
-    if (spatial2 && Array.isArray(spatial2.frontiers)) {
-      spatial2.frontiers.forEach(function (f) {
-        if (f.position) { xs.push(f.position[0]); ys.push(-f.position[1]); }
-      });
-    }
-    if (!xs.length) return { minX: -WIDTH / 2, maxX: WIDTH / 2, minY: -HEIGHT / 2, maxY: HEIGHT / 2 };
-    var minX = Math.min.apply(null, xs);
-    var maxX = Math.max.apply(null, xs);
-    var minY = Math.min.apply(null, ys);
-    var maxY = Math.max.apply(null, ys);
-    if (maxX - minX < 1) { minX -= 20; maxX += 20; }
-    if (maxY - minY < 1) { minY -= 20; maxY += 20; }
-    return { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
-  }
 
   function boundsToViewBox(b) {
     var w = Math.max(60, b.maxX - b.minX);
@@ -1346,46 +1282,8 @@
     );
   }
 
-  function drawGrid(svg, ns, bounds) {
-    var step = 50;
-    for (var x = Math.floor(bounds.minX / step) * step; x <= bounds.maxX; x += step) {
-      var line = document.createElementNS(ns, "line");
-      line.setAttribute("x1", x); line.setAttribute("y1", bounds.minY);
-      line.setAttribute("x2", x); line.setAttribute("y2", bounds.maxY);
-      line.setAttribute("stroke", "#161c24");
-      line.setAttribute("stroke-width", "0.5");
-      svg.appendChild(line);
-    }
-    for (var y = Math.floor(bounds.minY / step) * step; y <= bounds.maxY; y += step) {
-      var hline = document.createElementNS(ns, "line");
-      hline.setAttribute("x1", bounds.minX); hline.setAttribute("y1", y);
-      hline.setAttribute("x2", bounds.maxX); hline.setAttribute("y2", y);
-      hline.setAttribute("stroke", "#161c24");
-      hline.setAttribute("stroke-width", "0.5");
-      svg.appendChild(hline);
-    }
-  }
 
-  function placeToNode(place) {
-    return {
-      node_id: place.place_id,
-      pose: place.pose || null,
-      objects: place.observed_object_ids || [],
-      visited_count: place.visit_count || 0,
-      reachable_state: place.target_confirmed ? "TARGET_CONFIRMED" : (place.visit_count > 0 ? "VISITED" : "OBSERVED"),
-      heading_sector: null,
-      timestamp: (place.provenance && place.provenance.created_at) || null,
-      pose_quality: place.pose_quality || "unavailable",
-      negative_evidence_count: place.negative_evidence || 0,
-      target_match_level: place.target_candidate ? "candidate" : "none",
-    };
-  }
 
-  function shortNodeLabel(node) {
-    var objects = node.objects || [];
-    if (!objects.length) return node.node_id;
-    return objects.slice(0, 2).join("+");
-  }
 
   function fmtTime(ts) {
     if (!ts) return "--";
@@ -1419,7 +1317,9 @@
     fingerprint: topologyFingerprint,
     components: findConnectedComponents,
     relationLabel: edgeLabelZh,
+    decorateEdges: decorateTopologyEdges,
     objectOnly: objectTopologyOnly,
+    objectStrict: objectTopologyStrict,
   };
 
   // Pure SVG viewport math (wheel zoom / drag pan) for headless tests.

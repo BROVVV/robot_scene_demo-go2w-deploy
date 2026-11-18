@@ -31,6 +31,7 @@ timeout 10 ros2 topic echo /go2w/slam/map_2d --once >/dev/null 2>&1 || {
 python3 - "${out_dir}" "${project_root}" <<'PY'
 import json
 import struct
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -38,6 +39,7 @@ from pathlib import Path
 import rclpy
 from nav_msgs.msg import OccupancyGrid
 from sensor_msgs.msg import PointCloud2
+from std_msgs.msg import String
 
 out_dir = Path(sys.argv[1])
 project_root = Path(sys.argv[2])
@@ -131,9 +133,36 @@ provenance = {}
 prov_file = project_root / "runtime/go2w/plain_slam/config_provenance.json"
 if prov_file.exists():
     provenance = json.loads(prov_file.read_text("utf-8"))
+
+# §21 点名要求 provenance 自证"这份地图由哪份代码、按哪种点时间戳模式生成"。
+# 底稿 config_provenance.json 是配置生成期写的，不含这两项 —— 它们只有到
+# 存档这一刻才确定，所以在写盘前现取。
+#
+# 代码版本取"实际检出的 HEAD"，不是 lock 里的上游基线：打过 patch 的树才是
+# 编译出这份地图的树（见 configs/go2w/plain_slam_lock.yaml 头部）。
+plain_slam_commit = ""
+slam_src = project_root / "ros2_ws" / "src" / "plain_slam_ros2"
+if (slam_src / ".git").exists():
+    plain_slam_commit = subprocess.run(
+        ["git", "-C", str(slam_src), "rev-parse", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+# /go2w/slam/point_status 由 pandar_slam_adapter 发布，data 形如
+#   "timestamp_mode: TIMESTAMP_SYNTHETIC; non_monotonic: 0; points_total: ..."
+# 拿不到就留空串 —— 不编（同 webui_map_snapshot_writer 的"拿不到的一律不编"）。
+point_status = wait_topic(String, "/go2w/slam/point_status", timeout_s=5.0)
+point_timestamp_mode = ""
+if point_status is not None:
+    for field in point_status.data.split(";"):
+        if field.strip().startswith("timestamp_mode:"):
+            point_timestamp_mode = field.split(":", 1)[1].strip()
+
 provenance.update({
     "pandar_model": "Hesai PandarXT-16",
     "imu_source": "/utlidar/imu",
+    "plain_slam_commit": plain_slam_commit,
+    "point_timestamp_mode": point_timestamp_mode,
     "saved_at": __import__("datetime").datetime.now().isoformat(),
     "mapping_assist_only": True,
     "map_3d_saved": pcd_saved,

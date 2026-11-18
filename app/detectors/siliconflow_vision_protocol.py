@@ -19,6 +19,8 @@ from typing import Any
 MODE_QUICK = "quick"
 MODE_SEMANTIC = "semantic"
 MODE_VERIFY = "verify"
+MODE_LABEL = "label"
+MODE_STRATEGIC = "strategic"
 
 PRIORITY_REALTIME = "realtime"
 PRIORITY_BACKGROUND = "background"

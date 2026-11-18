@@ -1,0 +1,9 @@
+<!-- Single-plan tree for the separately authorized centimetre-scale trial.
+     The path is already checked by Nav2SearchBackend before NavigateToPose.
+     Do not periodically replan after the goal enters the current footprint. -->
+<root main_tree_to_execute="MainTree"><BehaviorTree ID="MainTree">
+  <Sequence>
+    <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased" server_timeout="20"/>
+    <FollowPath path="{path}" controller_id="FollowPath" server_timeout="20"/>
+  </Sequence>
+</BehaviorTree></root>

@@ -1,11 +1,18 @@
+# GO2-W 自主搜索单链路速度平滑（计划书 §6.4）。
+#
+# 上限必须与 go2w_cmd_vel_bridge 一致：线速度 0.30 m/s、角速度 0.50 rad/s。
+# Humble 的 velocity_smoother 没有 cmd_vel_in_topic / cmd_vel_out_topic 参数，
+# 输入输出固定是 cmd_vel / cmd_vel_smoothed，由 launch 显式 remap 成
+# /cmd_vel_nav_raw -> /cmd_vel_nav_smoothed。
 velocity_smoother:
   ros__parameters:
     smoothing_frequency: 20.0
     scale_velocities: false
-    feedback: OPEN_LOOP
-    max_velocity: [0.15, 0.0, 0.20]
-    min_velocity: [-0.15, 0.0, -0.20]
-    max_accel: [0.20, 0.0, 0.40]
-    max_decel: [-0.20, 0.0, -0.40]
-    odom_topic: /lio/odom
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.30, 0.0, 0.50]
+    min_velocity: [-0.05, 0.0, -0.50]
+    max_accel: [0.20, 0.0, 0.80]
+    max_decel: [-0.25, 0.0, -1.00]
+    odom_topic: /go2w/odom/fused
+    odom_duration: 0.1
     velocity_timeout: 0.30

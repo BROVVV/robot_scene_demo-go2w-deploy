@@ -1,0 +1,33 @@
+amcl:
+  ros__parameters:
+    use_sim_time: false
+    base_frame_id: base_link
+    odom_frame_id: odom_fused
+    global_frame_id: map
+    scan_topic: /go2w/lidar/mapping_scan
+    tf_broadcast: true
+    transform_tolerance: 0.2
+    robot_model_type: nav2_amcl::DifferentialMotionModel
+    min_particles: 500
+    max_particles: 2000
+    laser_min_range: 0.37
+    laser_max_range: 6.2
+    max_beams: 90
+    # Publish a scan-matched estimate before localization_health's 0.02 m/rad
+    # stationary exemption expires.  With the old 0.1 thresholds every short
+    # acceptance move entered a deterministic NO_LOCALIZATION gap between
+    # "not stationary" and AMCL's next update.
+    update_min_d: 0.01
+    update_min_a: 0.01
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    laser_model_type: likelihood_field
+    laser_likelihood_max_dist: 2.0
+    resample_interval: 1
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    set_initial_pose: false
+    save_pose_rate: 0.5

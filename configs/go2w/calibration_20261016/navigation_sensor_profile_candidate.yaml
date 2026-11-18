@@ -1,0 +1,96 @@
+schema_version: 1
+robot_model: Unitree Go2-W
+kind: recorded_rgbd_floor_estimate
+execution_scope: bounded_trial
+manufacturer_calibration: false
+assumptions:
+- camera mounting horizontal position estimated x=0.30m,y=0m; horizontal yaw assumed
+  zero
+- level floor and four-wheel contact; approximate geometry, no large-field physical
+  validation
+- camera was manually adjusted 2026-10-16; current floor fit replaces old tilt
+- horizontal sensor position and yaw inherit prior estimates; current evidence is
+  not a completed field trial
+frames:
+  base_to_cloud:
+    parent: base_link
+    child: utlidar_lidar
+    translation_m:
+    - 0.06881458940911286
+    - 0.00980355697333788
+    - 0.021943983061739863
+    rotation_rpy_rad:
+    - -2.9193022709731316
+    - -0.1325807432975139
+    - -1.069432081852984
+  base_to_camera:
+    parent: base_link
+    child: front_camera_optical_frame
+    translation_m:
+    - 0.3
+    - 0.0
+    - 0.06357023842215363
+    rotation_rpy_rad:
+    - -1.5087502318460806
+    - -0.020488955887774774
+    - -1.5716468797182226
+preprocess:
+  minimum_range: 0.37
+  maximum_range: 6.2
+  minimum_height: -0.5338194450975058
+  maximum_height: 1.2
+  ground_height: -0.3838194450975058
+  collision_maximum_height: 0.4
+  self_half_length: 0.35
+  self_half_width: 0.215
+  self_filter_margin: 0.04
+  front_corridor_half_width: 0.315
+  rotation_envelope_radius: 0.511
+  self_regions: []
+posture:
+  joint_q:
+  - 0.05612713098526001
+  - 0.7018254399299622
+  - -1.3770639896392822
+  - 0.014389246702194214
+  - 0.6963451504707336
+  - -1.3230700492858887
+  - -0.03952468931674957
+  - 0.6927307844161987
+  - -1.304492712020874
+  - -0.019728422164916992
+  - 0.720041036605835
+  - -1.3451542854309082
+  maximum_joint_deviation_rad: 0.08
+  body_roll_pitch_rad:
+  - 0.003743057604879141
+  - -0.0015887214103713632
+  maximum_attitude_deviation_rad: 0.015
+evidence:
+- path: configs/go2w/calibration_20261015/floor_constrained_calibration.json
+  sha256: 4cae7ef70a3f95d3a1807e1eedc6fe5ee5fd71b2947b52f864ca3df57b0cec42
+- path: configs/go2w/calibration_20261015/body_transform_candidate.json
+  sha256: 39d0daf3800b5dbcfe2e4f2e70cf50eea613839b411d0491b86ab59712e5e9ba
+- path: configs/go2w/calibration_20261015/posture.json
+  sha256: 43854d59817c151c33063861f39cc5a5e9ffcd8e9f067aba512e182e4a94dd9a
+- path: configs/go2w/calibration_20261015/height.json
+  sha256: b035da40fdaab64ca155f8f4a38c40db735e5ac249a0daed2601d95fb657d1e6
+- path: configs/go2w/calibration_20261015/raw_self_candidates.npz
+  sha256: 45aa2315566feba0205bfc3315c47572b5b94f156d530f505d089ee92357c461
+- path: configs/go2w/calibration_20261015/raw_self_model_report.json
+  sha256: e6eb4f3d5a28267c3021d47d43992309b4764e326a3b948ba2638f85a022fabb
+- path: configs/go2w/calibration_20261015/raw_self_model_heldout.json
+  sha256: 05072d2f34dac420d3dbef01a0546018b9a4934303db4cf6546d4335d95e079d
+- path: configs/go2w/calibration_20261015/raw_self_model_heldout_3cm.json
+  sha256: f2699f4bab83e3bf7fc944175c909f0ded803fa2387c983d7ca32f3caea9cf3f
+raw_self_return_model:
+  path: configs/go2w/calibration_20261016/raw_self_intersection.npz
+  radius_m: 0.015
+  method: raw_background_registration_body_vs_world
+raw_floor_plane:
+  normal:
+  - -0.1296948824590254
+  - 0.22171468306153053
+  - 0.9664480517745717
+  distance_m: 0.45590926905509277
+  tolerance_m: 0.02

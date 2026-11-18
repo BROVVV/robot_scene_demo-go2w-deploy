@@ -28,6 +28,7 @@ class LocalSportStateRelay(Node):
         self._publisher = self.create_publisher(SportModeState, output_topic, qos)
         self._timer = self.create_timer(0.02, self._publish_latest)
         self._last_capture_monotonic = 0.0
+        self._boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
         self.get_logger().info(
             f"relaying read-only sport state {input_path} -> {output_topic}"
         )
@@ -38,8 +39,17 @@ class LocalSportStateRelay(Node):
         except (OSError, ValueError, json.JSONDecodeError):
             return
         try:
+            if (isinstance(payload["capture_monotonic"], bool)
+                    or not isinstance(payload["capture_monotonic"], (int, float))
+                    or isinstance(payload["capture_wall_time"], bool)
+                    or not isinstance(payload["capture_wall_time"], (int, float))):
+                return
             capture_monotonic = float(payload["capture_monotonic"])
-            if time.monotonic() - capture_monotonic > self._max_age:
+            age = time.monotonic() - capture_monotonic
+            wall_age = time.time() - float(payload["capture_wall_time"])
+            if not (0 <= age <= self._max_age and 0 <= wall_age <= self._max_age):
+                return
+            if "capture_boot_id" in payload and payload["capture_boot_id"] != self._boot_id:
                 return
             message = SportModeState()
             message.stamp.sec = int(payload.get("stamp_sec", 0))

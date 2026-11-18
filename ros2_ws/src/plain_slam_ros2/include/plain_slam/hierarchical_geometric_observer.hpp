@@ -54,6 +54,15 @@ class HierarchicalGeometricObserver {
     return active_points_rate_;
   }
 
+  // [GO2W-DIAG-R10] 配准实际迭代次数与退出时的 se3 增量范数
+  size_t GetLastIterNum() const {
+    return last_iter_num_;
+  }
+
+  float GetLastEpsilon() const {
+    return last_epsilon_;
+  }
+
  private:
   float gamma1_; // k_q
   float gamma2_; // k_gb
@@ -64,6 +73,9 @@ class HierarchicalGeometricObserver {
   float huber_delta_;
 
   float active_points_rate_;
+
+  size_t last_iter_num_ = 0;
+  float last_epsilon_ = 0.0f;
 };
 
 } // namespace pslam

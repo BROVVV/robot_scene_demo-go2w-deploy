@@ -32,6 +32,16 @@ stop_pid_file rviz_plain_slam
 stop_pid_file plain_slam_bag
 stop_pid_file plain_slam_go2w
 stop_pid_file plain_slam_web_cloud_relay
+# 延迟缓冲。它和 relay 一样是 setsid + 写 pid 文件启动的，但 2026-09-11 的 B3
+# 会话停栈后它活了下来（跑了 2 天 16 小时），因为下面 pgrep 清单漏了它、且它的
+# cmdline 不含 ros2_ws/go2w_plain_slam_bridge，连 case 白名单也过不了。
+# 留着它 = 下次启动多一份 /go2w/slam/pandar_points_buffered 发布者。
+stop_pid_file lidar_delay_buffer
+# 磁盘守护。它自己触发停机时会调本脚本，那时别把它杀掉，好让它把越界结论
+# 留在自己的日志里（它触发后本就退出）。
+if [[ "${GO2W_SLAM_DISK_GUARD_TRIPPED:-0}" != "1" ]]; then
+  stop_pid_file plain_slam_disk_guard
+fi
 
 # Bridge + plain_slam node processes (falls back to pgrep when the launcher
 # pid file is stale).

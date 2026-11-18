@@ -215,6 +215,50 @@ def lag_scan(imu: dict, imu_axis: str, reference_t: np.ndarray,
     return lags, values
 
 
+def cumulative_lag(reference_t: np.ndarray, reference_y: np.ndarray,
+                   other_t: np.ndarray, other_y: np.ndarray,
+                   span_s: float, step_s: float) -> dict:
+    """扫时间平移，让 other 的累积 yaw 曲线对上参考曲线。
+
+    正 lag = other 的戳偏晚。两条曲线各自去均值、并逐 lag 拟合尺度，所以只比
+    时间结构、不比幅值 —— 未去畸变点云的 scan-to-scan ICP 幅值系统性偏大（本机
+    实测 +5%），带着幅值比会把最佳平移量带偏。
+    """
+    inside = ((reference_t >= other_t[0] - span_s)
+              & (reference_t <= other_t[-1] + span_s))
+    base_t, base_y = reference_t[inside], reference_y[inside]
+    if base_t.size < 5:
+        return {"reason": "两条流在时间上没有重叠"}
+    base_y = (base_y - base_y.mean()) / (np.abs(base_y).max() or 1.0)
+    lags = np.arange(-span_s, span_s + 0.5 * step_s, step_s)
+    errors = np.full(lags.size, np.nan)
+    for index, lag in enumerate(lags):
+        sampled = np.interp(base_t + lag, other_t, other_y,
+                            left=np.nan, right=np.nan)
+        usable = np.isfinite(sampled)
+        if usable.sum() < 5:
+            continue
+        aligned = sampled[usable] - sampled[usable].mean()
+        if not aligned.any():
+            continue
+        # 逐 lag 同时拟合尺度。只去均值归一化不够：未去畸变点云的 scan-to-scan
+        # ICP 幅值系统性偏大（本机实测 +5%），这点幅值差会摊成一个关于窗中心反对称
+        # 的斜坡，实测 RMSE 0.036 —— 比真正的时间信号还大，argmin 直接滑到搜索边界
+        # （-0.500s）。拟合掉尺度后同一条 IMU 的信号才露出来：+0.010s，RMSE 0.0017，
+        # 误差面是干净的 V 形。
+        reference = base_y[usable] - base_y[usable].mean()
+        scale = float(aligned @ reference / (aligned @ aligned))
+        errors[index] = float(np.sqrt(np.mean((scale * aligned - reference) ** 2)))
+    if not np.isfinite(errors).any():
+        return {"reason": "没有可用的平移量"}
+    best = int(np.nanargmin(errors))
+    band = np.where(np.nan_to_num(errors, nan=1e9) <= errors[best] * 1.10)[0]
+    return {"best_offset_s": float(lags[best]),
+            "rmse": float(errors[best]),
+            "offset_ci_95_s": [float(lags[band.min()]), float(lags[band.max()])],
+            "ci_method": "rmse_within_110pct_of_min"}
+
+
 def fisher_interval(correlation: float, samples: int) -> tuple[float, float]:
     if samples <= 4 or not math.isfinite(correlation):
         return (float("nan"), float("nan"))
@@ -294,12 +338,42 @@ def detect_segments(times: np.ndarray, yaw_rate: np.ndarray, speed: np.ndarray,
     return kept
 
 
+# sensor_msgs/PointField 的 datatype 编号。
+POINT_FIELD_DTYPES = {1: "int8", 2: "uint8", 3: "int16", 4: "uint16",
+                      5: "int32", 6: "uint32", 7: "float32", 8: "float64"}
+
+
+def scan_reference_seconds(message) -> float:
+    """一帧点云的物理代表时刻 = 帧内逐点时间戳的中位数。
+
+    header.stamp 是**帧首**（实测与首点时间戳差 0.00 ms），而一帧扫描要
+    99.4 ms，拿帧首代表整帧会带半个帧跨度的系统偏置 —— 实测能把 IMU 看成
+    晚 53 ms，整个结论就反了。没有逐点时间戳时才退回 header。
+    """
+    names = [field.name for field in message.fields]
+    if "timestamp" not in names:
+        return stamp_sec(message)
+    # 逐点 schema 混了 float32 和 float64，read_points 直接读不了。
+    array = np.frombuffer(message.data, dtype=np.dtype({
+        "names": names,
+        "formats": [POINT_FIELD_DTYPES[field.datatype] if field.count == 1
+                    else (POINT_FIELD_DTYPES[field.datatype], field.count)
+                    for field in message.fields],
+        "offsets": [field.offset for field in message.fields],
+        "itemsize": message.point_step}))
+    values = np.asarray(array["timestamp"], dtype=float)
+    values = values[np.isfinite(values)]
+    return float(np.median(values)) if values.size else stamp_sec(message)
+
+
 def cloud_points(message, voxel_m: float, max_points: int) -> np.ndarray:
     from sensor_msgs_py import point_cloud2
 
-    raw = point_cloud2.read_points_numpy(
+    # read_points_numpy 要求所有字段同 datatype；plain_slam schema 是
+    # x/y/z/intensity FLOAT32 + timestamp FLOAT64，只能走结构化读取。
+    raw = point_cloud2.read_points(
         message, field_names=("x", "y", "z"), skip_nans=True)
-    points = np.asarray(raw, dtype=float).reshape(-1, 3)
+    points = np.stack([raw["x"], raw["y"], raw["z"]], axis=-1).astype(float)
     radius = np.linalg.norm(points, axis=1)
     points = points[(radius > 0.4) & (radius < 40.0)]
     if voxel_m > 0.0 and points.size:
@@ -421,9 +495,87 @@ def segment_icp(clouds: list, cloud_times: np.ndarray, start: float, end: float,
             math.atan2(rotation[1, 0], rotation[0, 0])), 3),
         "accumulated_yaw_unwrapped_deg": round(float(sum(yaws)), 3),
         "net_translation_m": round(float(np.linalg.norm(translation)), 4),
+        # 累积位移的方向（在段首那一帧的雷达系里）。位移方向是"雷达系 ↔ 车体系"
+        # yaw 的唯一观测渠道，只输出模长就把这个信息扔了。
+        "net_translation_bearing_deg": round(math.degrees(
+            math.atan2(translation[1], translation[0])), 3),
         "residual_rms_median_m": round(float(np.median(residuals)), 4),
         "residual_rms_max_m": round(float(np.max(residuals)), 4),
         "pairs": pairs,
+    }
+
+
+def strongest_turn_window(imu: dict, min_rate: float = 0.3,
+                          min_hold_s: float = 1.0) -> tuple[float, float] | None:
+    """持续时间最长的快速转向窗。ICP 时间基准需要足够的角度激励。"""
+    hot = np.abs(imu["z"]) > min_rate
+    best: tuple[float, float] | None = None
+    start: int | None = None
+    for index, flag in enumerate(hot):
+        if flag and start is None:
+            start = index
+        elif not flag and start is not None:
+            if imu["t"][index - 1] - imu["t"][start] >= min_hold_s:
+                span = (float(imu["t"][start]), float(imu["t"][index - 1]))
+                if best is None or span[1] - span[0] > best[1] - best[0]:
+                    best = span
+            start = None
+    return best
+
+
+def icp_time_base(raw_clouds: list, imu: dict, fused: dict,
+                  fused_rate: np.ndarray, arguments) -> dict:
+    """用点云 ICP 当绝对时间基准，量每条链路相对雷达硬件时钟的固定偏移。
+
+    这是唯一不依赖 IMU 的基准：逐点时间戳是雷达硬件打的，与任何软件链路无关。
+    fused 的戳是发布时刻（wheel_odom.py:315），结构上就晚 50~73 ms，拿它当基准
+    量到的是它自己的延迟。
+    """
+    window = strongest_turn_window(imu)
+    if window is None:
+        return {"available": False, "reason": "没有找到持续的快速转向窗"}
+    reference = np.array([scan_reference_seconds(item)
+                          for item, _ in raw_clouds])
+    inside = np.where((reference >= window[0]) & (reference <= window[1]))[0]
+    if inside.size < 8:
+        return {"available": False, "reason": "转向窗内点云帧不足"}
+
+    points = [cloud_points(raw_clouds[index][0], arguments.icp_voxel_m,
+                           arguments.icp_max_points) for index in inside]
+    accumulated = [0.0]
+    for previous, current in zip(points, points[1:]):
+        result = icp_align(current, previous)
+        step = math.radians(result["yaw_deg"]) if result.get("converged") else 0.0
+        # 单帧转 45° 不可能，判为失配而不是把它累进去。
+        accumulated.append(accumulated[-1]
+                           + (step if abs(step) < math.radians(45) else 0.0))
+    frame_t = reference[inside]
+    frame_yaw = np.array(accumulated)
+    fused_yaw = np.unwrap(fused["yaw"])
+
+    def integrate(times, rates):
+        return np.concatenate([[0.0], np.cumsum(
+            (rates[1:] + rates[:-1]) * 0.5 * np.diff(times))])
+
+    return {
+        "available": True,
+        "reference": "每帧逐点时间戳的中位数（雷达硬件时钟）",
+        "window_s": [round(float(window[0]), 3), round(float(window[1]), 3)],
+        "frame_count": int(inside.size),
+        "accumulated_yaw_deg": round(
+            math.degrees(float(frame_yaw[-1] - frame_yaw[0])), 3),
+        "links": {
+            "imu": cumulative_lag(frame_t, frame_yaw, imu["t"],
+                                  integrate(imu["t"], imu["z"]),
+                                  arguments.lag_span_s, arguments.lag_step_s),
+            "fused_pose_yaw": cumulative_lag(
+                frame_t, frame_yaw, fused["t"], fused_yaw - fused_yaw[0],
+                arguments.lag_span_s, arguments.lag_step_s),
+            "fused_twist_yaw": cumulative_lag(
+                frame_t, frame_yaw, fused["t"],
+                integrate(fused["t"], fused_rate),
+                arguments.lag_span_s, arguments.lag_step_s),
+        },
     }
 
 
@@ -519,7 +671,17 @@ def verdict(report: dict) -> dict:
     """计划书 §8.3 的判定顺序：轴向 → 固定时间偏移 → 外参 → 匹配参数。"""
     axes = report["angular_velocity_vs_fused_yaw_rate"]
     axis = axes[axes["dominant_axis"]]
-    offset = float(axis.get("best_offset_s") or 0.0)
+    # 时间偏移这门改用点云 ICP 基准判。fused 的 twist 结构上就晚 50~73 ms
+    # （20 Hz 采样保持 + 区间平均速率标在区间末端），拿它当基准量到的是它自己
+    # 的延迟。同一条 IMU：fused 基准给 -0.065s，ICP 基准给 +0.003s。
+    icp_links = (report.get("cloud_icp_time_base") or {}).get("links") or {}
+    icp_offset = (icp_links.get("imu") or {}).get("best_offset_s")
+    if icp_offset is None:
+        offset = float(axis.get("best_offset_s") or 0.0)
+        time_reference = "fused_twist（ICP 基准不可用，退回旧判据）"
+    else:
+        offset = float(icp_offset)
+        time_reference = "cloud_icp"
     failed = [row for segment in report["segments"] for row in segment["gates"]
               if not row["passed"]]
     if not report["excitation"]["sufficient"]:
@@ -532,13 +694,16 @@ def verdict(report: dict) -> dict:
         step = ("先修 IMU 轴向/符号：主相关轴是 "
                 f"{axes['dominant_axis']}，相关系数 {axis.get('best_correlation')}")
     elif abs(offset) > 0.02:
-        step = f"先修固定时间偏移：最佳偏移 {offset:+.3f}s 超过 20ms"
+        step = (f"先修固定时间偏移：{time_reference} 基准下最佳偏移 "
+                f"{offset:+.3f}s 超过 20ms")
     elif failed:
         step = f"时间和轴向可用，接下来求 Pandar↔IMU 外参；{len(failed)} 项 §8.6 门槛未过"
     else:
         step = "时间、轴向、§8.6 门槛全部通过；只剩 LIO 匹配参数微调"
     return {"next_action": step, "failed_gate_count": len(failed),
             "excitation_sufficient": report["excitation"]["sufficient"],
+            "time_offset_s": round(offset, 4),
+            "time_offset_reference": time_reference,
             "extrinsic_upgrade_allowed": bool(report["excitation"]["sufficient"]
                                               and axes["axis_ok"]
                                               and abs(offset) <= 0.02
@@ -581,6 +746,39 @@ def print_report(report: dict) -> None:
               f"CI95=[{interval[0]:+.3f},{interval[1]:+.3f}]s")
     print(f"  主轴={axes['dominant_axis']} 期望=z 轴向判定="
           f"{'OK' if axes['axis_ok'] else ('无法判定(无激励)' if not excite['sufficient'] else 'FAIL')}")
+    mirror = report["angular_velocity_vs_pslam_yaw_rate"]
+    print(f"\n-- 对照：角速度 vs pslam yaw rate (参考量: {report['pslam_yaw_rate_source']}) --")
+    print("   (同源对照，lag≈0 是必然，不能当独立基准；独立基准见下方 ICP 段)")
+    for axis in ("x", "y", "z"):
+        row = mirror[axis]
+        interval = row.get("offset_ci_95_s") or [float("nan")] * 2
+        print(f"  {axis}: r0={row['correlation_at_zero_lag']:+.4f} "
+              f"peak_r={row.get('best_correlation', float('nan')):+.4f} "
+              f"offset={row.get('best_offset_s', float('nan')):+.3f}s "
+              f"CI95=[{interval[0]:+.3f},{interval[1]:+.3f}]s")
+    icp_base = report.get("cloud_icp_time_base") or {}
+    print("\n-- 时间基准：点云 scan-to-scan ICP（雷达硬件时钟，唯一独立基准）--")
+    if not icp_base.get("available"):
+        print(f"  不可用: {icp_base.get('reason', 'no data')}")
+        print("  （时间偏移这门退回 fused twist 基准，量到的是 fused 自己的延迟）")
+    else:
+        print(f"  参考量: {icp_base['reference']}")
+        print(f"  转向窗 {icp_base['window_s'][0]:.2f}~{icp_base['window_s'][1]:.2f}s "
+              f"{icp_base['frame_count']} 帧，ICP 累积 "
+              f"{icp_base['accumulated_yaw_deg']:+.1f}°")
+        print("  曲线已各自去均值、逐 lag 拟合尺度后比：未去畸变点云的 ICP 幅值系统性"
+              "偏大（实测 +5%），不拟合尺度会把 argmin 顶到搜索边界。"
+              "rmse 是无量纲形状残差，不是秒")
+        for name, row in icp_base["links"].items():
+            if row.get("best_offset_s") is None:
+                print(f"  {name:<16} 不可用: {row.get('reason', 'no data')}")
+                continue
+            interval = row.get("offset_ci_95_s") or [float("nan")] * 2
+            print(f"  {name:<16} lag={row['best_offset_s']:+.3f}s "
+                  f"rmse={row['rmse']:.4f} "
+                  f"CI95=[{interval[0]:+.3f},{interval[1]:+.3f}]s")
+        print("  正 lag = 该链路的戳偏晚。fused 结构上就晚 50~73 ms，这是它的固有延迟，"
+              "不是 IMU 的问题")
     print("\n-- 分段对比 (fused / pslam / scan-to-scan ICP) --")
     for segment in report["segments"]:
         fused, pslam, icp = segment["fused"], segment["pslam"], segment["icp"]
@@ -608,6 +806,8 @@ def print_report(report: dict) -> None:
                   f"{row.get('value', '')} <= {row.get('limit', '')} "
                   f"{row.get('detail', '')}".rstrip())
     print(f"\n-- 判定 --\n  {report['verdict']['next_action']}")
+    print(f"  固定时间偏移: {report['verdict']['time_offset_s']:+.3f}s "
+          f"(基准: {report['verdict']['time_offset_reference']})")
     print(f"  未过门槛: {report['verdict']['failed_gate_count']}  "
           f"允许升级外参: {report['verdict']['extrinsic_upgrade_allowed']}")
     print(f"\n报告: {report['report_path']}")
@@ -656,6 +856,7 @@ def main() -> int:
             raw_imu["receive_t"] - raw_imu["t"]))
 
     fused_rate, rate_source = yaw_rate_series(fused)
+    pslam_rate, pslam_rate_source = yaw_rate_series(pslam)
     bag_start = float(min(fused["t"][0], imu["t"][0]))
     bag_end = float(max(fused["t"][-1], imu["t"][-1]))
     speed = np.hypot(np.gradient(fused["x"], fused["t"]),
@@ -679,6 +880,17 @@ def main() -> int:
             cloud_stamps, stamps(data.get(CORRECTED_IMU_TOPIC, []))),
         "angular_velocity_vs_fused_yaw_rate": axis_report(
             imu, fused["t"], fused_rate, arguments.lag_span_s, arguments.lag_step_s),
+        # 对照组的证据力很弱，别拿它下结论：odom_base 的 twist.angular.z 是
+        # ros_utils.cpp:280 里 measure.gyro.z() 的直接拷贝，跟这段 IMU 同源，
+        # 所以 lag 必然 ≈0、r 必然 ≈1，那是同源必然，不构成独立时间基准。
+        # 它只能验一件事：戳在传递途中没有被改过。
+        # 真正独立的基准只有点云 ICP（未去畸变的 /hesai/pandarxt16/points_raw，
+        # 雷达硬件戳）。实测 fused 的 twist 比 IMU 晚 65~70 ms，其中约 45 ms 是
+        # twist 字段自身的伪影——_fused_yaw_rate 是"区间平均角速度标在区间末端"
+        # （wheel_odom.py:297），所以它比同一节点的 pose.yaw 还要晚。
+        "angular_velocity_vs_pslam_yaw_rate": axis_report(
+            imu, pslam["t"], pslam_rate, arguments.lag_span_s, arguments.lag_step_s),
+        "pslam_yaw_rate_source": pslam_rate_source,
         "segment_source": segments[0]["source"] if segments else "none",
         "segments": [],
     }
@@ -710,6 +922,9 @@ def main() -> int:
                                max_pairs=arguments.icp_max_pairs),
             "gates": gate_rows(kind, fused_delta, pslam_delta),
         })
+
+    report["cloud_icp_time_base"] = icp_time_base(
+        data.get(RAW_CLOUD_TOPIC, []), imu, fused, fused_rate, arguments)
 
     report["verdict"] = verdict(report)
     arguments.output_dir.mkdir(parents=True, exist_ok=True)

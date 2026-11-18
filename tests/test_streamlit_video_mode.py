@@ -1,11 +1,36 @@
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from streamlit.testing.v1 import AppTest
+from app.task_understanding import task_pipeline
+
+
+class _OfflineTaskClient:
+    def chat(self,**kwargs):
+        return dict(raw_task='帮我找到手机',primary_intent='locate_object',
+            target=dict(name_zh='手机',name_en='phone',category='object'),
+            requested_subtasks=[dict(id='locate',type='locate_object',object='手机',
+                is_navigation_relevant=True)],confidence=dict(intent=.95,safety=.95,target=.95))
 
 
 class StreamlitVideoModeTest(unittest.TestCase):
+    def setUp(self):
+        # This suite checks UI rendering. Task interpretation must be a
+        # declared offline input, independent of real API keys/latency.
+        original=task_pipeline.prepare_navigation_task_from_text
+        self.task_llm_available=True
+        def prepare(text,*args,**kwargs):
+            if not self.task_llm_available:return original(text,use_llm=False)
+            return original(text,llm_client=_OfflineTaskClient(),enable_verifier=False)
+        patcher=mock.patch.object(task_pipeline,'prepare_navigation_task_from_text',side_effect=prepare)
+        patcher.start();self.addCleanup(patcher.stop)
+
     def test_quadruped_reasoning_controls_and_tabs_render(self) -> None:
-        app = AppTest.from_file("streamlit_app.py", default_timeout=90).run()
+        app = AppTest.from_file(
+            str(Path(__file__).resolve().parents[1] / "streamlit_app.py"),
+            default_timeout=90,
+        ).run()
         self.assertEqual(len(app.exception), 0)
         toggle_labels = {item.label for item in app.toggle}
         self.assertTrue(
@@ -19,7 +44,8 @@ class StreamlitVideoModeTest(unittest.TestCase):
             <= toggle_labels
         )
 
-        app.button[0].click().run(timeout=90)
+        start_button = next(item for item in app.button if item.label == "开始分析")
+        start_button.click().run(timeout=90)
 
         self.assertEqual(len(app.exception), 0)
         tab_labels = {item.label for item in app.tabs}
@@ -36,7 +62,10 @@ class StreamlitVideoModeTest(unittest.TestCase):
         )
 
     def test_video_mode_renders_video_controls(self) -> None:
-        app = AppTest.from_file("streamlit_app.py", default_timeout=90).run()
+        app = AppTest.from_file(
+            str(Path(__file__).resolve().parents[1] / "streamlit_app.py"),
+            default_timeout=90,
+        ).run()
         self.assertEqual(len(app.exception), 0)
         self.assertIn("视频目标搜索", app.radio[0].options)
         self.assertNotIn("视频全场景建图", app.radio[0].options)
@@ -70,6 +99,14 @@ class StreamlitVideoModeTest(unittest.TestCase):
             }
             <= {item.label for item in app.toggle}
         )
+
+    def test_unavailable_task_interpretation_still_blocks_analysis(self):
+        self.task_llm_available=False
+        app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'streamlit_app.py'),default_timeout=30).run()
+        next(b for b in app.button if b.label=='开始分析').click().run(timeout=30)
+        self.assertEqual(len(app.exception),0)
+        self.assertEqual(len(app.tabs),0)
+        self.assertTrue(any('任务理解模型不可用' in w.value for w in app.warning))
 
 
 if __name__ == "__main__":

@@ -33,7 +33,10 @@ from app.reasoning.visual_grounding_gate import (
 )
 from app.schemas import (
     KnowledgeAwareSceneResult,
+    LLMLocalSafetyContext,
     LLMReasoningRequest,
+    LLMRecoveryContext,
+    LLMTopologyContext,
     SceneAnalysisResult,
     SceneHypothesis,
     SpatialExperienceMemory,
@@ -89,8 +92,16 @@ class KnowledgeAwareAnalyzer:
         self,
         base_scene: SceneAnalysisResult,
         target_text: str,
+        *,
+        local_safety: LLMLocalSafetyContext | None = None,
+        perception_quality: dict | None = None,
+        topology_context: LLMTopologyContext | None = None,
+        recovery_context: LLMRecoveryContext | None = None,
     ) -> KnowledgeAwareSceneResult:
-        parsed_task = parse_robot_task(target_text)
+        parsed_task = parse_robot_task(
+            target_text,
+            use_llm=self.allow_remote_reasoning,
+        )
         static_kb_used = bool(self.settings.static_knowledge_base_enabled)
         retrieved_knowledge = (
             retrieve_relevant_knowledge(
@@ -154,6 +165,11 @@ class KnowledgeAwareAnalyzer:
                 retrieved_episodes=retrieved_experiences,
                 capability_contract=capability,
                 max_hypotheses=self.settings.llm_reasoning_max_hypotheses,
+                # 计划书 §15：几何/感知/拓扑/脱困上下文由 live 侧注入。
+                local_safety=local_safety,
+                perception_quality=perception_quality,
+                topology_context=topology_context,
+                recovery_context=recovery_context,
             )
             llm_reasoning = LLMSituatedSearchReasoner(
                 settings=self.settings,

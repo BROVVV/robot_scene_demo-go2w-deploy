@@ -27,6 +27,7 @@ import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import Quaternion, TransformStamped
 from nav_msgs.msg import Odometry
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from tf2_ros import TransformBroadcaster
@@ -86,10 +87,10 @@ class WheelOdomNode(Node):
         self.declare_parameter("odom_topic", "/go2w/odom/wheel")
         self.declare_parameter("frame_id", "odom_wheel")
         self.declare_parameter("child_frame_id", "base_link")
-        self.declare_parameter("publish_tf", False)
+        self.declare_parameter("publish_tf", True)
         self.declare_parameter("turn_yaw_rate_threshold_radps", 0.10)
         self.declare_parameter("skip_translation_during_turns", True)
-        self.declare_parameter("lio_enabled", True)
+        self.declare_parameter("lio_enabled", False)
         self.declare_parameter("lio_odom_topic", "/lio/odom")
         self.declare_parameter("lio_yaw_weight", 0.35)
         self.declare_parameter("lio_max_age_sec", 0.5)
@@ -359,8 +360,9 @@ class WheelOdomNode(Node):
         self._status_pub.publish(status)
 
         if self._tf is not None:
+            # A TF child has one parent. Raw wheel odometry remains a topic;
+            # only the authoritative fused odometry owns base_link in TF.
             for frame, x, y, yaw in (
-                (self._frame, self._wheel_x, self._wheel_y, self._sport_yaw),
                 (self._fused_frame, self._x, self._y, self._yaw),
             ):
                 transform = TransformStamped()
@@ -385,9 +387,12 @@ def main() -> None:
     node = WheelOdomNode()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

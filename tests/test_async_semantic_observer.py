@@ -33,7 +33,8 @@ def test_latest_wins_when_old_result_arrives_late():
 
     old_request = AsyncSemanticRequest(
         sequence=10, image_path="img", frame_id="frame_10",
-        capture_timestamp=10.0, robot_pose=None, target_profile=None,
+        capture_timestamp=10.0, timestamp_quality=None,
+        robot_pose=None, target_profile=None,
     )
     manager._on_result(old_request, {
         "frame_id": "frame_10",
@@ -69,7 +70,8 @@ def test_pose_at_capture_is_preserved():
 
     request = AsyncSemanticRequest(
         sequence=1, image_path="img", frame_id="f",
-        capture_timestamp=5.0, robot_pose=request_pose, target_profile=None,
+        capture_timestamp=5.0, timestamp_quality=None,
+        robot_pose=request_pose, target_profile=None,
     )
     manager._on_result(request, {
         "frame_id": "f",

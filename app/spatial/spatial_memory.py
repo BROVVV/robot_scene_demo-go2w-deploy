@@ -71,6 +71,19 @@ class SpatialMemory:
                 entry.blacklisted = True
                 self.blacklist.add(frontier_id)
 
+    def mark_frontier_preflight_rejected(self, frontier_id: str) -> None:
+        """Strongly penalize a concrete route rejected by Nav2 preflight.
+
+        Blacklisting is only a score penalty in the long-term selector, not a
+        hard removal.  The frontier can therefore be reconsidered after the
+        map changes, while another frontier gets a fair chance immediately in
+        the current search.
+        """
+        entry = self.frontiers.setdefault(frontier_id, FrontierMemoryEntry(frontier_id))
+        entry.fail_count += 1
+        entry.blacklisted = True
+        self.blacklist.add(frontier_id)
+
     def region_negative(self, region_id: str, *, place_id: str | None = None) -> None:
         entry = self.regions.setdefault(
             region_id, RegionHypothesisMemory(region_id=region_id)

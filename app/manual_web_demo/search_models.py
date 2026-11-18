@@ -1,5 +1,10 @@
 """Request / response / session models for the autonomous search WebUI
 (plan book §10, §21, §37).  The project uses plain dataclasses, not pydantic.
+
+计划书 §3-C 收口后的边界：请求只表达四件事 —— **任务、预算、检测模式、
+干跑/运动授权**。后端、reasoner、空间提供者与 RGB-D/空间探索档位是生产
+Web 的固定配置（来自 ``load_search_defaults()``），请求体不再能选它们。
+离线 mock 由测试直接注入 ``InProcessMockExecutor``，不从这里伪装。
 """
 
 from __future__ import annotations
@@ -12,6 +17,11 @@ from uuid import uuid4
 
 MAX_TARGET_LENGTH = 500
 
+#: 生产搜索固定使用的 reasoner：``run_semantic_exploration.py --reasoner`` 的
+#: 现有 CLI 名。请求体不再提供选择项，worker 命令固定传它；旧内部值
+#: ``semantic`` 只是这个 CLI 名的别名，不再出现在会话归档里。
+SEARCH_REASONER = "semantic_navigation"
+
 
 @dataclass
 class SearchStartRequest:
@@ -21,8 +31,11 @@ class SearchStartRequest:
     # The service immediately normalizes it to task_text and then parses it.
     target: str = ""
     task_text: str = ""
-    reasoner: str = "semantic"
-    backend: str = "go2w_experimental"  # go2w_experimental | mock | mock_metric
+    # Normal production path is Nav2. The legacy relative-motion backend is
+    # available only in an explicitly started, operator-supervised trial.
+    backend: str = "nav2"  # nav2 | go2w_experimental (opt-in) | mocks
+    # 物体识别后端，透传给 --detector（取值与那条 argparse 的 choices 一致）。
+    detector: str = "llm"  # llm | grounded_sam | yoloe_seg
     finish_on_visual_confirmation: bool = False
     turn_only: bool = False
     enable_autonomous_motion: bool = False
@@ -32,16 +45,16 @@ class SearchStartRequest:
     operator_supervised_experiment: bool = False
     dry_run_motion: bool = False
     allow_degraded: bool = False
+    # 以下四项是生产固定档位：``from_dict`` 只从配置读，请求体不再能选。
     # RGB-D spatial exploration (D435 atomic HTTP source)
-    rgbd_source: bool = False
+    rgbd_source: bool = True
     rgbd_base_url: str = "http://192.168.123.18:8080"
     # Live semantic spatial exploration loop
-    spatial_v2: bool = False
-    # Explicit provider selection.  This keeps metric LiDAR mapping distinct
-    # from the legacy RTAB-Map compatibility switch.
-    spatial_provider: str = "camera"
-    # Use RTAB-Map ROS2 topics as the SpatialProvider
-    rtabmap: bool = False
+    spatial_v2: bool = True
+    # PandarXT-16 plain_slam supplies the metric map/frontiers.  ``rtabmap``
+    # 已从请求模型删除：这台狗的空间提供者是 plain_slam，RTAB-Map 只是
+    # CLI 的离线诊断选项。
+    spatial_provider: str = "plain_slam"
     # optional budget overrides
     max_seconds: float | None = None
     max_planning_cycles: int | None = None
@@ -70,25 +83,14 @@ class SearchStartRequest:
                 defaults.get("operator_supervised_experiment", enable_motion),
             )
         )
-        requested_reasoner = str(value.get("reasoner") or "semantic")
-        # Migrate historical goal-selector values without persisting their
-        # old branding into the new session or event stream.
-        if requested_reasoner.lower() in {"semantic_navigation"} or requested_reasoner.lower().endswith("goal"):
-            requested_reasoner = "semantic"
         backend = str(value.get("backend") or defaults["backend"])
-        operator_supervised = bool(
-            value.get(
-                "operator_supervised_experiment",
-                defaults.get("operator_supervised_experiment", enable_motion),
-            )
-        )
         # The normal WebUI profile is read-only.  Make that contract explicit
         # at the request boundary so a real backend cannot reach the worker
         # without either a motion opt-in or an explicit dry-run flag.
         dry_run_motion = bool(
             value.get(
                 "dry_run_motion",
-                backend == "go2w_experimental"
+                backend not in {"mock", "mock_metric"}
                 and not enable_motion
                 and not operator_supervised,
             )
@@ -97,8 +99,8 @@ class SearchStartRequest:
         return cls(
             task_text=str(value.get("task_text") or value.get("target") or "").strip(),
             target=str(value.get("target") or "").strip(),
-            reasoner=requested_reasoner,
             backend=backend,
+            detector=str(value.get("detector") or defaults["detector"]),
             finish_on_visual_confirmation=bool(
                 value.get(
                     "finish_on_visual_confirmation",
@@ -110,16 +112,12 @@ class SearchStartRequest:
             operator_supervised_experiment=operator_supervised,
             dry_run_motion=dry_run_motion,
             allow_degraded=allow_degraded,
-            rgbd_source=bool(value.get("rgbd_source", defaults["rgbd_source"])),
-            rgbd_base_url=str(
-                value.get("rgbd_base_url") or defaults["rgbd_base_url"]
-            ),
-            spatial_v2=bool(value.get("spatial_v2", defaults.get("spatial_v2", False))),
-            spatial_provider=str(
-                value.get("spatial_provider")
-                or defaults.get("spatial_provider", "camera")
-            ),
-            rtabmap=bool(value.get("rtabmap", defaults.get("rtabmap", False))),
+            # RGB-D / 空间探索 / 空间提供者是生产固定档位：只从配置读，
+            # 请求体不再能选（旧 ``rtabmap`` 字段已删）。
+            rgbd_source=bool(defaults["rgbd_source"]),
+            rgbd_base_url=str(defaults["rgbd_base_url"]),
+            spatial_v2=bool(defaults["spatial_v2"]),
+            spatial_provider=str(defaults["spatial_provider"]),
             max_seconds=_optional_float(value.get("max_seconds")),
             max_planning_cycles=_optional_int(value.get("max_planning_cycles")),
             max_motion_steps=_optional_int(value.get("max_motion_steps")),
@@ -127,19 +125,42 @@ class SearchStartRequest:
             verify_min_confidence=_optional_float(value.get("verify_min_confidence")),
         )
 
-    def validate(self) -> str | None:
-        """Return an error message or None when the request is acceptable."""
+    def validate(
+        self, *, allow_mock: bool = False,
+        allow_legacy_supervised: bool = False,
+        legacy_motion_armed: bool = False,
+    ) -> str | None:
+        """Return an error message or None when the request is acceptable.
+
+        ``allow_mock`` 是「这个 app 实例是测试台」的标记，由调用方按
+        ``SearchSessionService._executor_factory_is_mock`` 传进来，默认 False。
+        计划书 §6.6-2：生产搜索请求只接受 ``nav2``，测试代码直接注入 mock，
+        不经生产请求参数暴露——否则给真机 WebUI 发一个 ``{"backend": "mock"}``
+        就会跑出一场编造的搜索，而界面上看不出任何区别。
+        """
         task_text = (self.task_text or self.target).strip()
         if not task_text:
             return "task_text/target is required"
         if len(task_text) > MAX_TARGET_LENGTH:
             return f"task_text too long (max {MAX_TARGET_LENGTH} chars)"
-        if self.reasoner not in {"legacy", "semantic", "hybrid"}:
-            return f"unsupported reasoner: {self.reasoner}"
-        if self.backend not in {"go2w_experimental", "mock", "mock_metric"}:
+        allowed_backends = {"nav2"} | ({"mock", "mock_metric"} if allow_mock else set())
+        if allow_legacy_supervised:
+            allowed_backends.add("go2w_experimental")
+        if self.backend not in allowed_backends:
             return f"unsupported backend: {self.backend}"
-        if self.spatial_provider not in {"camera", "rtabmap", "plain_slam"}:
+        if self.backend == "go2w_experimental" and not self.dry_run_motion:
+            if not (legacy_motion_armed and self.enable_autonomous_motion
+                    and self.operator_supervised_experiment):
+                return "legacy supervised motion requires launcher arm and operator supervision"
+        # 请求体已经选不了空间提供者（``from_dict`` 只从配置读），这道门留着
+        # 是为了挡住直接构造出的对象。``rtabmap`` 不再是合法取值：这台狗的
+        # 提供者是 plain_slam，camera 只是它自带的退化档。
+        if self.spatial_provider not in {"camera", "plain_slam", "nav2"}:
             return f"unsupported spatial_provider: {self.spatial_provider}"
+        # 取值集合逐字对齐 run_semantic_exploration.py 的 --detector choices；
+        # 不在这里拦，非法值要等 worker 起来才炸成 argparse 错误。
+        if self.detector not in {"llm", "grounded_sam", "yoloe_seg"}:
+            return f"unsupported detector: {self.detector}"
         return None
 
 
@@ -157,6 +178,7 @@ class SearchSessionInfo:
     finished_at: float | None = None
     backend: str = ""
     reasoner: str = ""
+    detector: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -175,64 +197,81 @@ def load_search_defaults() -> dict[str, Any]:
 
     Precedence: request fields > AUTONOMOUS_SEARCH_* env vars >
     ``configs/go2w/autonomous_search_web.yaml`` > built-in defaults.
+
+    配置**读取失败一律显式抛错**：早先这里把所有异常都吞掉，于是一份写坏的
+    yaml（或读不到的路径）会让 WebUI 静默退回另一套默认值 —— 后端和检测器
+    悄悄换了，界面上看不出任何区别。缺文件不算读取失败（那是"没配"）。
     """
     import os
 
     defaults: dict[str, Any] = {
-        "backend": "go2w_experimental",
+        "backend": "nav2",
+        # 物体识别走哪条路，直接透传给 run_semantic_exploration.py 的 --detector：
+        #   grounded_sam —— 本地 GroundingDINO+SAM2 出真实 mask，因而每个物体都有
+        #                   3D box（box_size）；目标的复核仍由 VLM 做（verify）。
+        #   llm          —— 云端 VLM 出全场景文本，产不出 mask ⇒ box_size 恒为 None，
+        #                   WebUI 上物体只能画成红点。
+        "detector": "llm",
         # 计划书 §18.2：默认走完目标接近再收工，不在视觉确认那一刻就 finish。
         "finish_on_visual_confirmation": False,
         "enable_autonomous_motion": False,
         "operator_supervised_experiment": False,
-        "rgbd_source": False,
+        # 生产固定档位（请求体不再能选）：见 SearchStartRequest 的注释。
+        "rgbd_source": True,
         "rgbd_base_url": "http://192.168.123.18:8080",
-        "spatial_v2": False,
-        "spatial_provider": "camera",
-        "rtabmap": False,
-        "max_search_seconds": None,
-        "max_planning_cycles": None,
-        "max_motion_steps": None,
+        "spatial_v2": True,
+        "spatial_provider": "plain_slam",
     }
     config_path = _PROJECT_ROOT / _DEFAULT_SEARCH_CONFIG
     if config_path.is_file():
-        try:
-            import yaml
+        import yaml
 
-            data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-            search = data.get("search") or {}
-            for key in ("backend",):
-                if search.get(key):
-                    defaults[key] = str(search[key])
-            if search.get("finish_on_visual_confirmation") is not None:
-                defaults["finish_on_visual_confirmation"] = bool(
-                    search["finish_on_visual_confirmation"]
-                )
-            if search.get("rgbd_source") is not None:
-                defaults["rgbd_source"] = bool(search["rgbd_source"])
-            if search.get("rgbd_base_url"):
-                defaults["rgbd_base_url"] = str(search["rgbd_base_url"])
-            if search.get("spatial_v2") is not None:
-                defaults["spatial_v2"] = bool(search["spatial_v2"])
-            if search.get("spatial_provider"):
-                defaults["spatial_provider"] = str(search["spatial_provider"])
-            if search.get("rtabmap") is not None:
-                defaults["rtabmap"] = bool(search["rtabmap"])
-            for key in ("max_search_seconds", "max_planning_cycles",
-                        "max_motion_steps"):
-                if search.get(key) is not None:
-                    defaults[key] = search[key]
-            if search.get("enable_autonomous_motion") is not None:
-                defaults["enable_autonomous_motion"] = bool(
-                    search["enable_autonomous_motion"]
-                )
-            if search.get("operator_supervised_experiment") is not None:
-                defaults["operator_supervised_experiment"] = bool(
-                    search["operator_supervised_experiment"]
-                )
-        except Exception:  # noqa: BLE001 - config must never break startup
-            pass
+        try:
+            data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise RuntimeError(
+                f"搜索默认配置 {config_path} 读取失败: {exc}"
+            ) from exc
+        if data is not None and not isinstance(data, dict):
+            raise RuntimeError(f"搜索默认配置顶层必须是映射: {config_path}")
+        search = (data or {}).get("search") or {}
+        if not isinstance(search, dict):
+            raise RuntimeError(f"搜索默认配置的 search 段必须是映射: {config_path}")
+        for key in ("backend", "detector"):
+            if search.get(key):
+                defaults[key] = str(search[key])
+        if search.get("finish_on_visual_confirmation") is not None:
+            defaults["finish_on_visual_confirmation"] = bool(
+                search["finish_on_visual_confirmation"]
+            )
+        if search.get("rgbd_source") is not None:
+            defaults["rgbd_source"] = bool(search["rgbd_source"])
+        if search.get("rgbd_base_url"):
+            defaults["rgbd_base_url"] = str(search["rgbd_base_url"])
+        if search.get("spatial_v2") is not None:
+            defaults["spatial_v2"] = bool(search["spatial_v2"])
+        if search.get("spatial_provider"):
+            defaults["spatial_provider"] = str(search["spatial_provider"])
+        if search.get("enable_autonomous_motion") is not None:
+            defaults["enable_autonomous_motion"] = bool(
+                search["enable_autonomous_motion"]
+            )
+        if search.get("operator_supervised_experiment") is not None:
+            defaults["operator_supervised_experiment"] = bool(
+                search["operator_supervised_experiment"]
+            )
+    # The camera service moves onto the robot with this deployment. Use the
+    # same trusted host setting as the ROS bridge; request bodies cannot
+    # override the production sensor endpoint.
+    camera_url = os.getenv("D435_BASE_URL", "").strip()
+    if camera_url:
+        defaults["rgbd_base_url"] = camera_url.rstrip("/")
     if os.getenv("AUTONOMOUS_SEARCH_DEFAULT_BACKEND"):
         defaults["backend"] = os.getenv("AUTONOMOUS_SEARCH_DEFAULT_BACKEND")
+    if os.getenv("AUTONOMOUS_SEARCH_DEFAULT_DETECTOR"):
+        defaults["detector"] = os.getenv(
+            "AUTONOMOUS_SEARCH_DEFAULT_DETECTOR", "grounded_sam"
+        ).strip()
     motion_env = os.getenv("AUTONOMOUS_SEARCH_ENABLE_AUTONOMOUS_MOTION")
     if motion_env is not None:
         defaults["enable_autonomous_motion"] = motion_env.strip().lower() in {
@@ -247,8 +286,10 @@ def load_search_defaults() -> dict[str, Any]:
         # motion means using the existing supervised experiment profile.
         defaults["operator_supervised_experiment"] = True
     if os.getenv("AUTONOMOUS_SEARCH_SPATIAL_PROVIDER"):
+        # 非 plain_slam/camera 的取值会在这里读进去、然后被 validate() 显式拒掉
+        # （而不是悄悄跑成另一条链路）。
         defaults["spatial_provider"] = os.getenv(
-            "AUTONOMOUS_SEARCH_SPATIAL_PROVIDER", "camera"
+            "AUTONOMOUS_SEARCH_SPATIAL_PROVIDER", "plain_slam"
         ).strip()
     return defaults
 

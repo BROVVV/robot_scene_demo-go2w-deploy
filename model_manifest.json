@@ -1,0 +1,18 @@
+{
+  "bert-base-uncased/model.safetensors": {
+    "bytes": 440449768,
+    "sha256": "68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3"
+  },
+  "gdino_checkpoints/groundingdino_swint_ogc.pth": {
+    "bytes": 693997677,
+    "sha256": "3b3ca2563c77c69f651d7bd133e97139c186df06231157a64c507099c52bc799"
+  },
+  "ram_plus_ckpt/ram_plus_swin_large_14m.pth": {
+    "bytes": 3010210801,
+    "sha256": "497c178836ba66698ca226c7895317e6e800034be986452dbd2593298d50e87d"
+  },
+  "sam2_checkpoints/sam2.1_hiera_tiny.pt": {
+    "bytes": 156008466,
+    "sha256": "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69"
+  }
+}

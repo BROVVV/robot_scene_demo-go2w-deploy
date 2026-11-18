@@ -1,0 +1,30 @@
+{
+  "kind": "real_robot_short_distance_working_command",
+  "physical_goal_succeeded": true,
+  "boot_id": "2dacd1e3-2882-4bc8-b553-f2e7c2f07738",
+  "working_linear_command_mps": 0.12,
+  "wheel_net_translation_m": 0.10014175284335433,
+  "map_net_translation_m": 0.09228607335445918,
+  "elapsed_sec": 2.2524961791932583,
+  "velocity_peaks": {
+    "/cmd_vel_nav_guarded": 0.12,
+    "/go2w/cmd_vel_selected": 0.12,
+    "/cmd_vel_nav_raw": 0.12,
+    "/cmd_vel_nav_smoothed": 0.12,
+    "/go2w/nav2_cmd_vel": 0.12
+  },
+  "sdk_move_peak_mps": 0.12,
+  "sdk_move_samples": 21,
+  "sdk_move_has_robot_ack": false,
+  "software_arm_at_end": false,
+  "large_field_motion_validated": false,
+  "limitations": [
+    "A working command was demonstrated; the exact actuator minimum was not measured.",
+    "This was one short straight goal, not a large-field or rotation acceptance.",
+    "Fixed low cruise is selected after geometric acceptance; previous adaptive .05-.10 reference speeds are reported separately."
+  ],
+  "sources": {
+    "artifacts/go2w_live_20261021/step3_actual.json": "e682d352e38239f9f6e75c058c5c62151c888ea6660113fa4de6411ba9be129f",
+    "artifacts/go2w_live_20261021/step3_passive_rpc.json": "bfad6cbc65142be53f74345ed9cbd39f1f7240f1586c40cb7f0bf11e8bd14cad"
+  }
+}

@@ -1,0 +1,2986 @@
+--- upstream/nav2_behavior_tree/include/nav2_behavior_tree/bt_action_node.hpp
++++ compat/foxy_nav2/src/go2w_nav2_bt_compat/include/go2w_nav2_bt_compat/bt_action_node.hpp
+@@ -12,473 +12,283 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_BEHAVIOR_TREE__BT_ACTION_NODE_HPP_
+-#define NAV2_BEHAVIOR_TREE__BT_ACTION_NODE_HPP_
+-
++#ifndef GO2W_FOXY_BT__BT_ACTION_NODE_HPP_
++#define GO2W_FOXY_BT__BT_ACTION_NODE_HPP_
++
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cstdlib>
++#include <future>
+ #include <memory>
++#include <mutex>
+ #include <string>
+-#include <chrono>
+-
++#include <thread>
++#include <vector>
+ #include "behaviortree_cpp_v3/action_node.h"
+-#include "nav2_util/node_utils.hpp"
++#include "rclcpp/rclcpp.hpp"
++#include "rclcpp/executors/single_threaded_executor.hpp"
+ #include "rclcpp_action/rclcpp_action.hpp"
+ #include "nav2_behavior_tree/bt_conversions.hpp"
+ 
+-namespace nav2_behavior_tree
++namespace go2w_foxy_bt
+ {
+-
+-using namespace std::chrono_literals;  // NOLINT
+-
+-/**
+- * @brief Abstract class representing an action based BT node
+- * @tparam ActionT Type of action
+- */
++// Foxy lacks executor.add_callback_group. An owned IO node keeps callbacks
++// progressing after halt/timeout, so a late accepted goal is still canceled.
++class ActionIO
++{
++public:
++  explicit ActionIO(rclcpp::Node::SharedPtr node) : node_(node)
++  {
++    executor_.add_node(node_);
++    thread_ = std::thread([this]() {
++      try {
++        while (!stopping_ && rclcpp::ok()) {
++          executor_.spin_once(std::chrono::milliseconds(20));
++        }
++      } catch (const std::exception & error) {
++        if (rclcpp::ok() && !stopping_) {
++          failed_ = true;
++          RCLCPP_ERROR(node_->get_logger(), "Action IO failed: %s", error.what());
++        }
++      }
++    });
++  }
++  ~ActionIO() {stop();}
++  void stop()
++  {
++    stopping_ = true;
++    try {executor_.cancel();}
++    catch (const std::exception & error) {
++      if (rclcpp::ok()) {
++        failed_ = true;
++        RCLCPP_ERROR(node_->get_logger(), "Action IO cancel failed: %s", error.what());
++      }
++    }
++    if (thread_.joinable()) {thread_.join();}
++  }
++  bool failed() const {return failed_;}
++private:
++  rclcpp::Node::SharedPtr node_;
++  rclcpp::executors::SingleThreadedExecutor executor_;
++  std::atomic<bool> stopping_{false}, failed_{false};
++  std::thread thread_;
++};
++
+ template<class ActionT>
+ class BtActionNode : public BT::ActionNodeBase
+ {
++  using Client = rclcpp_action::Client<ActionT>;
++  using Handle = rclcpp_action::ClientGoalHandle<ActionT>;
++  using WrappedResult = typename Handle::WrappedResult;
++  using Feedback = typename ActionT::Feedback;
++  struct Exchange
++  {
++    std::mutex mutex;
++    bool acknowledged{false}, rejected{false}, terminal{false};
++    bool cancel_requested{false}, cancel_sent{false};
++    std::string error;
++    typename Handle::SharedPtr handle;
++    WrappedResult result;
++    std::shared_ptr<const Feedback> feedback;
++    std::chrono::steady_clock::time_point sent{std::chrono::steady_clock::now()};
++  };
+ public:
+-  /**
+-   * @brief A nav2_behavior_tree::BtActionNode constructor
+-   * @param xml_tag_name Name for the XML tag for this node
+-   * @param action_name Action name this node creates a client for
+-   * @param conf BT node configuration
+-   */
+-  BtActionNode(
+-    const std::string & xml_tag_name,
+-    const std::string & action_name,
++  BtActionNode(const std::string & tag, const std::string & action,
+     const BT::NodeConfiguration & conf)
+-  : BT::ActionNodeBase(xml_tag_name, conf), action_name_(action_name), should_send_goal_(true)
++  : BT::ActionNodeBase(tag, conf), action_name_(action)
+   {
+     node_ = config().blackboard->template get<rclcpp::Node::SharedPtr>("node");
+-    callback_group_ = node_->create_callback_group(
+-      rclcpp::CallbackGroupType::MutuallyExclusive,
+-      false);
+-    callback_group_executor_.add_callback_group(callback_group_, node_->get_node_base_interface());
+-
+-    // Get the required items from the blackboard
+-    auto bt_loop_duration =
+-      config().blackboard->template get<std::chrono::milliseconds>("bt_loop_duration");
+-    server_timeout_ =
+-      config().blackboard->template get<std::chrono::milliseconds>("server_timeout");
++    server_timeout_ = config().blackboard->template get<std::chrono::milliseconds>("server_timeout");
+     getInput<std::chrono::milliseconds>("server_timeout", server_timeout_);
+-    wait_for_service_timeout_ =
+-      config().blackboard->template get<std::chrono::milliseconds>("wait_for_service_timeout");
+-
+-    // timeout should be less than bt_loop_duration to be able to finish the current tick
+-    max_timeout_ = std::chrono::duration_cast<std::chrono::milliseconds>(bt_loop_duration * 0.5);
+-
+-    // Initialize the input and output messages
+-    goal_ = typename ActionT::Goal();
+-    result_ = typename rclcpp_action::ClientGoalHandle<ActionT>::WrappedResult();
+-
+-    std::string remapped_action_name;
+-    if (getInput("server_name", remapped_action_name)) {
+-      action_name_ = remapped_action_name;
+-    }
+-    createActionClient(action_name_);
+-
+-    // Give the derive class a chance to do any initialization
+-    RCLCPP_DEBUG(node_->get_logger(), "\"%s\" BtActionNode initialized", xml_tag_name.c_str());
+-  }
+-
+-  BtActionNode() = delete;
+-
++    if (server_timeout_.count() <= 0) {throw std::runtime_error("Invalid BT server timeout");}
++    std::chrono::milliseconds discovery_timeout{1000};  // Pinned Nav2 default.
++    config().blackboard->template get<std::chrono::milliseconds>("wait_for_service_timeout", discovery_timeout);
++    static std::atomic<unsigned long> sequence{0};
++    rclcpp::NodeOptions options; options.use_global_arguments(false);
++    if (node_->has_parameter("use_sim_time")) {
++      options.parameter_overrides({node_->get_parameter("use_sim_time")});
++    }
++    io_node_ = std::make_shared<rclcpp::Node>(node_->get_name()+std::string("_foxy_")+tag+
++      "_"+std::to_string(++sequence), node_->get_namespace(), options);
++    std::string remapped;
++    if (getInput("server_name", remapped)) {action_name_ = remapped;}
++    action_client_ = rclcpp_action::create_client<ActionT>(io_node_, action_name_);
++    io_ = std::make_unique<ActionIO>(io_node_);
++    if (!action_client_->wait_for_action_server(discovery_timeout)) {
++      throw std::runtime_error("Action server not available: "+action_name_);
++    }
++    drain_timeout_ = discovery_timeout;
++  }
+   virtual ~BtActionNode()
+   {
+-  }
+-
+-  /**
+-   * @brief Create instance of an action client
+-   * @param action_name Action name to create client for
+-   */
+-  void createActionClient(const std::string & action_name)
+-  {
+-    // Now that we have the ROS node to use, create the action client for this BT action
+-    action_client_ = rclcpp_action::create_client<ActionT>(node_, action_name, callback_group_);
+-
+-    // Make sure the server is actually there before continuing
+-    RCLCPP_DEBUG(node_->get_logger(), "Waiting for \"%s\" action server", action_name.c_str());
+-    if (!action_client_->wait_for_action_server(wait_for_service_timeout_)) {
+-      RCLCPP_ERROR(
+-        node_->get_logger(), "\"%s\" action server not available after waiting for %.2fs",
+-        action_name.c_str(),
+-        wait_for_service_timeout_.count() / 1000.0);
+-      throw std::runtime_error(
+-              std::string("Action server ") + action_name +
+-              std::string(" not available"));
+-    }
+-  }
+-
+-  /**
+-   * @brief Any subclass of BtActionNode that accepts parameters must provide a
+-   * providedPorts method and call providedBasicPorts in it.
+-   * @param addition Additional ports to add to BT port list
+-   * @return BT::PortsList Containing basic ports along with node-specific ports
+-   */
++    cancel_all();
++    // A canceled send may be waiting for its acceptance response. Keep IO
++    // alive for the existing discovery bound, without blocking halt itself.
++    const auto deadline = std::chrono::steady_clock::now()+drain_timeout_;
++    while (rclcpp::ok() && std::chrono::steady_clock::now()<deadline) {
++      bool pending = false;
++      for (auto & exchange : exchanges_) {
++        std::lock_guard<std::mutex> lock(exchange->mutex);
++        pending = pending || (!exchange->acknowledged && !exchange->terminal);
++      }
++      if (!pending) {break;}
++      std::this_thread::sleep_for(std::chrono::milliseconds(2));
++    }
++    if (io_) {io_->stop();}
++    action_client_.reset(); io_.reset(); io_node_.reset();
++  }
+   static BT::PortsList providedBasicPorts(BT::PortsList addition)
+   {
+-    BT::PortsList basic = {
+-      BT::InputPort<std::string>("server_name", "Action server name"),
+-      BT::InputPort<std::chrono::milliseconds>("server_timeout")
++    BT::PortsList basic = {BT::InputPort<std::string>("server_name", "Action server name"),
++      BT::InputPort<std::chrono::milliseconds>("server_timeout")};
++    basic.insert(addition.begin(), addition.end()); return basic;
++  }
++  static BT::PortsList providedPorts() {return providedBasicPorts({});}
++  virtual void on_tick() {}
++  virtual void on_wait_for_result(std::shared_ptr<const Feedback>) {}
++  virtual BT::NodeStatus on_success() {return BT::NodeStatus::SUCCESS;}
++  virtual BT::NodeStatus on_aborted() {return BT::NodeStatus::FAILURE;}
++  virtual BT::NodeStatus on_cancelled() {return BT::NodeStatus::SUCCESS;}
++
++  BT::NodeStatus tick() override
++  {
++    if (!rclcpp::ok() || io_->failed()) {cancel_all(); return BT::NodeStatus::FAILURE;}
++    if (status() == BT::NodeStatus::IDLE) {
++      setStatus(BT::NodeStatus::RUNNING); should_send_goal_ = true; on_tick();
++      if (!should_send_goal_) {return BT::NodeStatus::FAILURE;}
++      send_new_goal();
++    }
++    auto exchange = current_;
++    bool acknowledged, rejected, terminal, ack_expired;
++    std::string error;
++    std::shared_ptr<const Feedback> feedback;
++    {
++      std::lock_guard<std::mutex> lock(exchange->mutex);
++      acknowledged = exchange->acknowledged; rejected = exchange->rejected;
++      terminal = exchange->terminal; error = exchange->error;
++      // Sample state and its deadline together. The IO thread may acknowledge
++      // while the BT thread is descheduled; an earlier snapshot must not turn
++      // that already acknowledged goal into a false transport timeout.
++      ack_expired = !acknowledged && !terminal &&
++        std::chrono::steady_clock::now()-exchange->sent >= server_timeout_;
++      feedback = exchange->feedback; exchange->feedback.reset();
++      if (terminal) {result_ = exchange->result;}
++    }
++    if (!error.empty() || rejected) {cancel_all(); return BT::NodeStatus::FAILURE;}
++    if (!acknowledged && !terminal) {
++      if (ack_expired) {
++        RCLCPP_WARN(node_->get_logger(), "ACK deadline for %s; late cancellation latched", action_name_.c_str());
++        cancel_all(); return BT::NodeStatus::FAILURE;
++      }
++      return BT::NodeStatus::RUNNING;
++    }
++    if (!terminal) {
++      on_wait_for_result(feedback);
++      if (goal_updated_) {goal_updated_ = false; send_new_goal();}
++      return BT::NodeStatus::RUNNING;
++    }
++    switch (result_.code) {
++      case rclcpp_action::ResultCode::SUCCEEDED: return on_success();
++      case rclcpp_action::ResultCode::ABORTED: return on_aborted();
++      case rclcpp_action::ResultCode::CANCELED: return on_cancelled();
++      default: return BT::NodeStatus::FAILURE;
++    }
++  }
++  void halt() override
++  {
++    cancel_all(); setStatus(BT::NodeStatus::IDLE);
++  }
++protected:
++  static void cancel_exchange(const std::shared_ptr<Exchange> & exchange,
++    const std::shared_ptr<Client> & client)
++  {
++    typename Handle::SharedPtr handle;
++    {
++      std::lock_guard<std::mutex> lock(exchange->mutex);
++      exchange->cancel_requested = true;
++      if (exchange->terminal || !exchange->handle || exchange->cancel_sent) {return;}
++      exchange->cancel_sent = true; handle = exchange->handle;
++    }
++    try {client->async_cancel_goal(handle);}
++    catch (const std::exception & error) {
++      std::lock_guard<std::mutex> lock(exchange->mutex);
++      exchange->cancel_sent = false; exchange->error = error.what();
++      RCLCPP_ERROR(rclcpp::get_logger("go2w_foxy_bt"), "Cancel request failed: %s", error.what());
++    }
++  }
++  void cancel_all()
++  {
++    if (!action_client_) {return;}
++    for (auto & exchange : exchanges_) {cancel_exchange(exchange, action_client_);}
++  }
++  void send_new_goal()
++  {
++    exchanges_.erase(std::remove_if(exchanges_.begin(), exchanges_.end(), [](const auto & e) {
++      std::lock_guard<std::mutex> lock(e->mutex); return e->terminal;
++    }), exchanges_.end());
++    auto exchange = std::make_shared<Exchange>();
++    exchanges_.push_back(exchange); current_ = exchange;
++    typename Client::SendGoalOptions options;
++    std::weak_ptr<Client> weak_client = action_client_;
++    const bool diagnostics = std::getenv("GO2W_BT_ACK_DIAGNOSTICS") != nullptr;
++    const auto action = action_name_;
++    options.goal_response_callback = [exchange, weak_client, diagnostics, action](std::shared_future<typename Handle::SharedPtr> future) {
++      bool cancel = false;
++      try {
++        auto handle = future.get();
++        {
++          std::lock_guard<std::mutex> lock(exchange->mutex);
++          exchange->acknowledged = true; exchange->rejected = !handle;
++          if (!handle) {exchange->terminal = true;}
++          if (!exchange->terminal) {exchange->handle = handle;}
++          cancel = exchange->cancel_requested;
++        }
++        if (diagnostics) {
++          const double ms = std::chrono::duration<double, std::milli>(
++            std::chrono::steady_clock::now()-exchange->sent).count();
++          RCLCPP_INFO(rclcpp::get_logger("go2w_foxy_bt"),
++            "action=%s ack_ms=%.3f cancel_latched=%s", action.c_str(), ms, cancel ? "true" : "false");
++        }
++        if (cancel) {
++          if (auto client = weak_client.lock()) {cancel_exchange(exchange, client);}
++        }
++      } catch (const std::exception & error) {
++        std::lock_guard<std::mutex> lock(exchange->mutex);
++        exchange->error = error.what(); exchange->terminal = true;
++      }
+     };
+-    basic.insert(addition.begin(), addition.end());
+-
+-    return basic;
+-  }
+-
+-  /**
+-   * @brief Creates list of BT ports
+-   * @return BT::PortsList Containing basic ports along with node-specific ports
+-   */
+-  static BT::PortsList providedPorts()
+-  {
+-    return providedBasicPorts({});
+-  }
+-
+-  // Derived classes can override any of the following methods to hook into the
+-  // processing for the action: on_tick, on_wait_for_result, and on_success
+-
+-  /**
+-   * @brief Function to perform some user-defined operation on tick
+-   * Could do dynamic checks, such as getting updates to values on the blackboard
+-   */
+-  virtual void on_tick()
+-  {
+-  }
+-
+-  /**
+-   * @brief Function to perform some user-defined operation after a timeout
+-   * waiting for a result that hasn't been received yet. Also provides access to
+-   * the latest feedback message from the action server. Feedback will be nullptr
+-   * in subsequent calls to this function if no new feedback is received while waiting for a result.
+-   * @param feedback shared_ptr to latest feedback message, nullptr if no new feedback was received
+-   */
+-  virtual void on_wait_for_result(std::shared_ptr<const typename ActionT::Feedback>/*feedback*/)
+-  {
+-  }
+-
+-  /**
+-   * @brief Function to perform some user-defined operation upon successful
+-   * completion of the action. Could put a value on the blackboard.
+-   * @return BT::NodeStatus Returns SUCCESS by default, user may override return another value
+-   */
+-  virtual BT::NodeStatus on_success()
+-  {
+-    return BT::NodeStatus::SUCCESS;
+-  }
+-
+-  /**
+-   * @brief Function to perform some user-defined operation when the action is aborted.
+-   * @return BT::NodeStatus Returns FAILURE by default, user may override return another value
+-   */
+-  virtual BT::NodeStatus on_aborted()
+-  {
+-    return BT::NodeStatus::FAILURE;
+-  }
+-
+-  /**
+-   * @brief Function to perform some user-defined operation when the action is cancelled.
+-   * @return BT::NodeStatus Returns SUCCESS by default, user may override return another value
+-   */
+-  virtual BT::NodeStatus on_cancelled()
+-  {
+-    return BT::NodeStatus::SUCCESS;
+-  }
+-
+-  /**
+-   * @brief The main override required by a BT action
+-   * @return BT::NodeStatus Status of tick execution
+-   */
+-  BT::NodeStatus tick() override
+-  {
+-    // first step to be done only at the beginning of the Action
+-    if (status() == BT::NodeStatus::IDLE) {
+-      // setting the status to RUNNING to notify the BT Loggers (if any)
+-      setStatus(BT::NodeStatus::RUNNING);
+-
+-      // reset the flag to send the goal or not, allowing the user the option to set it in on_tick
+-      should_send_goal_ = true;
+-
+-      // user defined callback, may modify "should_send_goal_".
+-      on_tick();
+-
+-      if (!should_send_goal_) {
+-        return BT::NodeStatus::FAILURE;
+-      }
+-      send_new_goal();
+-    }
+-
+-    try {
+-      // if new goal was sent and action server has not yet responded
+-      // check the future goal handle
+-      if (future_goal_handle_) {
+-        auto elapsed =
+-          (node_->now() - time_goal_sent_).template to_chrono<std::chrono::milliseconds>();
+-        if (!is_future_goal_handle_complete(elapsed)) {
+-          // return RUNNING if there is still some time before timeout happens
+-          if (elapsed < server_timeout_) {
+-            return BT::NodeStatus::RUNNING;
+-          }
+-          // if server has taken more time than the specified timeout value return FAILURE
+-          RCLCPP_WARN(
+-            node_->get_logger(),
+-            "Timed out while waiting for action server to acknowledge goal request for %s",
+-            action_name_.c_str());
+-          future_goal_handle_.reset();
+-          return BT::NodeStatus::FAILURE;
+-        }
+-      }
+-
+-      // The following code corresponds to the "RUNNING" loop
+-      if (rclcpp::ok() && !goal_result_available_) {
+-        // user defined callback. May modify the value of "goal_updated_"
+-        on_wait_for_result(feedback_);
+-
+-        // reset feedback to avoid stale information
+-        feedback_.reset();
+-
+-        auto goal_status = goal_handle_->get_status();
+-        if (goal_updated_ && (goal_status == action_msgs::msg::GoalStatus::STATUS_EXECUTING ||
+-          goal_status == action_msgs::msg::GoalStatus::STATUS_ACCEPTED))
+-        {
+-          goal_updated_ = false;
+-          send_new_goal();
+-          auto elapsed =
+-            (node_->now() - time_goal_sent_).template to_chrono<std::chrono::milliseconds>();
+-          if (!is_future_goal_handle_complete(elapsed)) {
+-            if (elapsed < server_timeout_) {
+-              return BT::NodeStatus::RUNNING;
+-            }
+-            RCLCPP_WARN(
+-              node_->get_logger(),
+-              "Timed out while waiting for action server to acknowledge goal request for %s",
+-              action_name_.c_str());
+-            future_goal_handle_.reset();
+-            return BT::NodeStatus::FAILURE;
+-          }
+-        }
+-
+-        callback_group_executor_.spin_some();
+-
+-        // check if, after invoking spin_some(), we finally received the result
+-        if (!goal_result_available_) {
+-          // Yield this Action, returning RUNNING
+-          return BT::NodeStatus::RUNNING;
+-        }
+-      }
+-    } catch (const std::runtime_error & e) {
+-      if (e.what() == std::string("send_goal failed") ||
+-        e.what() == std::string("Goal was rejected by the action server"))
+-      {
+-        // Action related failure that should not fail the tree, but the node
+-        return BT::NodeStatus::FAILURE;
+-      } else {
+-        // Internal exception to propagate to the tree
+-        throw e;
+-      }
+-    }
+-
+-    BT::NodeStatus status;
+-    switch (result_.code) {
+-      case rclcpp_action::ResultCode::SUCCEEDED:
+-        status = on_success();
+-        break;
+-
+-      case rclcpp_action::ResultCode::ABORTED:
+-        status = on_aborted();
+-        break;
+-
+-      case rclcpp_action::ResultCode::CANCELED:
+-        status = on_cancelled();
+-        break;
+-
+-      default:
+-        throw std::logic_error("BtActionNode::Tick: invalid status value");
+-    }
+-
+-    goal_handle_.reset();
+-    return status;
+-  }
+-
+-  /**
+-   * @brief The other (optional) override required by a BT action. In this case, we
+-   * make sure to cancel the ROS2 action if it is still running.
+-   */
+-  void halt() override
+-  {
+-    if (should_cancel_goal()) {
+-      auto future_result = action_client_->async_get_result(goal_handle_);
+-      auto future_cancel = action_client_->async_cancel_goal(goal_handle_);
+-      if (callback_group_executor_.spin_until_future_complete(future_cancel, server_timeout_) !=
+-        rclcpp::FutureReturnCode::SUCCESS)
+-      {
+-        RCLCPP_ERROR(
+-          node_->get_logger(),
+-          "Failed to cancel action server for %s", action_name_.c_str());
+-      }
+-
+-      if (callback_group_executor_.spin_until_future_complete(future_result, server_timeout_) !=
+-        rclcpp::FutureReturnCode::SUCCESS)
+-      {
+-        RCLCPP_ERROR(
+-          node_->get_logger(),
+-          "Failed to get result for %s in node halt!", action_name_.c_str());
+-      }
+-
+-      on_cancelled();
+-    }
+-
+-    setStatus(BT::NodeStatus::IDLE);
+-  }
+-
+-protected:
+-  /**
+-   * @brief Function to check if current goal should be cancelled
+-   * @return bool True if current goal should be cancelled, false otherwise
+-   */
+-  bool should_cancel_goal()
+-  {
+-    // Shut the node down if it is currently running
+-    if (status() != BT::NodeStatus::RUNNING) {
+-      return false;
+-    }
+-
+-    // No need to cancel the goal if goal handle is invalid
+-    if (!goal_handle_) {
+-      return false;
+-    }
+-
+-    callback_group_executor_.spin_some();
+-    auto status = goal_handle_->get_status();
+-
+-    // Check if the goal is still executing
+-    return status == action_msgs::msg::GoalStatus::STATUS_ACCEPTED ||
+-           status == action_msgs::msg::GoalStatus::STATUS_EXECUTING;
+-  }
+-
+-  /**
+-   * @brief Function to send new goal to action server
+-   */
+-  void send_new_goal()
+-  {
+-    goal_result_available_ = false;
+-    auto send_goal_options = typename rclcpp_action::Client<ActionT>::SendGoalOptions();
+-    send_goal_options.result_callback =
+-      [this](const typename rclcpp_action::ClientGoalHandle<ActionT>::WrappedResult & result) {
+-        if (future_goal_handle_) {
+-          RCLCPP_DEBUG(
+-            node_->get_logger(),
+-            "Goal result for %s available, but it hasn't received the goal response yet. "
+-            "It's probably a goal result for the last goal request", action_name_.c_str());
+-          return;
+-        }
+-
+-        // TODO(#1652): a work around until rcl_action interface is updated
+-        // if goal ids are not matched, the older goal call this callback so ignore the result
+-        // if matched, it must be processed (including aborted)
+-        if (this->goal_handle_->get_goal_id() == result.goal_id) {
+-          goal_result_available_ = true;
+-          result_ = result;
+-        }
+-      };
+-    send_goal_options.feedback_callback =
+-      [this](typename rclcpp_action::ClientGoalHandle<ActionT>::SharedPtr,
+-        const std::shared_ptr<const typename ActionT::Feedback> feedback) {
+-        feedback_ = feedback;
+-      };
+-
+-    future_goal_handle_ = std::make_shared<
+-      std::shared_future<typename rclcpp_action::ClientGoalHandle<ActionT>::SharedPtr>>(
+-      action_client_->async_send_goal(goal_, send_goal_options));
+-    time_goal_sent_ = node_->now();
+-  }
+-
+-  /**
+-   * @brief Function to check if the action server acknowledged a new goal
+-   * @param elapsed Duration since the last goal was sent and future goal handle has not completed.
+-   * After waiting for the future to complete, this value is incremented with the timeout value.
+-   * @return boolean True if future_goal_handle_ returns SUCCESS, False otherwise
+-   */
+-  bool is_future_goal_handle_complete(std::chrono::milliseconds & elapsed)
+-  {
+-    auto remaining = server_timeout_ - elapsed;
+-
+-    // server has already timed out, no need to sleep
+-    if (remaining <= std::chrono::milliseconds(0)) {
+-      future_goal_handle_.reset();
+-      return false;
+-    }
+-
+-    auto timeout = remaining > max_timeout_ ? max_timeout_ : remaining;
+-    auto result =
+-      callback_group_executor_.spin_until_future_complete(*future_goal_handle_, timeout);
+-    elapsed += timeout;
+-
+-    if (result == rclcpp::FutureReturnCode::INTERRUPTED) {
+-      future_goal_handle_.reset();
+-      throw std::runtime_error("send_goal failed");
+-    }
+-
+-    if (result == rclcpp::FutureReturnCode::SUCCESS) {
+-      goal_handle_ = future_goal_handle_->get();
+-      future_goal_handle_.reset();
+-      if (!goal_handle_) {
+-        throw std::runtime_error("Goal was rejected by the action server");
+-      }
+-      return true;
+-    }
+-
+-    return false;
+-  }
+-
+-  /**
+-   * @brief Function to increment recovery count on blackboard if this node wraps a recovery
+-   */
++    options.result_callback = [exchange](const WrappedResult & result) {
++      std::lock_guard<std::mutex> lock(exchange->mutex);
++      exchange->result = result; exchange->terminal = true; exchange->handle.reset();
++    };
++    options.feedback_callback = [exchange](typename Handle::SharedPtr,
++      const std::shared_ptr<const Feedback> feedback) {
++      std::lock_guard<std::mutex> lock(exchange->mutex); exchange->feedback = feedback;
++    };
++    try {action_client_->async_send_goal(goal_, options);}
++    catch (const std::exception & error) {
++      std::lock_guard<std::mutex> lock(exchange->mutex);
++      exchange->error = error.what(); exchange->terminal = true;
++    }
++  }
+   void increment_recovery_count()
+   {
+-    int recovery_count = 0;
+-    config().blackboard->template get<int>("number_recoveries", recovery_count);  // NOLINT
+-    recovery_count += 1;
+-    config().blackboard->template set<int>("number_recoveries", recovery_count);  // NOLINT
+-  }
+-
++    int count = 0; config().blackboard->template get<int>("number_recoveries", count);
++    config().blackboard->template set<int>("number_recoveries", count+1);
++  }
+   std::string action_name_;
+-  typename std::shared_ptr<rclcpp_action::Client<ActionT>> action_client_;
+-
+-  // All ROS2 actions have a goal and a result
++  rclcpp::Node::SharedPtr node_;
+   typename ActionT::Goal goal_;
+-  bool goal_updated_{false};
+-  bool goal_result_available_{false};
+-  typename rclcpp_action::ClientGoalHandle<ActionT>::SharedPtr goal_handle_;
+-  typename rclcpp_action::ClientGoalHandle<ActionT>::WrappedResult result_;
+-
+-  // To handle feedback from action server
+-  std::shared_ptr<const typename ActionT::Feedback> feedback_;
+-
+-  // The node that will be used for any ROS operations
+-  rclcpp::Node::SharedPtr node_;
+-  rclcpp::CallbackGroup::SharedPtr callback_group_;
+-  rclcpp::executors::SingleThreadedExecutor callback_group_executor_;
+-
+-  // The timeout value while waiting for response from a server when a
+-  // new action goal is sent or canceled
+-  std::chrono::milliseconds server_timeout_;
+-
+-  // The timeout value for BT loop execution
+-  std::chrono::milliseconds max_timeout_;
+-
+-  // The timeout value for waiting for a service to response
+-  std::chrono::milliseconds wait_for_service_timeout_;
+-
+-  // To track the action server acknowledgement when a new goal is sent
+-  std::shared_ptr<std::shared_future<typename rclcpp_action::ClientGoalHandle<ActionT>::SharedPtr>>
+-  future_goal_handle_;
+-  rclcpp::Time time_goal_sent_;
+-
+-  // Can be set in on_tick or on_wait_for_result to indicate if a goal should be sent.
+-  bool should_send_goal_;
++  WrappedResult result_;
++  bool goal_updated_{false}, should_send_goal_{true};
++private:
++  rclcpp::Node::SharedPtr io_node_;
++  std::shared_ptr<Client> action_client_;
++  std::unique_ptr<ActionIO> io_;
++  std::shared_ptr<Exchange> current_;
++  std::vector<std::shared_ptr<Exchange>> exchanges_;
++  std::chrono::milliseconds server_timeout_{20}, drain_timeout_{1000};
+ };
+-
+-}  // namespace nav2_behavior_tree
+-
+-#endif  // NAV2_BEHAVIOR_TREE__BT_ACTION_NODE_HPP_
++}  // namespace go2w_foxy_bt
++#endif  // GO2W_FOXY_BT__BT_ACTION_NODE_HPP_
+--- upstream/nav2_behavior_tree/include/nav2_behavior_tree/plugins/action/compute_path_to_pose_action.hpp
++++ compat/foxy_nav2/src/go2w_nav2_bt_compat/include/go2w_nav2_bt_compat/plugins/action/compute_path_to_pose_action.hpp
+@@ -12,26 +12,26 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__COMPUTE_PATH_TO_POSE_ACTION_HPP_
+-#define NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__COMPUTE_PATH_TO_POSE_ACTION_HPP_
++#ifndef GO2W_FOXY_BT__PLUGINS__ACTION__COMPUTE_PATH_TO_POSE_ACTION_HPP_
++#define GO2W_FOXY_BT__PLUGINS__ACTION__COMPUTE_PATH_TO_POSE_ACTION_HPP_
+ 
+ #include <string>
+ 
+ #include "nav2_msgs/action/compute_path_to_pose.hpp"
+ #include "nav_msgs/msg/path.h"
+-#include "nav2_behavior_tree/bt_action_node.hpp"
++#include "go2w_nav2_bt_compat/bt_action_node.hpp"
+ 
+-namespace nav2_behavior_tree
++namespace go2w_foxy_bt
+ {
+ 
+ /**
+- * @brief A nav2_behavior_tree::BtActionNode class that wraps nav2_msgs::action::ComputePathToPose
++ * @brief A go2w_foxy_bt::BtActionNode class that wraps nav2_msgs::action::ComputePathToPose
+  */
+ class ComputePathToPoseAction : public BtActionNode<nav2_msgs::action::ComputePathToPose>
+ {
+ public:
+   /**
+-   * @brief A constructor for nav2_behavior_tree::ComputePathToPoseAction
++   * @brief A constructor for go2w_foxy_bt::ComputePathToPoseAction
+    * @param xml_tag_name Name for the XML tag for this node
+    * @param action_name Action name this node creates a client for
+    * @param conf BT node configuration
+@@ -85,6 +85,6 @@
+   }
+ };
+ 
+-}  // namespace nav2_behavior_tree
++}  // namespace go2w_foxy_bt
+ 
+-#endif  // NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__COMPUTE_PATH_TO_POSE_ACTION_HPP_
++#endif  // GO2W_FOXY_BT__PLUGINS__ACTION__COMPUTE_PATH_TO_POSE_ACTION_HPP_
+--- upstream/nav2_behavior_tree/include/nav2_behavior_tree/plugins/action/follow_path_action.hpp
++++ compat/foxy_nav2/src/go2w_nav2_bt_compat/include/go2w_nav2_bt_compat/plugins/action/follow_path_action.hpp
+@@ -12,26 +12,26 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__FOLLOW_PATH_ACTION_HPP_
+-#define NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__FOLLOW_PATH_ACTION_HPP_
++#ifndef GO2W_FOXY_BT__PLUGINS__ACTION__FOLLOW_PATH_ACTION_HPP_
++#define GO2W_FOXY_BT__PLUGINS__ACTION__FOLLOW_PATH_ACTION_HPP_
+ 
+ #include <string>
+ #include <memory>
+ 
+ #include "nav2_msgs/action/follow_path.hpp"
+-#include "nav2_behavior_tree/bt_action_node.hpp"
++#include "go2w_nav2_bt_compat/bt_action_node.hpp"
+ 
+-namespace nav2_behavior_tree
++namespace go2w_foxy_bt
+ {
+ 
+ /**
+- * @brief A nav2_behavior_tree::BtActionNode class that wraps nav2_msgs::action::FollowPath
++ * @brief A go2w_foxy_bt::BtActionNode class that wraps nav2_msgs::action::FollowPath
+  */
+ class FollowPathAction : public BtActionNode<nav2_msgs::action::FollowPath>
+ {
+ public:
+   /**
+-   * @brief A constructor for nav2_behavior_tree::FollowPathAction
++   * @brief A constructor for go2w_foxy_bt::FollowPathAction
+    * @param xml_tag_name Name for the XML tag for this node
+    * @param action_name Action name this node creates a client for
+    * @param conf BT node configuration
+@@ -64,11 +64,10 @@
+       {
+         BT::InputPort<nav_msgs::msg::Path>("path", "Path to follow"),
+         BT::InputPort<std::string>("controller_id", ""),
+-        BT::InputPort<std::string>("goal_checker_id", ""),
+       });
+   }
+ };
+ 
+-}  // namespace nav2_behavior_tree
++}  // namespace go2w_foxy_bt
+ 
+-#endif  // NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__FOLLOW_PATH_ACTION_HPP_
++#endif  // GO2W_FOXY_BT__PLUGINS__ACTION__FOLLOW_PATH_ACTION_HPP_
+--- upstream/nav2_behavior_tree/include/nav2_behavior_tree/plugins/action/wait_action.hpp
++++ compat/foxy_nav2/src/go2w_nav2_bt_compat/include/go2w_nav2_bt_compat/plugins/action/wait_action.hpp
+@@ -12,25 +12,25 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__WAIT_ACTION_HPP_
+-#define NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__WAIT_ACTION_HPP_
++#ifndef GO2W_FOXY_BT__PLUGINS__ACTION__WAIT_ACTION_HPP_
++#define GO2W_FOXY_BT__PLUGINS__ACTION__WAIT_ACTION_HPP_
+ 
+ #include <string>
+ 
+-#include "nav2_behavior_tree/bt_action_node.hpp"
++#include "go2w_nav2_bt_compat/bt_action_node.hpp"
+ #include "nav2_msgs/action/wait.hpp"
+ 
+-namespace nav2_behavior_tree
++namespace go2w_foxy_bt
+ {
+ 
+ /**
+- * @brief A nav2_behavior_tree::BtActionNode class that wraps nav2_msgs::action::Wait
++ * @brief A go2w_foxy_bt::BtActionNode class that wraps nav2_msgs::action::Wait
+  */
+ class WaitAction : public BtActionNode<nav2_msgs::action::Wait>
+ {
+ public:
+   /**
+-   * @brief A constructor for nav2_behavior_tree::WaitAction
++   * @brief A constructor for go2w_foxy_bt::WaitAction
+    * @param xml_tag_name Name for the XML tag for this node
+    * @param action_name Action name this node creates a client for
+    * @param conf BT node configuration
+@@ -58,6 +58,6 @@
+   }
+ };
+ 
+-}  // namespace nav2_behavior_tree
++}  // namespace go2w_foxy_bt
+ 
+-#endif  // NAV2_BEHAVIOR_TREE__PLUGINS__ACTION__WAIT_ACTION_HPP_
++#endif  // GO2W_FOXY_BT__PLUGINS__ACTION__WAIT_ACTION_HPP_
+--- upstream/nav2_behavior_tree/plugins/action/compute_path_to_pose_action.cpp
++++ compat/foxy_nav2/src/go2w_nav2_bt_compat/plugins/action/compute_path_to_pose_action.cpp
+@@ -15,9 +15,9 @@
+ #include <memory>
+ #include <string>
+ 
+-#include "nav2_behavior_tree/plugins/action/compute_path_to_pose_action.hpp"
++#include "go2w_nav2_bt_compat/plugins/action/compute_path_to_pose_action.hpp"
+ 
+-namespace nav2_behavior_tree
++namespace go2w_foxy_bt
+ {
+ 
+ ComputePathToPoseAction::ComputePathToPoseAction(
+@@ -30,10 +30,11 @@
+ 
+ void ComputePathToPoseAction::on_tick()
+ {
+-  getInput("goal", goal_.goal);
++  getInput("goal", goal_.pose);
+   getInput("planner_id", goal_.planner_id);
+-  if (getInput("start", goal_.start)) {
+-    goal_.use_start = true;
++  geometry_msgs::msg::PoseStamped explicit_start;
++  if (getInput("start", explicit_start)) {
++    throw std::runtime_error("Native Foxy planner does not support an explicit start pose");
+   }
+ }
+ 
+@@ -64,18 +65,18 @@
+   BtActionNode::halt();
+ }
+ 
+-}  // namespace nav2_behavior_tree
++}  // namespace go2w_foxy_bt
+ 
+ #include "behaviortree_cpp_v3/bt_factory.h"
+-BT_REGISTER_NODES(factory)
++void register_compute_path_to_pose(BT::BehaviorTreeFactory & factory)
+ {
+   BT::NodeBuilder builder =
+     [](const std::string & name, const BT::NodeConfiguration & config)
+     {
+-      return std::make_unique<nav2_behavior_tree::ComputePathToPoseAction>(
++      return std::make_unique<go2w_foxy_bt::ComputePathToPoseAction>(
+         name, "compute_path_to_pose", config);
+     };
+ 
+-  factory.registerBuilder<nav2_behavior_tree::ComputePathToPoseAction>(
++  factory.registerBuilder<go2w_foxy_bt::ComputePathToPoseAction>(
+     "ComputePathToPose", builder);
+ }
+--- upstream/nav2_behavior_tree/plugins/action/follow_path_action.cpp
++++ compat/foxy_nav2/src/go2w_nav2_bt_compat/plugins/action/follow_path_action.cpp
+@@ -15,9 +15,9 @@
+ #include <memory>
+ #include <string>
+ 
+-#include "nav2_behavior_tree/plugins/action/follow_path_action.hpp"
++#include "go2w_nav2_bt_compat/plugins/action/follow_path_action.hpp"
+ 
+-namespace nav2_behavior_tree
++namespace go2w_foxy_bt
+ {
+ 
+ FollowPathAction::FollowPathAction(
+@@ -32,7 +32,6 @@
+ {
+   getInput("path", goal_.path);
+   getInput("controller_id", goal_.controller_id);
+-  getInput("goal_checker_id", goal_.goal_checker_id);
+ }
+ 
+ void FollowPathAction::on_wait_for_result(
+@@ -57,27 +56,21 @@
+     goal_updated_ = true;
+   }
+ 
+-  std::string new_goal_checker_id;
+-  getInput("goal_checker_id", new_goal_checker_id);
+ 
+-  if (goal_.goal_checker_id != new_goal_checker_id) {
+-    goal_.goal_checker_id = new_goal_checker_id;
+-    goal_updated_ = true;
+-  }
+ }
+ 
+-}  // namespace nav2_behavior_tree
++}  // namespace go2w_foxy_bt
+ 
+ #include "behaviortree_cpp_v3/bt_factory.h"
+-BT_REGISTER_NODES(factory)
++void register_follow_path(BT::BehaviorTreeFactory & factory)
+ {
+   BT::NodeBuilder builder =
+     [](const std::string & name, const BT::NodeConfiguration & config)
+     {
+-      return std::make_unique<nav2_behavior_tree::FollowPathAction>(
++      return std::make_unique<go2w_foxy_bt::FollowPathAction>(
+         name, "follow_path", config);
+     };
+ 
+-  factory.registerBuilder<nav2_behavior_tree::FollowPathAction>(
++  factory.registerBuilder<go2w_foxy_bt::FollowPathAction>(
+     "FollowPath", builder);
+ }
+--- upstream/nav2_behavior_tree/plugins/action/wait_action.cpp
++++ compat/foxy_nav2/src/go2w_nav2_bt_compat/plugins/action/wait_action.cpp
+@@ -15,9 +15,9 @@
+ #include <string>
+ #include <memory>
+ 
+-#include "nav2_behavior_tree/plugins/action/wait_action.hpp"
++#include "go2w_nav2_bt_compat/plugins/action/wait_action.hpp"
+ 
+-namespace nav2_behavior_tree
++namespace go2w_foxy_bt
+ {
+ 
+ WaitAction::WaitAction(
+@@ -43,16 +43,16 @@
+   increment_recovery_count();
+ }
+ 
+-}  // namespace nav2_behavior_tree
++}  // namespace go2w_foxy_bt
+ 
+ #include "behaviortree_cpp_v3/bt_factory.h"
+-BT_REGISTER_NODES(factory)
++void register_wait(BT::BehaviorTreeFactory & factory)
+ {
+   BT::NodeBuilder builder =
+     [](const std::string & name, const BT::NodeConfiguration & config)
+     {
+-      return std::make_unique<nav2_behavior_tree::WaitAction>(name, "wait", config);
++      return std::make_unique<go2w_foxy_bt::WaitAction>(name, "wait", config);
+     };
+ 
+-  factory.registerBuilder<nav2_behavior_tree::WaitAction>("Wait", builder);
++  factory.registerBuilder<go2w_foxy_bt::WaitAction>("Wait", builder);
+ }
+--- upstream/nav2_behaviors/include/nav2_behaviors/plugins/spin.hpp
++++ compat/foxy_nav2/src/go2w_nav2_spin_compat/include/go2w_nav2_spin_compat/spin.hpp
+@@ -12,26 +12,28 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_BEHAVIORS__PLUGINS__SPIN_HPP_
+-#define NAV2_BEHAVIORS__PLUGINS__SPIN_HPP_
++#ifndef GO2W_FOXY_SPIN__SPIN_HPP_
++#define GO2W_FOXY_SPIN__SPIN_HPP_
+ 
+ #include <chrono>
+ #include <string>
+ #include <memory>
+ 
+-#include "nav2_behaviors/timed_behavior.hpp"
+-#include "nav2_msgs/action/spin.hpp"
++#include "nav2_recoveries/recovery.hpp"
++#include "go2w_nav2_spin_compat/collision_checker.hpp"
++#include "go2w_nav2_compat_msgs/action/spin.hpp"
+ #include "geometry_msgs/msg/quaternion.hpp"
+ 
+-namespace nav2_behaviors
++namespace go2w_foxy_spin
+ {
+-using SpinAction = nav2_msgs::action::Spin;
++using SpinAction = go2w_nav2_compat_msgs::action::Spin;
++using Status = nav2_recoveries::Status;
+ 
+ /**
+  * @class nav2_behaviors::Spin
+  * @brief An action server behavior for spinning in
+  */
+-class Spin : public TimedBehavior<SpinAction>
++class Spin : public nav2_recoveries::Recovery<SpinAction>
+ {
+ public:
+   /**
+@@ -72,6 +74,9 @@
+     geometry_msgs::msg::Pose2D & pose2d);
+ 
+   SpinAction::Feedback::SharedPtr feedback_;
++  std::unique_ptr<nav2_costmap_2d::CostmapSubscriber> costmap_subscriber_;
++  std::unique_ptr<go2w_foxy_nav2::FootprintSubscriber> footprint_subscriber_;
++  std::unique_ptr<CostmapTopicCollisionChecker> compatible_collision_checker_;
+ 
+   double min_rotational_vel_;
+   double max_rotational_vel_;
+@@ -84,6 +89,6 @@
+   rclcpp::Time end_time_;
+ };
+ 
+-}  // namespace nav2_behaviors
++}  // namespace go2w_foxy_spin
+ 
+-#endif  // NAV2_BEHAVIORS__PLUGINS__SPIN_HPP_
++#endif  // GO2W_FOXY_SPIN__SPIN_HPP_
+--- upstream/nav2_behaviors/plugins/spin.cpp
++++ compat/foxy_nav2/src/go2w_nav2_spin_compat/src/spin.cpp
+@@ -18,18 +18,18 @@
+ #include <memory>
+ #include <utility>
+ 
+-#include "nav2_behaviors/plugins/spin.hpp"
++#include "go2w_nav2_spin_compat/spin.hpp"
+ #include "tf2/utils.h"
+-#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
++#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+ #include "nav2_util/node_utils.hpp"
+ 
+ using namespace std::chrono_literals;
+ 
+-namespace nav2_behaviors
++namespace go2w_foxy_spin
+ {
+ 
+ Spin::Spin()
+-: TimedBehavior<SpinAction>(),
++: nav2_recoveries::Recovery<SpinAction>(),
+   feedback_(std::make_shared<SpinAction::Feedback>()),
+   min_rotational_vel_(0.0),
+   max_rotational_vel_(0.0),
+@@ -45,7 +45,7 @@
+ 
+ void Spin::onConfigure()
+ {
+-  auto node = node_.lock();
++  auto node = std::dynamic_pointer_cast<nav2_util::LifecycleNode>(node_);
+   if (!node) {
+     throw std::runtime_error{"Failed to lock node"};
+   }
+@@ -54,6 +54,21 @@
+     node,
+     "simulate_ahead_time", rclcpp::ParameterValue(2.0));
+   node->get_parameter("simulate_ahead_time", simulate_ahead_time_);
++  // Preserve the pinned checker's one costmap/footprint fetch per sweep.
++  // Native Foxy only exposes an always-fetch overload.
++  std::string costmap_topic, footprint_topic;
++  node->get_parameter("costmap_topic", costmap_topic);
++  node->get_parameter("footprint_topic", footprint_topic);
++  if (costmap_topic.empty() || footprint_topic.empty()) {
++    throw std::runtime_error("Spin requires explicit costmap and footprint topics");
++  }
++  costmap_subscriber_ = std::make_unique<nav2_costmap_2d::CostmapSubscriber>(
++    node->get_node_base_interface(), node->get_node_topics_interface(),
++    node->get_node_logging_interface(), costmap_topic);
++  footprint_subscriber_ = std::make_unique<go2w_foxy_nav2::FootprintSubscriber>(
++    node, footprint_topic, *tf_, robot_base_frame_, transform_tolerance_);
++  compatible_collision_checker_ = std::make_unique<CostmapTopicCollisionChecker>(
++    *costmap_subscriber_, *footprint_subscriber_, "spin_collision_checker");
+ 
+   nav2_util::declare_parameter_if_not_declared(
+     node,
+@@ -78,7 +93,8 @@
+       current_pose, *tf_, global_frame_, robot_base_frame_,
+       transform_tolerance_))
+   {
+-    RCLCPP_ERROR(logger_, "Current robot pose is not available.");
++    stopRobot();
++    RCLCPP_ERROR(node_->get_logger(), "Current robot pose is not available.");
+     return Status::FAILED;
+   }
+ 
+@@ -87,22 +103,22 @@
+ 
+   cmd_yaw_ = command->target_yaw;
+   RCLCPP_INFO(
+-    logger_, "Turning %0.2f for spin behavior.",
++    node_->get_logger(), "Turning %0.2f for spin behavior.",
+     cmd_yaw_);
+ 
+   command_time_allowance_ = command->time_allowance;
+-  end_time_ = this->clock_->now() + command_time_allowance_;
++  end_time_ = node_->get_clock()->now() + command_time_allowance_;
+ 
+   return Status::SUCCEEDED;
+ }
+ 
+ Status Spin::onCycleUpdate()
+ {
+-  rclcpp::Duration time_remaining = end_time_ - this->clock_->now();
++  rclcpp::Duration time_remaining = end_time_ - node_->get_clock()->now();
+   if (time_remaining.seconds() < 0.0 && command_time_allowance_.seconds() > 0.0) {
+     stopRobot();
+     RCLCPP_WARN(
+-      logger_,
++      node_->get_logger(),
+       "Exceeded time allowance before reaching the Spin goal - Exiting Spin");
+     return Status::FAILED;
+   }
+@@ -112,7 +128,8 @@
+       current_pose, *tf_, global_frame_, robot_base_frame_,
+       transform_tolerance_))
+   {
+-    RCLCPP_ERROR(logger_, "Current robot pose is not available.");
++    stopRobot();
++    RCLCPP_ERROR(node_->get_logger(), "Current robot pose is not available.");
+     return Status::FAILED;
+   }
+ 
+@@ -148,7 +165,7 @@
+ 
+   if (!isCollisionFree(relative_yaw_, cmd_vel.get(), pose2d)) {
+     stopRobot();
+-    RCLCPP_WARN(logger_, "Collision Ahead - Exiting Spin");
++    RCLCPP_WARN(node_->get_logger(), "Collision Ahead - Exiting Spin");
+     return Status::FAILED;
+   }
+ 
+@@ -178,7 +195,7 @@
+       break;
+     }
+ 
+-    if (!collision_checker_->isCollisionFree(pose2d, fetch_data)) {
++    if (!compatible_collision_checker_->isCollisionFree(pose2d, fetch_data)) {
+       return false;
+     }
+     fetch_data = false;
+@@ -186,7 +203,7 @@
+   return true;
+ }
+ 
+-}  // namespace nav2_behaviors
++}  // namespace go2w_foxy_spin
+ 
+ #include "pluginlib/class_list_macros.hpp"
+-PLUGINLIB_EXPORT_CLASS(nav2_behaviors::Spin, nav2_core::Behavior)
++PLUGINLIB_EXPORT_CLASS(go2w_foxy_spin::Spin, nav2_core::Recovery)
+--- upstream/nav2_collision_monitor/CMakeLists.txt
++++ compat/foxy_nav2/src/nav2_collision_monitor/CMakeLists.txt
+@@ -4,6 +4,7 @@
+ ### Dependencies ###
+ 
+ find_package(ament_cmake REQUIRED)
++find_package(go2w_nav2_compat REQUIRED)
+ find_package(rclcpp REQUIRED)
+ find_package(rclcpp_components REQUIRED)
+ find_package(sensor_msgs REQUIRED)
+@@ -27,6 +28,7 @@
+ )
+ 
+ set(dependencies
++  go2w_nav2_compat
+   rclcpp
+   rclcpp_components
+   sensor_msgs
+--- upstream/nav2_collision_monitor/include/nav2_collision_monitor/collision_monitor_node.hpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/include/nav2_collision_monitor/collision_monitor_node.hpp
+@@ -1,3 +1,4 @@
++#include "go2w_nav2_compat/tf_listener.hpp"
+ // Copyright (c) 2022 Samsung R&D Institute Russia
+ //
+ // Licensed under the Apache License, Version 2.0 (the "License");
+@@ -191,7 +192,7 @@
+   /// @brief TF buffer
+   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+   /// @brief TF listener
+-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
++  std::shared_ptr<go2w_foxy_nav2::TransformListener> tf_listener_;
+ 
+   /// @brief Polygons array
+   std::vector<std::shared_ptr<Polygon>> polygons_;
+--- upstream/nav2_collision_monitor/include/nav2_collision_monitor/polygon.hpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/include/nav2_collision_monitor/polygon.hpp
+@@ -27,7 +27,7 @@
+ #include "tf2_ros/buffer.h"
+ 
+ #include "nav2_util/lifecycle_node.hpp"
+-#include "nav2_costmap_2d/footprint_subscriber.hpp"
++#include "go2w_nav2_compat/footprint_subscriber.hpp"
+ 
+ #include "nav2_collision_monitor/types.hpp"
+ 
+@@ -199,7 +199,7 @@
+   /// @brief Time step for robot movement simulation
+   double simulation_time_step_;
+   /// @brief Footprint subscriber
+-  std::unique_ptr<nav2_costmap_2d::FootprintSubscriber> footprint_sub_;
++  std::unique_ptr<go2w_foxy_nav2::FootprintSubscriber> footprint_sub_;
+   /// @brief Whether polygon is enabled
+   bool enabled_;
+ 
+--- upstream/nav2_collision_monitor/package.xml
++++ compat/foxy_nav2/src/nav2_collision_monitor/package.xml
+@@ -9,6 +9,7 @@
+   <license>Apache-2.0</license>
+ 
+   <buildtool_depend>ament_cmake</buildtool_depend>
++  <depend>go2w_nav2_compat</depend>
+ 
+   <depend>rclcpp</depend>
+   <depend>rclcpp_components</depend>
+--- upstream/nav2_collision_monitor/src/circle.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/src/circle.cpp
+@@ -12,6 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include "go2w_nav2_compat/compat.hpp"
+ #include "nav2_collision_monitor/circle.hpp"
+ 
+ #include <math.h>
+@@ -86,7 +87,7 @@
+ 
+   try {
+     // Leave it not initialized: the will cause an error if it will not set
+-    nav2_util::declare_parameter_if_not_declared(
++    go2w_foxy_nav2::declare_parameter_if_not_declared(
+       node, polygon_name_ + ".radius", rclcpp::PARAMETER_DOUBLE);
+     radius_ = node->get_parameter(polygon_name_ + ".radius").as_double();
+     radius_squared_ = radius_ * radius_;
+--- upstream/nav2_collision_monitor/src/collision_monitor_node.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/src/collision_monitor_node.cpp
+@@ -1,3 +1,4 @@
++#include "go2w_nav2_compat/tf_listener.hpp"
+ // Copyright (c) 2022 Samsung R&D Institute Russia
+ //
+ // Licensed under the Apache License, Version 2.0 (the "License");
+@@ -12,6 +13,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include "go2w_nav2_compat/compat.hpp"
+ #include "nav2_collision_monitor/collision_monitor_node.hpp"
+ 
+ #include <exception>
+@@ -28,7 +30,7 @@
+ {
+ 
+ CollisionMonitor::CollisionMonitor(const rclcpp::NodeOptions & options)
+-: nav2_util::LifecycleNode("collision_monitor", "", options),
++: nav2_util::LifecycleNode("collision_monitor", "", false, options),
+   process_active_(false), robot_action_prev_{DO_NOTHING, {-1.0, -1.0, -1.0}},
+   stop_stamp_{0, 0, get_clock()->get_clock_type()}, stop_pub_timeout_(1.0, 0.0)
+ {
+@@ -51,7 +53,7 @@
+     this->get_node_base_interface(),
+     this->get_node_timers_interface());
+   tf_buffer_->setCreateTimerInterface(timer_interface);
+-  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
++  tf_listener_ = std::make_shared<go2w_foxy_nav2::TransformListener>(*tf_buffer_);
+ 
+   std::string cmd_vel_in_topic;
+   std::string cmd_vel_out_topic;
+@@ -91,7 +93,7 @@
+   process_active_ = true;
+ 
+   // Creating bond connection
+-  createBond();
++  // Foxy lifecycle management uses services, without the newer bond API.
+ 
+   return nav2_util::CallbackReturn::SUCCESS;
+ }
+@@ -116,7 +118,7 @@
+   cmd_vel_out_pub_->on_deactivate();
+ 
+   // Destroying bond connection
+-  destroyBond();
++  // Foxy lifecycle management uses services, without the newer bond API.
+ 
+   return nav2_util::CallbackReturn::SUCCESS;
+ }
+@@ -149,7 +151,7 @@
+ void CollisionMonitor::cmdVelInCallback(geometry_msgs::msg::Twist::ConstSharedPtr msg)
+ {
+   // If message contains NaN or Inf, ignore
+-  if (!nav2_util::validateTwist(*msg)) {
++  if (!go2w_foxy_nav2::validateTwist(*msg)) {
+     RCLCPP_ERROR(get_logger(), "Velocity message contains NaNs or Infs! Ignoring as invalid!");
+     return;
+   }
+@@ -190,33 +192,33 @@
+ 
+   auto node = shared_from_this();
+ 
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "cmd_vel_in_topic", rclcpp::ParameterValue("cmd_vel_raw"));
+   cmd_vel_in_topic = get_parameter("cmd_vel_in_topic").as_string();
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "cmd_vel_out_topic", rclcpp::ParameterValue("cmd_vel"));
+   cmd_vel_out_topic = get_parameter("cmd_vel_out_topic").as_string();
+ 
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "base_frame_id", rclcpp::ParameterValue("base_footprint"));
+   base_frame_id = get_parameter("base_frame_id").as_string();
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "odom_frame_id", rclcpp::ParameterValue("odom"));
+   odom_frame_id = get_parameter("odom_frame_id").as_string();
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "transform_tolerance", rclcpp::ParameterValue(0.1));
+   transform_tolerance =
+     tf2::durationFromSec(get_parameter("transform_tolerance").as_double());
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "source_timeout", rclcpp::ParameterValue(2.0));
+   source_timeout =
+     rclcpp::Duration::from_seconds(get_parameter("source_timeout").as_double());
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "base_shift_correction", rclcpp::ParameterValue(true));
+   const bool base_shift_correction =
+     get_parameter("base_shift_correction").as_bool();
+ 
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "stop_pub_timeout", rclcpp::ParameterValue(1.0));
+   stop_pub_timeout_ =
+     rclcpp::Duration::from_seconds(get_parameter("stop_pub_timeout").as_double());
+@@ -242,12 +244,12 @@
+   try {
+     auto node = shared_from_this();
+ 
+-    nav2_util::declare_parameter_if_not_declared(
++    go2w_foxy_nav2::declare_parameter_if_not_declared(
+       node, "polygons", rclcpp::ParameterValue(std::vector<std::string>()));
+     std::vector<std::string> polygon_names = get_parameter("polygons").as_string_array();
+     for (std::string polygon_name : polygon_names) {
+       // Leave it not initialized: the will cause an error if it will not set
+-      nav2_util::declare_parameter_if_not_declared(
++      go2w_foxy_nav2::declare_parameter_if_not_declared(
+         node, polygon_name + ".type", rclcpp::PARAMETER_STRING);
+       const std::string polygon_type = get_parameter(polygon_name + ".type").as_string();
+ 
+@@ -291,11 +293,11 @@
+     auto node = shared_from_this();
+ 
+     // Leave it to be not initialized: to intentionally cause an error if it will not set
+-    nav2_util::declare_parameter_if_not_declared(
++    go2w_foxy_nav2::declare_parameter_if_not_declared(
+       node, "observation_sources", rclcpp::PARAMETER_STRING_ARRAY);
+     std::vector<std::string> source_names = get_parameter("observation_sources").as_string_array();
+     for (std::string source_name : source_names) {
+-      nav2_util::declare_parameter_if_not_declared(
++      go2w_foxy_nav2::declare_parameter_if_not_declared(
+         node, source_name + ".type",
+         rclcpp::ParameterValue("scan"));  // Laser scanner by default
+       const std::string source_type = get_parameter(source_name + ".type").as_string();
+--- upstream/nav2_collision_monitor/src/pointcloud.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/src/pointcloud.cpp
+@@ -12,6 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include "go2w_nav2_compat/compat.hpp"
+ #include "nav2_collision_monitor/pointcloud.hpp"
+ 
+ #include <functional>
+@@ -82,7 +83,7 @@
+     // Obtaining the transform to get data from source frame and time where it was received
+     // to the base frame and current time
+     if (
+-      !nav2_util::getTransform(
++      !go2w_foxy_nav2::getTransform(
+         data_->header.frame_id, data_->header.stamp,
+         base_frame_id_, curr_time, global_frame_id_,
+         transform_tolerance_, tf_buffer_, tf_transform))
+@@ -94,7 +95,7 @@
+     // considered. Less accurate but much more faster option not dependent on state estimation
+     // frames.
+     if (
+-      !nav2_util::getTransform(
++      !go2w_foxy_nav2::getTransform(
+         data_->header.frame_id, base_frame_id_,
+         transform_tolerance_, tf_buffer_, tf_transform))
+     {
+@@ -128,10 +129,10 @@
+ 
+   getCommonParameters(source_topic);
+ 
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, source_name_ + ".min_height", rclcpp::ParameterValue(0.05));
+   min_height_ = node->get_parameter(source_name_ + ".min_height").as_double();
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, source_name_ + ".max_height", rclcpp::ParameterValue(0.5));
+   max_height_ = node->get_parameter(source_name_ + ".max_height").as_double();
+ }
+--- upstream/nav2_collision_monitor/src/polygon.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/src/polygon.cpp
+@@ -12,6 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include "go2w_nav2_compat/compat.hpp"
+ #include "nav2_collision_monitor/polygon.hpp"
+ 
+ #include <exception>
+@@ -61,7 +62,7 @@
+   }
+ 
+   if (!footprint_topic.empty()) {
+-    footprint_sub_ = std::make_unique<nav2_costmap_2d::FootprintSubscriber>(
++    footprint_sub_ = std::make_unique<go2w_foxy_nav2::FootprintSubscriber>(
+       node, footprint_topic, *tf_buffer_,
+       base_frame_id_, tf2::durationToSec(transform_tolerance_));
+   }
+@@ -239,7 +240,7 @@
+   try {
+     // Get action type.
+     // Leave it not initialized: the will cause an error if it will not set.
+-    nav2_util::declare_parameter_if_not_declared(
++    go2w_foxy_nav2::declare_parameter_if_not_declared(
+       node, polygon_name_ + ".action_type", rclcpp::PARAMETER_STRING);
+     const std::string at_str =
+       node->get_parameter(polygon_name_ + ".action_type").as_string();
+@@ -254,37 +255,37 @@
+       return false;
+     }
+ 
+-    nav2_util::declare_parameter_if_not_declared(
++    go2w_foxy_nav2::declare_parameter_if_not_declared(
+       node, polygon_name_ + ".enabled", rclcpp::ParameterValue(true));
+     enabled_ = node->get_parameter(polygon_name_ + ".enabled").as_bool();
+ 
+-    nav2_util::declare_parameter_if_not_declared(
++    go2w_foxy_nav2::declare_parameter_if_not_declared(
+       node, polygon_name_ + ".max_points", rclcpp::ParameterValue(3));
+     max_points_ = node->get_parameter(polygon_name_ + ".max_points").as_int();
+ 
+     if (action_type_ == SLOWDOWN) {
+-      nav2_util::declare_parameter_if_not_declared(
++      go2w_foxy_nav2::declare_parameter_if_not_declared(
+         node, polygon_name_ + ".slowdown_ratio", rclcpp::ParameterValue(0.5));
+       slowdown_ratio_ = node->get_parameter(polygon_name_ + ".slowdown_ratio").as_double();
+     }
+ 
+     if (action_type_ == APPROACH) {
+-      nav2_util::declare_parameter_if_not_declared(
++      go2w_foxy_nav2::declare_parameter_if_not_declared(
+         node, polygon_name_ + ".time_before_collision", rclcpp::ParameterValue(2.0));
+       time_before_collision_ =
+         node->get_parameter(polygon_name_ + ".time_before_collision").as_double();
+-      nav2_util::declare_parameter_if_not_declared(
++      go2w_foxy_nav2::declare_parameter_if_not_declared(
+         node, polygon_name_ + ".simulation_time_step", rclcpp::ParameterValue(0.1));
+       simulation_time_step_ =
+         node->get_parameter(polygon_name_ + ".simulation_time_step").as_double();
+     }
+ 
+-    nav2_util::declare_parameter_if_not_declared(
++    go2w_foxy_nav2::declare_parameter_if_not_declared(
+       node, polygon_name_ + ".visualize", rclcpp::ParameterValue(false));
+     visualize_ = node->get_parameter(polygon_name_ + ".visualize").as_bool();
+     if (visualize_) {
+       // Get polygon topic parameter in case if it is going to be published
+-      nav2_util::declare_parameter_if_not_declared(
++      go2w_foxy_nav2::declare_parameter_if_not_declared(
+         node, polygon_name_ + ".polygon_pub_topic", rclcpp::ParameterValue(polygon_name_));
+       polygon_pub_topic = node->get_parameter(polygon_name_ + ".polygon_pub_topic").as_string();
+     }
+@@ -313,7 +314,7 @@
+   try {
+     if (action_type_ == APPROACH) {
+       // Obtain the footprint topic to make a footprint subscription for approach polygon
+-      nav2_util::declare_parameter_if_not_declared(
++      go2w_foxy_nav2::declare_parameter_if_not_declared(
+         node, polygon_name_ + ".footprint_topic",
+         rclcpp::ParameterValue("local_costmap/published_footprint"));
+       footprint_topic =
+@@ -328,7 +329,7 @@
+     }
+ 
+     // Leave it not initialized: the will cause an error if it will not set
+-    nav2_util::declare_parameter_if_not_declared(
++    go2w_foxy_nav2::declare_parameter_if_not_declared(
+       node, polygon_name_ + ".points", rclcpp::PARAMETER_DOUBLE_ARRAY);
+     std::vector<double> poly_row =
+       node->get_parameter(polygon_name_ + ".points").as_double_array();
+--- upstream/nav2_collision_monitor/src/range.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/src/range.cpp
+@@ -12,6 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include "go2w_nav2_compat/compat.hpp"
+ #include "nav2_collision_monitor/range.hpp"
+ 
+ #include <math.h>
+@@ -91,7 +92,7 @@
+     // Obtaining the transform to get data from source frame and time where it was received
+     // to the base frame and current time
+     if (
+-      !nav2_util::getTransform(
++      !go2w_foxy_nav2::getTransform(
+         data_->header.frame_id, data_->header.stamp,
+         base_frame_id_, curr_time, global_frame_id_,
+         transform_tolerance_, tf_buffer_, tf_transform))
+@@ -103,7 +104,7 @@
+     // considered. Less accurate but much more faster option not dependent on state estimation
+     // frames.
+     if (
+-      !nav2_util::getTransform(
++      !go2w_foxy_nav2::getTransform(
+         data_->header.frame_id, base_frame_id_,
+         transform_tolerance_, tf_buffer_, tf_transform))
+     {
+@@ -152,7 +153,7 @@
+ 
+   getCommonParameters(source_topic);
+ 
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, source_name_ + ".obstacles_angle", rclcpp::ParameterValue(M_PI / 180));
+   obstacles_angle_ = node->get_parameter(source_name_ + ".obstacles_angle").as_double();
+ }
+--- upstream/nav2_collision_monitor/src/scan.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/src/scan.cpp
+@@ -12,6 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include "go2w_nav2_compat/compat.hpp"
+ #include "nav2_collision_monitor/scan.hpp"
+ 
+ #include <cmath>
+@@ -80,7 +81,7 @@
+     // Obtaining the transform to get data from source frame and time where it was received
+     // to the base frame and current time
+     if (
+-      !nav2_util::getTransform(
++      !go2w_foxy_nav2::getTransform(
+         data_->header.frame_id, data_->header.stamp,
+         base_frame_id_, curr_time, global_frame_id_,
+         transform_tolerance_, tf_buffer_, tf_transform))
+@@ -92,7 +93,7 @@
+     // considered. Less accurate but much more faster option not dependent on state estimation
+     // frames.
+     if (
+-      !nav2_util::getTransform(
++      !go2w_foxy_nav2::getTransform(
+         data_->header.frame_id, base_frame_id_,
+         transform_tolerance_, tf_buffer_, tf_transform))
+     {
+--- upstream/nav2_collision_monitor/src/source.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/src/source.cpp
+@@ -12,6 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include "go2w_nav2_compat/compat.hpp"
+ #include "nav2_collision_monitor/source.hpp"
+ 
+ #include <exception>
+@@ -19,7 +20,7 @@
+ #include "geometry_msgs/msg/transform_stamped.hpp"
+ 
+ #include "tf2/convert.h"
+-#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
++#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+ 
+ #include "nav2_util/node_utils.hpp"
+ 
+@@ -64,12 +65,12 @@
+     throw std::runtime_error{"Failed to lock node"};
+   }
+ 
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, source_name_ + ".topic",
+     rclcpp::ParameterValue("scan"));  // Set deafult topic for laser scanner
+   source_topic = node->get_parameter(source_name_ + ".topic").as_string();
+ 
+-  nav2_util::declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, source_name_ + ".enabled", rclcpp::ParameterValue(true));
+   enabled_ = node->get_parameter(source_name_ + ".enabled").as_bool();
+ }
+--- upstream/nav2_collision_monitor/test/collision_monitor_node_test.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/test/collision_monitor_node_test.cpp
+@@ -22,7 +22,6 @@
+ #include <vector>
+ #include <string>
+ #include <limits>
+-#include "nav2_msgs/msg/collision_monitor_state.hpp"
+ #include "rclcpp/rclcpp.hpp"
+ #include "nav2_util/lifecycle_node.hpp"
+ #include "sensor_msgs/msg/laser_scan.hpp"
+@@ -167,15 +166,15 @@
+   std::shared_ptr<CollisionMonitorWrapper> cm_;
+ 
+   // Footprint publisher
+-  rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_pub_;
+ 
+   // Data source publishers
+-  rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub_;
+-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
+-  rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr range_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Range>::SharedPtr range_pub_;
+ 
+   // Working with cmd_vel_in/cmd_vel_out
+-  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_in_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_in_pub_;
+   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_out_sub_;
+ 
+   geometry_msgs::msg::Twist::SharedPtr cmd_vel_out_;
+@@ -200,6 +199,13 @@
+ 
+   cmd_vel_in_pub_ = cm_->create_publisher<geometry_msgs::msg::Twist>(
+     CMD_VEL_IN_TOPIC, rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable());
++  // These are synthetic fixture inputs; Foxy's LifecycleNode creates
++  // lifecycle publishers even before the monitor itself is activated.
++  footprint_pub_->on_activate();
++  scan_pub_->on_activate();
++  pointcloud_pub_->on_activate();
++  range_pub_->on_activate();
++  cmd_vel_in_pub_->on_activate();
+   cmd_vel_out_sub_ = cm_->create_subscription<geometry_msgs::msg::Twist>(
+     CMD_VEL_OUT_TOPIC, rclcpp::SystemDefaultsQoS(),
+     std::bind(&Tester::cmdVelOutCallback, this, std::placeholders::_1));
+@@ -922,7 +928,7 @@
+   parameter_msg->value.type = rcl_interfaces::msg::ParameterType::PARAMETER_BOOL;
+   parameter_msg->value.bool_value = false;
+   set_parameters_msg->parameters.push_back(*parameter_msg);
+-  auto result_future = parameters_client_->async_send_request(set_parameters_msg).future.share();
++  auto result_future = parameters_client_->async_send_request(set_parameters_msg);
+   ASSERT_TRUE(waitFuture(result_future, 2s));
+ 
+   // Check that robot does not stop when polygon is disabled
+@@ -971,7 +977,7 @@
+   parameter_msg->value.type = rcl_interfaces::msg::ParameterType::PARAMETER_BOOL;
+   parameter_msg->value.bool_value = false;
+   set_parameters_msg->parameters.push_back(*parameter_msg);
+-  auto result_future = parameters_client_->async_send_request(set_parameters_msg).future.share();
++  auto result_future = parameters_client_->async_send_request(set_parameters_msg);
+   ASSERT_TRUE(waitFuture(result_future, 2s));
+ 
+   // Check that robot does not stop when source is disabled
+--- upstream/nav2_collision_monitor/test/polygons_test.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/test/polygons_test.cpp
+@@ -1,3 +1,4 @@
++#include "go2w_nav2_compat/tf_listener.hpp"
+ // Copyright (c) 2022 Samsung R&D Institute Russia
+ //
+ // Licensed under the Apache License, Version 2.0 (the "License");
+@@ -89,6 +90,7 @@
+       msg->polygon.points.push_back(p);
+     }
+ 
++    footprint_pub_->on_activate();  // Foxy fixture publisher, not a production activation.
+     footprint_pub_->publish(std::move(msg));
+   }
+ 
+@@ -112,7 +114,7 @@
+   }
+ 
+ private:
+-  rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_pub_;
+   rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr polygon_sub_;
+ 
+   geometry_msgs::msg::PolygonStamped::SharedPtr polygon_received_;
+@@ -195,7 +197,7 @@
+   std::shared_ptr<CircleWrapper> circle_;
+ 
+   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
++  std::shared_ptr<go2w_foxy_nav2::TransformListener> tf_listener_;
+ };  // Tester
+ 
+ Tester::Tester()
+@@ -204,7 +206,7 @@
+ 
+   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(test_node_->get_clock());
+   tf_buffer_->setUsingDedicatedThread(true);  // One-thread broadcasting-listening model
+-  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
++  tf_listener_ = std::make_shared<go2w_foxy_nav2::TransformListener>(*tf_buffer_);
+ }
+ 
+ Tester::~Tester()
+@@ -280,20 +282,15 @@
+ 
+ bool Tester::checkUndeclaredParameter(const std::string & polygon_name, const std::string & param)
+ {
+-  bool ret = false;
+-
+-  // Check that parameter is not set after configuring
+-  try {
+-    test_node_->get_parameter(polygon_name + "." + param);
+-  } catch (std::exception & ex) {
+-    std::string message = ex.what();
+-    if (message.find("." + param) != std::string::npos &&
+-      message.find("is not initialized") != std::string::npos)
+-    {
+-      ret = true;
+-    }
+-  }
+-  return ret;
++  const std::string name = polygon_name + "." + param;
++  // Foxy has a different exception message for declared-but-uninitialized
++  // parameters. Assert the state, not Humble's English error string.
++  if (!test_node_->has_parameter(name)) {
++    return false;
++  }
++  rclcpp::Parameter parameter;
++  return !test_node_->get_parameter(name, parameter) ||
++         parameter.get_type() == rclcpp::PARAMETER_NOT_SET;
+ }
+ 
+ void Tester::createPolygon(const std::string & action_type)
+--- upstream/nav2_collision_monitor/test/sources_test.cpp
++++ compat/foxy_nav2/src/nav2_collision_monitor/test/sources_test.cpp
+@@ -1,3 +1,4 @@
++#include "go2w_nav2_compat/tf_listener.hpp"
+ // Copyright (c) 2022 Samsung R&D Institute Russia
+ //
+ // Licensed under the Apache License, Version 2.0 (the "License");
+@@ -91,6 +92,7 @@
+     std::vector<float> ranges(4, range);
+     msg->ranges = ranges;
+ 
++    scan_pub_->on_activate();  // Foxy fixtures use lifecycle publishers.
+     scan_pub_->publish(std::move(msg));
+   }
+ 
+@@ -133,6 +135,7 @@
+     *iter_y = 1.0;
+     *iter_z = 10.0;
+ 
++    pointcloud_pub_->on_activate();  // Foxy fixtures use lifecycle publishers.
+     pointcloud_pub_->publish(std::move(msg));
+   }
+ 
+@@ -153,13 +156,14 @@
+     msg->max_range = 1.1;
+     msg->range = range;
+ 
++    range_pub_->on_activate();  // Foxy fixtures use lifecycle publishers.
+     range_pub_->publish(std::move(msg));
+   }
+ 
+ private:
+-  rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub_;
+-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
+-  rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr range_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Range>::SharedPtr range_pub_;
+ };  // TestNode
+ 
+ class ScanWrapper : public nav2_collision_monitor::Scan
+@@ -259,7 +263,7 @@
+ 
+ private:
+   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
++  std::shared_ptr<go2w_foxy_nav2::TransformListener> tf_listener_;
+ };  // Tester
+ 
+ Tester::Tester()
+@@ -268,7 +272,7 @@
+ 
+   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(test_node_->get_clock());
+   tf_buffer_->setUsingDedicatedThread(true);  // One-thread broadcasting-listening model
+-  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
++  tf_listener_ = std::make_shared<go2w_foxy_nav2::TransformListener>(*tf_buffer_);
+ }
+ 
+ Tester::~Tester()
+--- upstream/nav2_costmap_2d/include/nav2_costmap_2d/costmap_filters/filter_values.hpp
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/include/go2w_regulated_pure_pursuit_controller/speed_limit_constants.hpp
+@@ -35,12 +35,14 @@
+  * Author: Alexey Merzlyakov
+  *********************************************************************/
+ 
+-#ifndef NAV2_COSTMAP_2D__COSTMAP_FILTERS__FILTER_VALUES_HPP_
+-#define NAV2_COSTMAP_2D__COSTMAP_FILTERS__FILTER_VALUES_HPP_
++#ifndef GO2W_FOXY_RPP__SPEED_LIMIT_CONSTANTS_HPP_
++#define GO2W_FOXY_RPP__SPEED_LIMIT_CONSTANTS_HPP_
+ 
+-/** Provides constants used in costmap filters */
++#include <cstdint>
+ 
+-namespace nav2_costmap_2d
++/** Constants from pinned Nav2, kept outside the native Foxy namespace. */
++
++namespace go2w_foxy_rpp
+ {
+ 
+ /** Types of costmap filter */
+@@ -58,6 +60,6 @@
+ static constexpr int8_t SPEED_MASK_NO_LIMIT = 0;
+ static constexpr double NO_SPEED_LIMIT = 0.0;
+ 
+-}  // namespace nav2_costmap_2d
++}  // namespace go2w_foxy_rpp
+ 
+-#endif  // NAV2_COSTMAP_2D__COSTMAP_FILTERS__FILTER_VALUES_HPP_
++#endif  // GO2W_FOXY_RPP__SPEED_LIMIT_CONSTANTS_HPP_
+--- upstream/nav2_costmap_2d/include/nav2_costmap_2d/costmap_topic_collision_checker.hpp
++++ compat/foxy_nav2/src/go2w_nav2_spin_compat/include/go2w_nav2_spin_compat/collision_checker.hpp
+@@ -14,8 +14,8 @@
+ //
+ // Modified by: Shivang Patel (shivaan14@gmail.com)
+ 
+-#ifndef NAV2_COSTMAP_2D__COSTMAP_TOPIC_COLLISION_CHECKER_HPP_
+-#define NAV2_COSTMAP_2D__COSTMAP_TOPIC_COLLISION_CHECKER_HPP_
++#ifndef GO2W_FOXY_SPIN__COLLISION_CHECKER_HPP_
++#define GO2W_FOXY_SPIN__COLLISION_CHECKER_HPP_
+ 
+ #include <string>
+ #include <vector>
+@@ -28,10 +28,12 @@
+ #include "nav2_costmap_2d/costmap_2d.hpp"
+ #include "nav2_costmap_2d/footprint_collision_checker.hpp"
+ #include "nav2_costmap_2d/costmap_subscriber.hpp"
+-#include "nav2_costmap_2d/footprint_subscriber.hpp"
++#include "go2w_nav2_compat/footprint_subscriber.hpp"
+ 
+-namespace nav2_costmap_2d
++namespace go2w_foxy_spin
+ {
++using namespace nav2_costmap_2d;  // Native geometry and costmap interfaces.
++using FootprintSubscriber = go2w_foxy_nav2::FootprintSubscriber;
+ /**
+  * @class CostmapTopicCollisionChecker
+  * @brief Using a costmap via a ros topic, this object is used to
+@@ -96,6 +98,6 @@
+   Footprint footprint_;
+ };
+ 
+-}  // namespace nav2_costmap_2d
++}  // namespace go2w_foxy_spin
+ 
+-#endif  // NAV2_COSTMAP_2D__COSTMAP_TOPIC_COLLISION_CHECKER_HPP_
++#endif  // GO2W_FOXY_SPIN__COLLISION_CHECKER_HPP_
+--- upstream/nav2_costmap_2d/include/nav2_costmap_2d/footprint_subscriber.hpp
++++ compat/foxy_nav2/src/go2w_nav2_compat/include/go2w_nav2_compat/footprint_subscriber.hpp
+@@ -12,8 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_COSTMAP_2D__FOOTPRINT_SUBSCRIBER_HPP_
+-#define NAV2_COSTMAP_2D__FOOTPRINT_SUBSCRIBER_HPP_
++#ifndef GO2W_FOXY_NAV2__FOOTPRINT_SUBSCRIBER_HPP_
++#define GO2W_FOXY_NAV2__FOOTPRINT_SUBSCRIBER_HPP_
+ 
+ #include <string>
+ #include <vector>
+@@ -23,7 +23,7 @@
+ #include "nav2_util/lifecycle_node.hpp"
+ #include "nav2_util/robot_utils.hpp"
+ 
+-namespace nav2_costmap_2d
++namespace go2w_foxy_nav2
+ {
+ /**
+  * @class FootprintSubscriber
+@@ -94,6 +94,6 @@
+   rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_sub_;
+ };
+ 
+-}  // namespace nav2_costmap_2d
++}  // namespace go2w_foxy_nav2
+ 
+-#endif  // NAV2_COSTMAP_2D__FOOTPRINT_SUBSCRIBER_HPP_
++#endif  // GO2W_FOXY_NAV2__FOOTPRINT_SUBSCRIBER_HPP_
+--- upstream/nav2_costmap_2d/src/costmap_topic_collision_checker.cpp
++++ compat/foxy_nav2/src/go2w_nav2_spin_compat/src/collision_checker.cpp
+@@ -20,7 +20,7 @@
+ #include <algorithm>
+ #include <iostream>
+ 
+-#include "nav2_costmap_2d/costmap_topic_collision_checker.hpp"
++#include "go2w_nav2_spin_compat/collision_checker.hpp"
+ 
+ #include "nav2_costmap_2d/cost_values.hpp"
+ #include "nav2_costmap_2d/exceptions.hpp"
+@@ -29,8 +29,10 @@
+ 
+ using namespace std::chrono_literals;
+ 
+-namespace nav2_costmap_2d
++namespace go2w_foxy_spin
+ {
++using namespace nav2_costmap_2d;  // Native geometry and costmap interfaces.
++using FootprintSubscriber = go2w_foxy_nav2::FootprintSubscriber;
+ 
+ CostmapTopicCollisionChecker::CostmapTopicCollisionChecker(
+   CostmapSubscriber & costmap_sub,
+@@ -100,4 +102,4 @@
+   return footprint;
+ }
+ 
+-}  // namespace nav2_costmap_2d
++}  // namespace go2w_foxy_spin
+--- upstream/nav2_costmap_2d/src/footprint_subscriber.cpp
++++ compat/foxy_nav2/src/go2w_nav2_compat/src/footprint_subscriber.cpp
+@@ -16,13 +16,13 @@
+ #include <vector>
+ #include <memory>
+ 
+-#include "nav2_costmap_2d/footprint_subscriber.hpp"
++#include "go2w_nav2_compat/footprint_subscriber.hpp"
+ #pragma GCC diagnostic push
+ #pragma GCC diagnostic ignored "-Wpedantic"
+ #include "tf2/utils.h"
+ #pragma GCC diagnostic pop
+ 
+-namespace nav2_costmap_2d
++namespace go2w_foxy_nav2
+ {
+ 
+ FootprintSubscriber::FootprintSubscriber(
+@@ -67,7 +67,7 @@
+   }
+ 
+   auto current_footprint = std::atomic_load(&footprint_);
+-  footprint = toPointVector(
++  footprint = nav2_costmap_2d::toPointVector(
+     std::make_shared<geometry_msgs::msg::Polygon>(current_footprint->polygon));
+   footprint_header = current_footprint->header;
+ 
+@@ -83,11 +83,20 @@
+     return false;
+   }
+ 
++  // Foxy's getCurrentPose has no timestamp argument. Preserve the upstream
++  // footprint timestamp; substituting latest TF would mix two robot poses.
+   geometry_msgs::msg::PoseStamped current_pose;
+-  if (!nav2_util::getCurrentPose(
+-      current_pose, tf_, footprint_header.frame_id, robot_base_frame_,
+-      transform_tolerance_, footprint_header.stamp))
+-  {
++  try {
++    const auto transform = tf_.lookupTransform(
++      footprint_header.frame_id, robot_base_frame_,
++      rclcpp::Time(footprint_header.stamp),
++      rclcpp::Duration::from_seconds(transform_tolerance_));
++    current_pose.header = transform.header;
++    current_pose.pose.position.x = transform.transform.translation.x;
++    current_pose.pose.position.y = transform.transform.translation.y;
++    current_pose.pose.position.z = transform.transform.translation.z;
++    current_pose.pose.orientation = transform.transform.rotation;
++  } catch (const tf2::TransformException &) {
+     return false;
+   }
+ 
+@@ -96,8 +105,8 @@
+   double theta = tf2::getYaw(current_pose.pose.orientation);
+ 
+   std::vector<geometry_msgs::msg::Point> temp;
+-  transformFootprint(-x, -y, 0, footprint, temp);
+-  transformFootprint(0, 0, -theta, temp, footprint);
++  nav2_costmap_2d::transformFootprint(-x, -y, 0, footprint, temp);
++  nav2_costmap_2d::transformFootprint(0, 0, -theta, temp, footprint);
+ 
+   footprint_header.frame_id = robot_base_frame_;
+   footprint_header.stamp = current_pose.header.stamp;
+@@ -114,4 +123,4 @@
+   }
+ }
+ 
+-}  // namespace nav2_costmap_2d
++}  // namespace go2w_foxy_nav2
+--- upstream/nav2_regulated_pure_pursuit_controller/CMakeLists.txt
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/CMakeLists.txt
+@@ -1,5 +1,5 @@
+ cmake_minimum_required(VERSION 3.5)
+-project(nav2_regulated_pure_pursuit_controller)
++project(go2w_regulated_pure_pursuit_controller)
+ 
+ find_package(ament_cmake REQUIRED)
+ find_package(nav2_common REQUIRED)
+@@ -32,7 +32,7 @@
+   tf2_geometry_msgs
+ )
+ 
+-set(library_name nav2_regulated_pure_pursuit_controller)
++set(library_name go2w_regulated_pure_pursuit_controller)
+ 
+ add_library(${library_name} SHARED
+         src/regulated_pure_pursuit_controller.cpp)
+@@ -52,6 +52,7 @@
+ )
+ 
+ if(BUILD_TESTING)
++  find_package(ament_cmake_gtest REQUIRED)
+   find_package(ament_lint_auto REQUIRED)
+   # the following line skips the linter which checks for copyrights
+   set(ament_cmake_copyright_FOUND TRUE)
+@@ -63,7 +64,7 @@
+ ament_export_libraries(${library_name})
+ ament_export_dependencies(${dependencies})
+ 
+-pluginlib_export_plugin_description_file(nav2_core nav2_regulated_pure_pursuit_controller.xml)
++pluginlib_export_plugin_description_file(nav2_core go2w_regulated_pure_pursuit_controller.xml)
+ 
+ ament_package()
+ 
+--- upstream/nav2_regulated_pure_pursuit_controller/README.md
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/README.md
+@@ -101,7 +101,7 @@
+       yaw_goal_tolerance: 0.25
+       stateful: True
+     FollowPath:
+-      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
++      plugin: "go2w_foxy_rpp::RegulatedPurePursuitController"
+       desired_linear_vel: 0.5
+       lookahead_dist: 0.6
+       min_lookahead_dist: 0.3
+--- upstream/nav2_regulated_pure_pursuit_controller/include/nav2_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/include/go2w_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp
+@@ -13,8 +13,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_REGULATED_PURE_PURSUIT_CONTROLLER__REGULATED_PURE_PURSUIT_CONTROLLER_HPP_
+-#define NAV2_REGULATED_PURE_PURSUIT_CONTROLLER__REGULATED_PURE_PURSUIT_CONTROLLER_HPP_
++#ifndef GO2W_FOXY_RPP__CONTROLLER_HPP_
++#define GO2W_FOXY_RPP__CONTROLLER_HPP_
+ 
+ #include <string>
+ #include <vector>
+@@ -28,26 +28,26 @@
+ #include "pluginlib/class_loader.hpp"
+ #include "pluginlib/class_list_macros.hpp"
+ #include "nav2_util/odometry_utils.hpp"
+-#include "nav2_util/geometry_utils.hpp"
++#include "go2w_regulated_pure_pursuit_controller/geometry_utils.hpp"
+ #include "geometry_msgs/msg/pose2_d.hpp"
+ 
+-namespace nav2_regulated_pure_pursuit_controller
++namespace go2w_foxy_rpp
+ {
+ 
+ /**
+- * @class nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
++ * @class go2w_foxy_rpp::RegulatedPurePursuitController
+  * @brief Regulated pure pursuit controller plugin
+  */
+ class RegulatedPurePursuitController : public nav2_core::Controller
+ {
+ public:
+   /**
+-   * @brief Constructor for nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
++   * @brief Constructor for go2w_foxy_rpp::RegulatedPurePursuitController
+    */
+   RegulatedPurePursuitController() = default;
+ 
+   /**
+-   * @brief Destrructor for nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
++   * @brief Destrructor for go2w_foxy_rpp::RegulatedPurePursuitController
+    */
+   ~RegulatedPurePursuitController() override = default;
+ 
+@@ -59,9 +59,9 @@
+    * @param costmap_ros Costmap2DROS object of environment
+    */
+   void configure(
+-    const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent,
+-    std::string name, std::shared_ptr<tf2_ros::Buffer> tf,
+-    std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) override;
++    const rclcpp_lifecycle::LifecycleNode::SharedPtr & parent,
++    std::string name, const std::shared_ptr<tf2_ros::Buffer> & tf,
++    const std::shared_ptr<nav2_costmap_2d::Costmap2DROS> & costmap_ros) override;
+ 
+   /**
+    * @brief Cleanup controller state machine
+@@ -92,8 +92,7 @@
+    */
+   geometry_msgs::msg::TwistStamped computeVelocityCommands(
+     const geometry_msgs::msg::PoseStamped & pose,
+-    const geometry_msgs::msg::Twist & velocity,
+-    nav2_core::GoalChecker * /*goal_checker*/) override;
++    const geometry_msgs::msg::Twist & velocity) override;
+ 
+   /**
+    * @brief nav2_core setPlan - Sets the global plan
+@@ -108,7 +107,7 @@
+    * @param percentage Setting speed limit in percentage if true
+    * or in absolute values in false case.
+    */
+-  void setSpeedLimit(const double & speed_limit, const bool & percentage) override;
++  void setSpeedLimit(const double & speed_limit, const bool & percentage);
+ 
+ protected:
+   /**
+@@ -304,6 +303,7 @@
+   double max_angular_accel_;
+   double rotate_to_heading_min_angle_;
+   double goal_dist_tol_;
++  std::string goal_checker_name_;
+   bool allow_reversing_;
+   double max_robot_pose_search_dist_;
+   bool use_interpolation_;
+@@ -321,6 +321,6 @@
+   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr dyn_params_handler_;
+ };
+ 
+-}  // namespace nav2_regulated_pure_pursuit_controller
+-
+-#endif  // NAV2_REGULATED_PURE_PURSUIT_CONTROLLER__REGULATED_PURE_PURSUIT_CONTROLLER_HPP_
++}  // namespace go2w_foxy_rpp
++
++#endif  // GO2W_FOXY_RPP__CONTROLLER_HPP_
+--- upstream/nav2_regulated_pure_pursuit_controller/nav2_regulated_pure_pursuit_controller.xml
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/go2w_regulated_pure_pursuit_controller.xml
+@@ -1,8 +1,8 @@
+ <class_libraries>
+-    <library path="nav2_regulated_pure_pursuit_controller">
+-        <class type="nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController" base_class_type="nav2_core::Controller">
++    <library path="go2w_regulated_pure_pursuit_controller">
++        <class type="go2w_foxy_rpp::RegulatedPurePursuitController" base_class_type="nav2_core::Controller">
+             <description>
+-                nav2_regulated_pure_pursuit_controller
++                go2w_regulated_pure_pursuit_controller
+             </description>
+         </class>
+     </library>
+--- upstream/nav2_regulated_pure_pursuit_controller/package.xml
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/package.xml
+@@ -1,7 +1,7 @@
+ <?xml version="1.0"?>
+ <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+ <package format="3">
+-  <name>nav2_regulated_pure_pursuit_controller</name>
++  <name>go2w_regulated_pure_pursuit_controller</name>
+   <version>1.1.20</version>
+   <description>Regulated Pure Pursuit Controller</description>
+   <maintainer email="stevenmacenski@gmail.com">Steve Macenski</maintainer>
+@@ -27,7 +27,7 @@
+ 
+   <export>
+     <build_type>ament_cmake</build_type>
+-    <nav2_core plugin="${prefix}/nav2_regulated_pure_pursuit_controller.xml" />
++    <nav2_core plugin="${prefix}/go2w_regulated_pure_pursuit_controller.xml" />
+   </export>
+ 
+ </package>
+--- upstream/nav2_regulated_pure_pursuit_controller/src/regulated_pure_pursuit_controller.cpp
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/src/regulated_pure_pursuit_controller.cpp
+@@ -20,30 +20,30 @@
+ #include <vector>
+ #include <utility>
+ 
+-#include "nav2_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp"
++#include "go2w_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp"
+ #include "nav2_core/exceptions.hpp"
+ #include "nav2_util/node_utils.hpp"
+-#include "nav2_util/geometry_utils.hpp"
+-#include "nav2_costmap_2d/costmap_filters/filter_values.hpp"
++#include "go2w_regulated_pure_pursuit_controller/geometry_utils.hpp"
++#include "go2w_regulated_pure_pursuit_controller/speed_limit_constants.hpp"
+ 
+ using std::hypot;
+ using std::min;
+ using std::max;
+ using std::abs;
+ using nav2_util::declare_parameter_if_not_declared;
+-using nav2_util::geometry_utils::euclidean_distance;
++using go2w_foxy_rpp::geometry_utils::euclidean_distance;
+ using namespace nav2_costmap_2d;  // NOLINT
+ using rcl_interfaces::msg::ParameterType;
+ 
+-namespace nav2_regulated_pure_pursuit_controller
++namespace go2w_foxy_rpp
+ {
+ 
+ void RegulatedPurePursuitController::configure(
+-  const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent,
+-  std::string name, std::shared_ptr<tf2_ros::Buffer> tf,
+-  std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros)
+-{
+-  auto node = parent.lock();
++  const rclcpp_lifecycle::LifecycleNode::SharedPtr & parent,
++  std::string name, const std::shared_ptr<tf2_ros::Buffer> & tf,
++  const std::shared_ptr<nav2_costmap_2d::Costmap2DROS> & costmap_ros)
++{
++  auto node = parent;
+   node_ = parent;
+   if (!node) {
+     throw nav2_core::PlannerException("Unable to lock node!");
+@@ -58,7 +58,25 @@
+ 
+   double transform_tolerance = 0.1;
+   double control_frequency = 20.0;
+-  goal_dist_tol_ = 0.25;  // reasonable default before first update
++  // Foxy's Controller interface does not pass a GoalChecker. Bind the
++  // initialized native SimpleGoalChecker's actual configuration, with no
++  // invented tolerance or generic replacement GoalChecker.
++  if (!node->has_parameter("goal_checker_plugin") ||
++    !node->get_parameter("goal_checker_plugin", goal_checker_name_) ||
++    goal_checker_name_.empty())
++  {
++    throw nav2_core::PlannerException("Foxy RPP requires goal_checker_plugin");
++  }
++  std::string goal_checker_type;
++  if (!node->has_parameter(goal_checker_name_ + ".plugin") ||
++    !node->get_parameter(goal_checker_name_ + ".plugin", goal_checker_type) ||
++    goal_checker_type != "nav2_controller::SimpleGoalChecker" ||
++    !node->has_parameter(goal_checker_name_ + ".xy_goal_tolerance") ||
++    !node->get_parameter(goal_checker_name_ + ".xy_goal_tolerance", goal_dist_tol_) ||
++    !std::isfinite(goal_dist_tol_) || goal_dist_tol_ <= 0.)
++  {
++    throw nav2_core::PlannerException("Foxy RPP requires a configured native SimpleGoalChecker");
++  }
+ 
+   declare_parameter_if_not_declared(
+     node, plugin_name_ + ".desired_linear_vel", rclcpp::ParameterValue(0.5));
+@@ -277,21 +295,21 @@
+ 
+ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocityCommands(
+   const geometry_msgs::msg::PoseStamped & pose,
+-  const geometry_msgs::msg::Twist & speed,
+-  nav2_core::GoalChecker * goal_checker)
++  const geometry_msgs::msg::Twist & speed)
+ {
+   std::lock_guard<std::mutex> lock_reinit(mutex_);
+ 
+   nav2_costmap_2d::Costmap2D * costmap = costmap_ros_->getCostmap();
+   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
+ 
+-  // Update for the current goal checker's state
+-  geometry_msgs::msg::Pose pose_tolerance;
+-  geometry_msgs::msg::Twist vel_tolerance;
+-  if (!goal_checker->getTolerances(pose_tolerance, vel_tolerance)) {
+-    RCLCPP_WARN(logger_, "Unable to retrieve goal checker's tolerances!");
+-  } else {
+-    goal_dist_tol_ = pose_tolerance.position.x;
++  // Native Foxy SimpleGoalChecker snapshots its tolerance at initialize.
++  // Changing a node parameter alone cannot change that instance. Detect
++  // inactive-time edits too, rather than accepting mismatched arrival gates.
++  auto node = node_.lock();
++  if (!node || node->get_parameter(goal_checker_name_ + ".xy_goal_tolerance").as_double() !=
++    goal_dist_tol_)
++  {
++    throw nav2_core::PlannerException("Goal checker tolerance changed; reconfigure required");
+   }
+ 
+   // Transform path to robot base frame
+@@ -603,7 +621,7 @@
+ {
+   // Waiting to apply the threshold based on integrated distance ensures we don't
+   // erroneously apply approach scaling on curvy paths that are contained in a large local costmap.
+-  double remaining_distance = nav2_util::geometry_utils::calculate_path_length(transformed_path);
++  double remaining_distance = go2w_foxy_rpp::geometry_utils::calculate_path_length(transformed_path);
+   if (remaining_distance < approach_velocity_scaling_dist_) {
+     auto & last = transformed_path.poses.back();
+     // Here we will use a regular euclidean distance from the robot frame (origin)
+@@ -681,7 +699,7 @@
+   const double & speed_limit,
+   const bool & percentage)
+ {
+-  if (speed_limit == nav2_costmap_2d::NO_SPEED_LIMIT) {
++  if (speed_limit == go2w_foxy_rpp::NO_SPEED_LIMIT) {
+     // Restore default value
+     desired_linear_vel_ = base_desired_linear_vel_;
+   } else {
+@@ -712,14 +730,14 @@
+   double max_costmap_extent = getCostmapMaxExtent();
+ 
+   auto closest_pose_upper_bound =
+-    nav2_util::geometry_utils::first_after_integrated_distance(
++    go2w_foxy_rpp::geometry_utils::first_after_integrated_distance(
+     global_plan_.poses.begin(), global_plan_.poses.end(), max_robot_pose_search_dist_);
+ 
+   // First find the closest pose on the path to the robot
+   // bounded by when the path turns around (if it does) so we don't get a pose from a later
+   // portion of the path
+   auto transformation_begin =
+-    nav2_util::geometry_utils::min_by(
++    go2w_foxy_rpp::geometry_utils::min_by(
+     global_plan_.poses.begin(), closest_pose_upper_bound,
+     [&robot_pose](const geometry_msgs::msg::PoseStamped & ps) {
+       return euclidean_distance(robot_pose, ps);
+@@ -828,6 +846,15 @@
+ {
+   rcl_interfaces::msg::SetParametersResult result;
+   std::lock_guard<std::mutex> lock_reinit(mutex_);
++
++  for (const auto & parameter : parameters) {
++    const auto & name = parameter.get_name();
++    if (name == "goal_checker_plugin" || name.find(goal_checker_name_ + ".") == 0) {
++      result.successful = false;
++      result.reason = "Native Foxy goal checker changes require lifecycle reconfiguration";
++      return result;
++    }
++  }
+ 
+   for (auto parameter : parameters) {
+     const auto & type = parameter.get_type();
+@@ -906,9 +933,9 @@
+   return result;
+ }
+ 
+-}  // namespace nav2_regulated_pure_pursuit_controller
++}  // namespace go2w_foxy_rpp
+ 
+ // Register this controller as a nav2_core plugin
+ PLUGINLIB_EXPORT_CLASS(
+-  nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController,
++  go2w_foxy_rpp::RegulatedPurePursuitController,
+   nav2_core::Controller)
+--- upstream/nav2_regulated_pure_pursuit_controller/test/path_utils/path_utils.cpp
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/test/path_utils/path_utils.cpp
+@@ -16,7 +16,7 @@
+ 
+ #include "path_utils.hpp"
+ 
+-#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
++#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+ 
+ namespace path_utils
+ {
+--- upstream/nav2_regulated_pure_pursuit_controller/test/test_regulated_pp.cpp
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/test/test_regulated_pp.cpp
+@@ -18,13 +18,14 @@
+ #include <vector>
+ #include <limits>
+ 
++#include <algorithm>
+ #include "gtest/gtest.h"
+ #include "rclcpp/rclcpp.hpp"
+ #include "nav2_costmap_2d/costmap_2d.hpp"
+ #include "nav2_util/lifecycle_node.hpp"
+ #include "path_utils/path_utils.hpp"
+-#include "nav2_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp"
+-#include "nav2_costmap_2d/costmap_filters/filter_values.hpp"
++#include "go2w_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp"
++#include "go2w_regulated_pure_pursuit_controller/speed_limit_constants.hpp"
+ #include "nav2_core/exceptions.hpp"
+ 
+ class RclCppFixture
+@@ -35,11 +36,20 @@
+ };
+ RclCppFixture g_rclcppfixture;
+ 
+-class BasicAPIRPP : public nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
++// Explicit native Foxy goal-checker binding used by the compatibility
++// adapter; all upstream geometry, numerical expectations and cases remain.
++void configure_native_goal_checker(rclcpp_lifecycle::LifecycleNode::SharedPtr node)
++{
++  nav2_util::declare_parameter_if_not_declared(node, "goal_checker_plugin", rclcpp::ParameterValue("goal_checker"));
++  nav2_util::declare_parameter_if_not_declared(node, "goal_checker.plugin", rclcpp::ParameterValue("nav2_controller::SimpleGoalChecker"));
++  nav2_util::declare_parameter_if_not_declared(node, "goal_checker.xy_goal_tolerance", rclcpp::ParameterValue(0.25));
++}
++
++class BasicAPIRPP : public go2w_foxy_rpp::RegulatedPurePursuitController
+ {
+ public:
+   BasicAPIRPP()
+-  : nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController() {}
++  : go2w_foxy_rpp::RegulatedPurePursuitController() {}
+ 
+   nav_msgs::msg::Path getPlan() {return global_plan_;}
+ 
+@@ -124,6 +134,7 @@
+   // instantiate
+   auto ctrl = std::make_shared<BasicAPIRPP>();
+   costmap->on_configure(rclcpp_lifecycle::State());
++  configure_native_goal_checker(node);
+   ctrl->configure(node, name, tf, costmap);
+   ctrl->activate();
+   ctrl->deactivate();
+@@ -142,11 +153,11 @@
+   EXPECT_EQ(ctrl->getSpeed(), base_speed);
+   ctrl->setSpeedLimit(0.51, false);
+   EXPECT_EQ(ctrl->getSpeed(), 0.51);
+-  ctrl->setSpeedLimit(nav2_costmap_2d::NO_SPEED_LIMIT, false);
++  ctrl->setSpeedLimit(go2w_foxy_rpp::NO_SPEED_LIMIT, false);
+   EXPECT_EQ(ctrl->getSpeed(), base_speed);
+   ctrl->setSpeedLimit(30, true);
+   EXPECT_EQ(ctrl->getSpeed(), base_speed * 0.3);
+-  ctrl->setSpeedLimit(nav2_costmap_2d::NO_SPEED_LIMIT, true);
++  ctrl->setSpeedLimit(go2w_foxy_rpp::NO_SPEED_LIMIT, true);
+   EXPECT_EQ(ctrl->getSpeed(), base_speed);
+ }
+ 
+@@ -232,7 +243,7 @@
+   EXPECT_DOUBLE_EQ(r, std::hypot(actual.x, actual.y));
+ }
+ 
+-INSTANTIATE_TEST_SUITE_P(
++INSTANTIATE_TEST_CASE_P(
+   InterpolationTest,
+   CircleSegmentIntersectionTest,
+   testing::Values(
+@@ -331,6 +342,7 @@
+   auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("fake_costmap");
+   rclcpp_lifecycle::State state;
+   costmap->on_configure(state);
++  configure_native_goal_checker(node);
+   ctrl->configure(node, name, tf, costmap);
+ 
+   geometry_msgs::msg::Twist twist;
+@@ -376,6 +388,7 @@
+     rclcpp::Parameter(
+       name + ".use_interpolation",
+       rclcpp::ParameterValue(false)));
++  configure_native_goal_checker(node);
+   ctrl->configure(node, name, tf, costmap);
+   dist = 3.8;
+   pt = ctrl->getLookAheadPointWrapper(dist, path);
+@@ -391,6 +404,7 @@
+     rclcpp::Parameter(
+       name + ".use_interpolation",
+       rclcpp::ParameterValue(true)));
++  configure_native_goal_checker(node);
+   ctrl->configure(node, name, tf, costmap);
+   dist = 3.8;
+   pt = ctrl->getLookAheadPointWrapper(dist, path);
+@@ -406,6 +420,7 @@
+   auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("fake_costmap");
+   rclcpp_lifecycle::State state;
+   costmap->on_configure(state);
++  configure_native_goal_checker(node);
+   ctrl->configure(node, name, tf, costmap);
+ 
+   // shouldRotateToPath
+@@ -484,6 +499,7 @@
+     name + ".approach_velocity_scaling_dist",
+     rclcpp::ParameterValue(approach_velocity_scaling_dist));
+ 
++  configure_native_goal_checker(node);
+   ctrl->configure(node, name, tf, costmap);
+ 
+   auto no_approach_path = path_utils::generate_path(
+@@ -575,8 +591,9 @@
+   auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("global_costmap");
+   costmap->on_configure(rclcpp_lifecycle::State());
+   auto ctrl =
+-    std::make_unique<nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController>();
++    std::make_unique<go2w_foxy_rpp::RegulatedPurePursuitController>();
+   auto tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
++  configure_native_goal_checker(node);
+   ctrl->configure(node, "test", tf, costmap);
+   ctrl->activate();
+ 
+@@ -675,6 +692,7 @@
+     nav2_util::declare_parameter_if_not_declared(
+       node_, plugin_name + ".max_robot_pose_search_dist",
+       rclcpp::ParameterValue(max_robot_pose_search_dist));
++    configure_native_goal_checker(node_);
+     ctrl_->configure(node_, plugin_name, tf_buffer_, costmap_);
+   }
+ 
+@@ -989,3 +1007,58 @@
+   EXPECT_NEAR(transformed_plan.poses[0].pose.position.x, 0.0, 0.5);
+   EXPECT_NEAR(transformed_plan.poses[0].pose.position.y, 0.0, 0.5);
+ }
++
++TEST_F(TransformGlobalPlanTest, dynamic_speed_changes_computed_commands)
++{
++  configure_costmap(10u, 0.1);
++  configure_controller(10.0);
++  ctrl_->activate();
++  auto map = costmap_->getCostmap();
++  std::fill(map->getCharMap(), map->getCharMap() + map->getSizeInCellsX() * map->getSizeInCellsY(),
++    nav2_costmap_2d::FREE_SPACE);
++  geometry_msgs::msg::PoseStamped pose;
++  pose.header.frame_id = COSTMAP_FRAME;
++  pose.pose.position.x = 5.0;
++  pose.pose.position.y = 5.0;
++  pose.pose.orientation.w = 1.0;
++  setup_transforms(pose.pose.position);
++  pose.header.stamp = transform_time_;
++  nav_msgs::msg::Path path;
++  path.header.frame_id = PATH_FRAME;
++  path.header.stamp = transform_time_;
++  for (int i = 0; i <= 30; ++i) {
++    auto waypoint = pose;
++    waypoint.header = path.header;
++    waypoint.pose.position.x += 0.1 * i;
++    path.poses.push_back(waypoint);
++  }
++  geometry_msgs::msg::Twist stopped;
++  for (double speed : {0.15, 0.07, 0.12}) {
++    const auto result = node_->set_parameters_atomically({
++      rclcpp::Parameter("test_rpp.desired_linear_vel", speed)});
++    ASSERT_TRUE(result.successful) << result.reason;
++    EXPECT_DOUBLE_EQ(ctrl_->getSpeed(), speed);
++    ctrl_->setPlan(path);
++    auto command = ctrl_->computeVelocityCommands(pose, stopped);
++    EXPECT_NEAR(command.twist.linear.x, speed, 1e-6);
++    EXPECT_NEAR(command.twist.angular.z, 0., 1e-6);
++  }
++  // Reject the entire atomic update before touching the controller's speed.
++  auto changed = node_->set_parameters_atomically({
++    rclcpp::Parameter("test_rpp.desired_linear_vel", 0.3),
++    rclcpp::Parameter("goal_checker.xy_goal_tolerance", 0.8)});
++  EXPECT_FALSE(changed.successful);
++  EXPECT_DOUBLE_EQ(ctrl_->getSpeed(), 0.12);
++  EXPECT_DOUBLE_EQ(node_->get_parameter("goal_checker.xy_goal_tolerance").as_double(), 0.25);
++  ctrl_->deactivate();
++  ctrl_->cleanup();
++}
++
++TEST(RegulatedPurePursuitFoxy, missing_goal_checker_is_rejected_without_default_tolerance)
++{
++  auto node = std::make_shared<rclcpp_lifecycle::LifecycleNode>("missing_goal_checker");
++  auto tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
++  auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("missing_checker_costmap");
++  BasicAPIRPP controller;
++  EXPECT_THROW(controller.configure(node, "test", tf, costmap), nav2_core::PlannerException);
++}
+--- upstream/nav2_util/include/nav2_util/geometry_utils.hpp
++++ compat/foxy_nav2/src/go2w_regulated_pure_pursuit_controller/include/go2w_regulated_pure_pursuit_controller/geometry_utils.hpp
+@@ -12,8 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_UTIL__GEOMETRY_UTILS_HPP_
+-#define NAV2_UTIL__GEOMETRY_UTILS_HPP_
++#ifndef GO2W_FOXY_RPP__GEOMETRY_UTILS_HPP_
++#define GO2W_FOXY_RPP__GEOMETRY_UTILS_HPP_
+ 
+ #include <cmath>
+ 
+@@ -22,10 +22,10 @@
+ #include "geometry_msgs/msg/pose2_d.hpp"
+ #include "geometry_msgs/msg/point.hpp"
+ #include "geometry_msgs/msg/quaternion.hpp"
+-#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
++#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+ #include "nav_msgs/msg/path.hpp"
+ 
+-namespace nav2_util
++namespace go2w_foxy_rpp
+ {
+ namespace geometry_utils
+ {
+@@ -180,6 +180,6 @@
+ }
+ 
+ }  // namespace geometry_utils
+-}  // namespace nav2_util
++}  // namespace go2w_foxy_rpp
+ 
+-#endif  // NAV2_UTIL__GEOMETRY_UTILS_HPP_
++#endif  // GO2W_FOXY_RPP__GEOMETRY_UTILS_HPP_
+--- upstream/nav2_util/include/nav2_util/odometry_utils.hpp
++++ compat/foxy_nav2/src/go2w_nav2_compat/include/go2w_nav2_compat/odometry_utils.hpp
+@@ -13,8 +13,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_UTIL__ODOMETRY_UTILS_HPP_
+-#define NAV2_UTIL__ODOMETRY_UTILS_HPP_
++#ifndef GO2W_FOXY_NAV2__ODOMETRY_UTILS_HPP_
++#define GO2W_FOXY_NAV2__ODOMETRY_UTILS_HPP_
+ 
+ #include <cmath>
+ #include <chrono>
+@@ -30,7 +30,7 @@
+ #include "rclcpp/rclcpp.hpp"
+ #include "nav2_util/node_utils.hpp"
+ 
+-namespace nav2_util
++namespace go2w_foxy_nav2
+ {
+ 
+ /**
+@@ -68,13 +68,13 @@
+    * @brief Get twist msg from smoother
+    * @return twist Twist msg
+    */
+-  inline geometry_msgs::msg::Twist getTwist() {return vel_smooth_.twist;}
++  inline geometry_msgs::msg::Twist getTwist() {std::lock_guard<std::mutex> lock(odom_mutex_); return vel_smooth_.twist;}
+ 
+   /**
+    * @brief Get twist stamped msg from smoother
+    * @return twist TwistStamped msg
+    */
+-  inline geometry_msgs::msg::TwistStamped getTwistStamped() {return vel_smooth_;}
++  inline geometry_msgs::msg::TwistStamped getTwistStamped() {std::lock_guard<std::mutex> lock(odom_mutex_); return vel_smooth_;}
+ 
+ protected:
+   /**
+@@ -97,6 +97,6 @@
+   std::deque<nav_msgs::msg::Odometry> odom_history_;
+ };
+ 
+-}  // namespace nav2_util
++}  // namespace go2w_foxy_nav2
+ 
+-#endif  // NAV2_UTIL__ODOMETRY_UTILS_HPP_
++#endif  // GO2W_FOXY_NAV2__ODOMETRY_UTILS_HPP_
+--- upstream/nav2_util/src/odometry_utils.cpp
++++ compat/foxy_nav2/src/go2w_nav2_compat/src/odometry_utils.cpp
+@@ -15,12 +15,12 @@
+ 
+ #include <string>
+ 
+-#include "nav2_util/odometry_utils.hpp"
++#include "go2w_nav2_compat/odometry_utils.hpp"
+ 
+ using namespace std::chrono;  // NOLINT
+ using namespace std::chrono_literals;  // NOLINT
+ 
+-namespace nav2_util
++namespace go2w_foxy_nav2
+ {
+ 
+ OdomSmoother::OdomSmoother(
+@@ -118,4 +118,4 @@
+   vel_smooth_.twist.angular.z = odom_cumulate_.twist.twist.angular.z / odom_history_.size();
+ }
+ 
+-}  // namespace nav2_util
++}  // namespace go2w_foxy_nav2
+--- upstream/nav2_util/src/robot_utils.cpp
++++ compat/foxy_nav2/src/go2w_nav2_compat/include/go2w_nav2_compat/compat.hpp
+@@ -14,69 +14,43 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#include <string>
++#pragma once
+ #include <cmath>
+ #include <memory>
+-
+-#include "nav2_util/robot_utils.hpp"
+-#include "rclcpp/logger.hpp"
+-
+-namespace nav2_util
++#include <mutex>
++#include <string>
++#include <stdexcept>
++#include "rclcpp/rclcpp.hpp"
++#include "geometry_msgs/msg/twist.hpp"
++#include "tf2_ros/buffer.h"
++#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
++#include "go2w_nav2_compat/odometry_utils.hpp"
++#include "nav2_util/node_utils.hpp"
++namespace go2w_foxy_nav2 {
++template<typename NodeT>
++void declare_parameter_if_not_declared(
++  NodeT node, const std::string & name, const rclcpp::ParameterValue & value)
+ {
+-
+-bool getCurrentPose(
+-  geometry_msgs::msg::PoseStamped & global_pose,
+-  tf2_ros::Buffer & tf_buffer, const std::string global_frame,
+-  const std::string robot_frame, const double transform_timeout,
+-  const rclcpp::Time stamp)
+-{
+-  tf2::toMsg(tf2::Transform::getIdentity(), global_pose.pose);
+-  global_pose.header.frame_id = robot_frame;
+-  global_pose.header.stamp = stamp;
+-
+-  return transformPoseInTargetFrame(
+-    global_pose, global_pose, tf_buffer, global_frame, transform_timeout);
++  nav2_util::declare_parameter_if_not_declared(node, name, value);
+ }
+ 
+-bool transformPoseInTargetFrame(
+-  const geometry_msgs::msg::PoseStamped & input_pose,
+-  geometry_msgs::msg::PoseStamped & transformed_pose,
+-  tf2_ros::Buffer & tf_buffer, const std::string target_frame,
+-  const double transform_timeout)
++// Foxy lacks the newer typed-uninitialized declaration overload. Leave a
++// missing parameter unset, then reject it explicitly. Never invent defaults
++// for required polygon geometry, radius, action type or observation sources.
++template<typename NodeT>
++void declare_parameter_if_not_declared(
++  NodeT node, const std::string & name, rclcpp::ParameterType required_type)
+ {
+-  static rclcpp::Logger logger = rclcpp::get_logger("transformPoseInTargetFrame");
+-
+-  try {
+-    transformed_pose = tf_buffer.transform(
+-      input_pose, target_frame,
+-      tf2::durationFromSec(transform_timeout));
+-    return true;
+-  } catch (tf2::LookupException & ex) {
+-    RCLCPP_ERROR(
+-      logger,
+-      "No Transform available Error looking up target frame: %s\n", ex.what());
+-  } catch (tf2::ConnectivityException & ex) {
+-    RCLCPP_ERROR(
+-      logger,
+-      "Connectivity Error looking up target frame: %s\n", ex.what());
+-  } catch (tf2::ExtrapolationException & ex) {
+-    RCLCPP_ERROR(
+-      logger,
+-      "Extrapolation Error looking up target frame: %s\n", ex.what());
+-  } catch (tf2::TimeoutException & ex) {
+-    RCLCPP_ERROR(
+-      logger,
+-      "Transform timeout with tolerance: %.4f", transform_timeout);
+-  } catch (tf2::TransformException & ex) {
+-    RCLCPP_ERROR(
+-      logger, "Failed to transform from %s to %s",
+-      input_pose.header.frame_id.c_str(), target_frame.c_str());
++  if (!node->has_parameter(name)) {
++    auto descriptor = rcl_interfaces::msg::ParameterDescriptor();
++    descriptor.type = static_cast<uint8_t>(required_type);
++    node->declare_parameter(name, rclcpp::ParameterValue(), descriptor);
+   }
+-
+-  return false;
++  if (node->get_parameter(name).get_type() != required_type) {
++    throw std::invalid_argument("Required parameter missing or wrong type: " + name);
++  }
+ }
+-
+-bool getTransform(
++inline bool getTransform(
+   const std::string & source_frame_id,
+   const std::string & target_frame_id,
+   const tf2::Duration & transform_tolerance,
+@@ -109,7 +83,7 @@
+   return true;
+ }
+ 
+-bool getTransform(
++inline bool getTransform(
+   const std::string & source_frame_id,
+   const rclcpp::Time & source_time,
+   const std::string & target_frame_id,
+@@ -142,7 +116,7 @@
+   return true;
+ }
+ 
+-bool validateTwist(const geometry_msgs::msg::Twist & msg)
++inline bool validateTwist(const geometry_msgs::msg::Twist & msg)
+ {
+   if (std::isinf(msg.linear.x) || std::isnan(msg.linear.x)) {
+     return false;
+@@ -171,4 +145,5 @@
+   return true;
+ }
+ 
+-}  // end namespace nav2_util
++
++}  // namespace go2w_foxy_nav2
+--- upstream/nav2_velocity_smoother/CMakeLists.txt
++++ compat/foxy_nav2/src/nav2_velocity_smoother/CMakeLists.txt
+@@ -2,6 +2,7 @@
+ project(nav2_velocity_smoother)
+ 
+ find_package(ament_cmake REQUIRED)
++find_package(go2w_nav2_compat REQUIRED)
+ find_package(nav2_common REQUIRED)
+ find_package(rclcpp REQUIRED)
+ find_package(rclcpp_components REQUIRED)
+@@ -22,6 +23,7 @@
+ set(library_name ${executable_name}_core)
+ 
+ set(dependencies
++  go2w_nav2_compat
+   rclcpp
+   rclcpp_components
+   geometry_msgs
+--- upstream/nav2_velocity_smoother/include/nav2_velocity_smoother/velocity_smoother.hpp
++++ compat/foxy_nav2/src/nav2_velocity_smoother/include/nav2_velocity_smoother/velocity_smoother.hpp
+@@ -15,6 +15,7 @@
+ #ifndef NAV2_VELOCITY_SMOOTHER__VELOCITY_SMOOTHER_HPP_
+ #define NAV2_VELOCITY_SMOOTHER__VELOCITY_SMOOTHER_HPP_
+ 
++#include "go2w_nav2_compat/compat.hpp"
+ #include <chrono>
+ #include <limits>
+ #include <memory>
+@@ -128,7 +129,7 @@
+     std::vector<rclcpp::Parameter> parameters);
+ 
+   // Network interfaces
+-  std::unique_ptr<nav2_util::OdomSmoother> odom_smoother_;
++  std::unique_ptr<go2w_foxy_nav2::OdomSmoother> odom_smoother_;
+   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr
+     smoothed_cmd_pub_;
+   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
+--- upstream/nav2_velocity_smoother/package.xml
++++ compat/foxy_nav2/src/nav2_velocity_smoother/package.xml
+@@ -8,6 +8,7 @@
+   <license>Apache-2.0</license>
+ 
+   <buildtool_depend>ament_cmake</buildtool_depend>
++  <depend>go2w_nav2_compat</depend>
+   <build_depend>nav2_common</build_depend>
+   <depend>rclcpp</depend>
+   <depend>rclcpp_components</depend>
+--- upstream/nav2_velocity_smoother/src/velocity_smoother.cpp
++++ compat/foxy_nav2/src/nav2_velocity_smoother/src/velocity_smoother.cpp
+@@ -12,6 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include "go2w_nav2_compat/compat.hpp"
+ #include <chrono>
+ #include <limits>
+ #include <memory>
+@@ -22,7 +23,6 @@
+ #include "nav2_velocity_smoother/velocity_smoother.hpp"
+ 
+ using namespace std::chrono_literals;
+-using nav2_util::declare_parameter_if_not_declared;
+ using std::placeholders::_1;
+ using rcl_interfaces::msg::ParameterType;
+ 
+@@ -30,7 +30,7 @@
+ {
+ 
+ VelocitySmoother::VelocitySmoother(const rclcpp::NodeOptions & options)
+-: LifecycleNode("velocity_smoother", "", options),
++: LifecycleNode("velocity_smoother", "", false, options),
+   last_command_time_{0, 0, get_clock()->get_clock_type()}
+ {
+ }
+@@ -52,22 +52,22 @@
+   double velocity_timeout_dbl;
+ 
+   // Smoothing metadata
+-  declare_parameter_if_not_declared(node, "smoothing_frequency", rclcpp::ParameterValue(20.0));
+-  declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(node, "smoothing_frequency", rclcpp::ParameterValue(20.0));
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "feedback", rclcpp::ParameterValue(std::string("OPEN_LOOP")));
+-  declare_parameter_if_not_declared(node, "scale_velocities", rclcpp::ParameterValue(false));
++  go2w_foxy_nav2::declare_parameter_if_not_declared(node, "scale_velocities", rclcpp::ParameterValue(false));
+   node->get_parameter("smoothing_frequency", smoothing_frequency_);
+   node->get_parameter("feedback", feedback_type);
+   node->get_parameter("scale_velocities", scale_velocities_);
+ 
+   // Kinematics
+-  declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "max_velocity", rclcpp::ParameterValue(std::vector<double>{0.50, 0.0, 2.5}));
+-  declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "min_velocity", rclcpp::ParameterValue(std::vector<double>{-0.50, 0.0, -2.5}));
+-  declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "max_accel", rclcpp::ParameterValue(std::vector<double>{2.5, 0.0, 3.2}));
+-  declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "max_decel", rclcpp::ParameterValue(std::vector<double>{-2.5, 0.0, -3.2}));
+   node->get_parameter("max_velocity", max_velocities_);
+   node->get_parameter("min_velocity", min_velocities_);
+@@ -90,11 +90,11 @@
+   }
+ 
+   // Get feature parameters
+-  declare_parameter_if_not_declared(node, "odom_topic", rclcpp::ParameterValue("odom"));
+-  declare_parameter_if_not_declared(node, "odom_duration", rclcpp::ParameterValue(0.1));
+-  declare_parameter_if_not_declared(
++  go2w_foxy_nav2::declare_parameter_if_not_declared(node, "odom_topic", rclcpp::ParameterValue("odom"));
++  go2w_foxy_nav2::declare_parameter_if_not_declared(node, "odom_duration", rclcpp::ParameterValue(0.1));
++  go2w_foxy_nav2::declare_parameter_if_not_declared(
+     node, "deadband_velocity", rclcpp::ParameterValue(std::vector<double>{0.0, 0.0, 0.0}));
+-  declare_parameter_if_not_declared(node, "velocity_timeout", rclcpp::ParameterValue(1.0));
++  go2w_foxy_nav2::declare_parameter_if_not_declared(node, "velocity_timeout", rclcpp::ParameterValue(1.0));
+   node->get_parameter("odom_topic", odom_topic_);
+   node->get_parameter("odom_duration", odom_duration_);
+   node->get_parameter("deadband_velocity", deadband_velocities_);
+@@ -114,7 +114,7 @@
+     open_loop_ = true;
+   } else if (feedback_type == "CLOSED_LOOP") {
+     open_loop_ = false;
+-    odom_smoother_ = std::make_unique<nav2_util::OdomSmoother>(node, odom_duration_, odom_topic_);
++    odom_smoother_ = std::make_unique<go2w_foxy_nav2::OdomSmoother>(shared_from_this(), odom_duration_, odom_topic_);
+   } else {
+     throw std::runtime_error("Invalid feedback_type, options are OPEN_LOOP and CLOSED_LOOP.");
+   }
+@@ -142,7 +142,7 @@
+     std::bind(&VelocitySmoother::dynamicParametersCallback, this, _1));
+ 
+   // create bond connection
+-  createBond();
++  // Foxy lifecycle management uses services, without the newer bond API.
+   return nav2_util::CallbackReturn::SUCCESS;
+ }
+ 
+@@ -158,7 +158,7 @@
+   dyn_params_handler_.reset();
+ 
+   // destroy bond connection
+-  destroyBond();
++  // Foxy lifecycle management uses services, without the newer bond API.
+   return nav2_util::CallbackReturn::SUCCESS;
+ }
+ 
+@@ -182,7 +182,7 @@
+ void VelocitySmoother::inputCommandCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
+ {
+   // If message contains NaN or Inf, ignore
+-  if (!nav2_util::validateTwist(*msg)) {
++  if (!go2w_foxy_nav2::validateTwist(*msg)) {
+     RCLCPP_ERROR(get_logger(), "Velocity message contains NaNs or Infs! Ignoring as invalid!");
+     return;
+   }
+@@ -350,7 +350,7 @@
+       } else if (name == "odom_duration") {
+         odom_duration_ = parameter.as_double();
+         odom_smoother_ =
+-          std::make_unique<nav2_util::OdomSmoother>(
++          std::make_unique<go2w_foxy_nav2::OdomSmoother>(
+           shared_from_this(), odom_duration_, odom_topic_);
+       }
+     } else if (type == ParameterType::PARAMETER_DOUBLE_ARRAY) {
+@@ -395,7 +395,7 @@
+         } else if (parameter.as_string() == "CLOSED_LOOP") {
+           open_loop_ = false;
+           odom_smoother_ =
+-            std::make_unique<nav2_util::OdomSmoother>(
++            std::make_unique<go2w_foxy_nav2::OdomSmoother>(
+             shared_from_this(), odom_duration_, odom_topic_);
+         } else {
+           RCLCPP_WARN(
+@@ -406,7 +406,7 @@
+       } else if (name == "odom_topic") {
+         odom_topic_ = parameter.as_string();
+         odom_smoother_ =
+-          std::make_unique<nav2_util::OdomSmoother>(
++          std::make_unique<go2w_foxy_nav2::OdomSmoother>(
+           shared_from_this(), odom_duration_, odom_topic_);
+       }
+     }

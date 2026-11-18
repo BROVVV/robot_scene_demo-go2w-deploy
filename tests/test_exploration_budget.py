@@ -47,6 +47,41 @@ class TestExplorationBudget(unittest.TestCase):
         self.assertEqual(result.result, "MAX_STEPS_REACHED")
         self.assertEqual(result.motion_steps, 3)
 
+    def test_dry_run_reports_zero_motion_steps(self) -> None:
+        """干跑不许在报表里冒充"机器狗走了 N 步"（计划书 §60）。
+
+        2026-09-15 实测 `search_20260915_165742_dr03` 报 `motion_steps=12`，
+        但 12 轮 observation 的 pose 逐位相同；2026-09-17 又一次报 3 步。
+        根因是 backend 的 dry_run 分支为了把推理链跑完返回 SUCCEEDED，
+        而计数只看 `result.succeeded`。
+
+        对照臂不能省：同一场景 dry_run=False 必须照常数到 3 —— 少了它，
+        下面那个 0 也可能只是"这条路径压根没成功执行过"。
+        """
+        def _run(dry_run: bool):
+            scene = scenario_no_target(empty_scenes=2)
+            policy = load_exploration_policy()
+            policy.budget = ExplorationBudget(max_motion_steps=3,
+                                              max_planning_cycles=5)
+            explorer = AutonomousExplorer(
+                target="t", observer=scene.observer(), matcher=scene.matcher(),
+                verifier=scene.verifier(), backend=MockBackend(),
+                graph=ExplorationGraph(session_id="t"), policy=policy,
+                dry_run=dry_run,
+            )
+            return explorer.run()
+
+        # 对照臂：真跑（dry_run=False）照常计数，走到 max_motion_steps 收工。
+        control = _run(dry_run=False)
+        self.assertEqual(control.motion_steps, 3)
+        self.assertEqual(control.result, "MAX_STEPS_REACHED")
+
+        # 干跑：执行照样成功，但一步都没走 —— 计数必须是 0，
+        # 且不再消耗 max_motion_steps（改由 planning_cycles 兜底）。
+        dry = _run(dry_run=True)
+        self.assertEqual(dry.motion_steps, 0)
+        self.assertEqual(dry.result, "MAX_PLANNING_CYCLES_REACHED")
+
     def test_planning_cycle_limit_terminates(self) -> None:
         scene = MockObservationScene(scenes=[
             MockSceneStep(objects=["desk"]),
@@ -66,17 +101,61 @@ class TestExplorationBudget(unittest.TestCase):
     def test_time_limit_terminates(self) -> None:
         scene = scenario_no_target(empty_scenes=2)
         policy = ExplorationPolicy(
-            budget=ExplorationBudget(max_search_seconds=0.0,
+            budget=ExplorationBudget(max_search_seconds=1.0,
                                      max_planning_cycles=1000,
                                      max_motion_steps=1000),
         )
+        clock = iter([100.0, 102.0, 102.0, 102.0])
         explorer = AutonomousExplorer(
             target="t", observer=scene.observer(), matcher=scene.matcher(),
             verifier=scene.verifier(), backend=MockBackend(),
             graph=ExplorationGraph(session_id="t"), policy=policy,
+            now=lambda: next(clock, 102.0),
         )
         result = explorer.run()
         self.assertEqual(result.result, "TIMEOUT")
+
+    def test_zero_duration_and_counts_allow_long_running_search(self) -> None:
+        budget = ExplorationBudget(max_search_seconds=0, max_planning_cycles=0,
+                                   max_motion_steps=0)
+        self.assertTrue(budget.remaining(elapsed_sec=10**9,
+                                        planning_cycles=10**6, motion_steps=10**6))
+        self.assertFalse(budget.time_expired(10**9))
+
+    def test_unlimited_time_preserves_explicit_step_limit(self) -> None:
+        budget = ExplorationBudget(max_search_seconds=0, max_motion_steps=3)
+        self.assertFalse(budget.remaining(elapsed_sec=10**9,
+                                         planning_cycles=0, motion_steps=3))
+
+    def test_unlimited_search_dispatches_after_days_and_still_stops(self) -> None:
+        scene = MockObservationScene(scenes=[
+            MockSceneStep(objects=[f"new_{index}"]) for index in range(8)
+        ])
+        clock = [100.0]
+        observations = [0]
+        original_observer = scene.observer()
+        backend = MockBackend()
+
+        def observer():
+            observations[0] += 1
+            clock[0] += 86400.0
+            if observations[0] == 6:
+                explorer.request_stop()
+            return original_observer()
+
+        explorer = AutonomousExplorer(
+            target="t", observer=observer, matcher=scene.matcher(),
+            verifier=scene.verifier(), backend=backend,
+            policy=ExplorationPolicy(budget=ExplorationBudget(
+                max_search_seconds=0, max_planning_cycles=0, max_motion_steps=0)),
+            graph=ExplorationGraph(session_id="unlimited"), now=lambda: clock[0],
+        )
+        result = explorer.run()
+        self.assertEqual(result.result, "OPERATOR_STOP")
+        self.assertGreaterEqual(len(backend._executed), 5)
+        self.assertFalse(any(e["event"] == "motion_budget_expired" for e in explorer.events))
+        # The shared dispatch guard also governs approach/recovery commands.
+        self.assertFalse(explorer._motion_budget_expired("recovery-after-days"))
 
     def test_no_information_exhausts_only_when_stuck(self) -> None:
         """机器人走不动（每次运动失败）且无新信息时，按阈值判 SEARCH_EXHAUSTED。"""

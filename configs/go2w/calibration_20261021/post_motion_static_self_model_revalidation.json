@@ -1,0 +1,22 @@
+{
+  "schema": "go2w.post_motion_static_self_model_review.v1",
+  "source": "parked_raw_capture_with_independent_floor_review",
+  "motion_sent": false,
+  "frames": 93,
+  "max_joint_deviation_rad": 0.08179676532745361,
+  "maximum_observed_static_deviation_rad": 0.09,
+  "floor_valid_frames": 93,
+  "model_removed_points_median": 87.0,
+  "model_removed_points_beyond_one_meter": 0,
+  "front_clearance_with_model_min_m": 4.287372192691051,
+  "front_clearance_without_model_min_m": 0.00020423662322310854,
+  "input_sha256": {
+    "cloud.npz": "c76fde84c54a4c34c840c16b06aec387a581243fc7dd8bbf7819dd468a67ad63",
+    "metadata.json": "fed13a439fc517daad2f67420ccd88aa0e45f73d6171ef3ea7b0038d06135a14",
+    "floor_review": "11947a137527a9ea5340d4c7b58d926c13e0717426c432917e75fca62fa7cbec",
+    "surface_model": "eb181f65df70dbd954110dddada34bd0d99ae7b3e881546be0f53634a7235993"
+  },
+  "motion_posture_validated": false,
+  "authorizes_motion": false,
+  "limitation": "Only the stopped 0.0818 rad pose is checked; the 0.292 rad moving pose needs synchronized cloud/joint evidence."
+}

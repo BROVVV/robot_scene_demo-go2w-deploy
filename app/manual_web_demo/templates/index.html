@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Go2-W 自主语义搜索控制台</title>
-  <link rel="stylesheet" href="/static/style.css?v=go2w-fix-20260901" />
+  <link rel="stylesheet" href="/static/style.css?v=go2w-mobility-20261026" />
 </head>
 <body>
   <header class="topbar">
@@ -44,18 +44,61 @@
         <button id="btn-history-current" class="hidden" type="button">返回当前任务</button>
         <details class="search-advanced">
           <summary>高级显示</summary>
+          <label class="detector-select">检测路线
+            <select id="search-detector">
+              <option value="grounded_sam">Grounded-SAM（默认）</option>
+              <option value="yoloe_seg">YOLOE-Seg</option>
+              <option value="llm">云端 VLM</option>
+            </select>
+          </label>
           <label class="debug-toggle"><input type="checkbox" id="chk-debug" /> 调试信息</label>
         </details>
         <!-- 运动权限由服务器启动配置决定；普通搜索不再要求用户理解或勾选参数。 -->
         <input type="checkbox" id="chk-motion" class="hidden" tabindex="-1" />
         <span id="search-session-info" class="session-info">输入自然语言目标即可开始</span>
+        <span id="search-mode-info" class="session-info">正在读取 Nav2 运行档位…</span>
       </div>
       <div class="search-banner hidden" id="search-banner"></div>
+      <div id="mapping-alert" class="mapping-alert hidden" role="alert"></div>
+      <div id="mapping-tools" class="mapping-tools hidden">
+        <span>图例：<b class="fixed">● 固定地标</b> <b class="semi">● 暂时静止</b> <b class="hazard">⚠ 危险</b> · 虚线为共同观测</span>
+        <button type="button" id="mapping-sound">启用声音</button>
+        <button type="button" id="mapping-camera-mode">切到实时画面</button>
+        <button type="button" id="mapping-layout-reset">恢复自动布局</button>
+        <span id="mapping-runtime"></span>
+      </div>
+      <div id="runtime-admin-tools" class="runtime-admin-tools">
+        <span id="runtime-profile">运行模式加载中…</span>
+        <button type="button" id="btn-clear-objects">清空当前所有物体</button>
+        <button type="button" id="btn-clear-map" class="danger-outline">清空当前地图并重建</button>
+        <span id="runtime-admin-status" class="sub"></span>
+      </div>
+      <section id="mapping-target-watch" class="mapping-target-watch hidden" aria-label="被动目标监看">
+        <div class="target-watch-head">
+          <div><strong>被动目标监看</strong><span id="target-watch-state" class="target-watch-badge">未启用</span></div>
+          <small>运动由实体遥控器控制，本功能不会自动导航</small>
+        </div>
+        <div class="target-watch-controls">
+          <input id="target-watch-input" type="text" maxlength="500"
+                 placeholder="黑椅子 / 饮水机旁边的凳子 / 烟雾 / 泄漏液体" />
+          <button type="button" id="target-watch-set">开始/更新监看</button>
+          <button type="button" id="target-watch-clear">清除目标</button>
+        </div>
+        <div id="target-watch-summary" class="target-watch-summary">等待设置目标</div>
+        <img id="target-watch-evidence" class="mapping-evidence hidden" alt="目标复核证据图" />
+      </section>
       <div id="search-error-detail" class="search-error-detail hidden"></div>
 
       <div class="search-layout">
         <div class="cell cell-camera">
-          <div class="cell-title">相机 <span id="scam-age" class="sub">--</span></div>
+          <div class="cell-title">相机 <span id="scam-age" class="sub">--</span>
+            <span class="camera-record-controls">
+              <button type="button" id="btn-camera-record">开始三路录像</button>
+              <button type="button" id="btn-camera-record-stop" class="danger hidden">结束并保存</button>
+              <span id="camera-record-status" class="sub">未录像</span>
+              <span id="camera-record-downloads" class="camera-record-downloads hidden"></span>
+            </span>
+          </div>
           <div class="camera-wrap">
             <!-- Reuse the ROS worker's fresh camera stream.  The old direct
                  D435 proxy path inherited a SOCKS proxy on some hosts and
@@ -84,6 +127,7 @@
             <div><span>Robot action</span><b id="st-action">IDLE</b></div>
             <div><span>Pose quality</span><b id="st-pose">--</b></div>
             <div><span>语义状态</span><b id="st-semantic">--</b></div>
+            <div><span>检测路线</span><b id="st-detector">--</b></div>
             <div class="semantic-detail" id="st-semantic-detail">--</div>
           </div>
           <div class="cell-title" style="margin-top:8px">目标证据</div>
@@ -97,6 +141,8 @@
         <div class="cell cell-obs">
           <div class="cell-title">识别物体 <span class="sub" id="obs-objects-meta"></span></div>
           <div id="obs-objects" class="obs-list">等待首次识别…（识别到第一个物体后自动开始建物体列表 / 拓扑图）</div>
+          <div class="cell-title" style="margin-top:8px">危险事件</div>
+          <div id="mapping-hazards" class="obs-list">暂无告警</div>
           <div class="cell-title" style="margin-top:8px">当前观察</div>
           <div id="obs-current" class="obs-list">等待观察…</div>
           <div class="cell-title" style="margin-top:8px">Session 累计</div>
@@ -104,7 +150,27 @@
         </div>
 
         <div class="cell cell-decision">
-          <div class="cell-title">下一步决策</div>
+          <!-- 任务 Agent 解释层（计划书 §5.1）。它是解释层：不替换下面的候选、
+               地图与安全状态，只把本轮决策的依据摊开。 -->
+          <div class="cell-title">任务 Agent
+            <span class="sub" id="agent-mode">等待决策…</span>
+          </div>
+          <div id="agent-safety" class="agent-safety"></div>
+          <div class="cell-title" style="margin-top:8px">总体计划 / 当前子任务</div>
+          <div id="agent-plan" class="agent-plan"></div>
+          <div class="cell-title" style="margin-top:8px">本轮选择和一句话依据</div>
+          <div id="agent-choice" class="agent-choice"></div>
+          <div id="agent-downstream" class="agent-downstream"></div>
+          <div class="cell-title" style="margin-top:8px">候选方向比较</div>
+          <div id="agent-candidates" class="agent-cands"></div>
+          <div class="cell-title" style="margin-top:8px">知识库与场景证据</div>
+          <div id="agent-knowledge" class="obs-list"></div>
+          <div class="cell-title" style="margin-top:8px">记忆、覆盖与拓扑摘要</div>
+          <div id="agent-inputs" class="obs-list"></div>
+          <div class="cell-title" style="margin-top:8px">不确定性 / 缺失输入</div>
+          <div id="agent-uncertainties" class="obs-list"></div>
+
+          <div class="cell-title" style="margin-top:8px">下一步决策</div>
           <div id="dec-motion" class="dec-motion">等待决策…</div>
           <div id="dec-intent" class="dec-intent">--</div>
           <div id="dec-reason" class="dec-reason"></div>
@@ -119,26 +185,19 @@
 
         <div class="cell cell-map">
           <div class="cell-title">地图
-            <span class="view-toggle" id="map-view-toggle">
-              <button class="vtab active" data-mode="semantic_topology" type="button">语义拓扑</button>
-              <button class="vtab" data-mode="spatial_map" type="button">空间地图</button>
+            <span class="view-toggle" id="topology-view-toggle"
+                  title="物体拓扑只画真实检测物体；园区综合拓扑额外显示真实经过的观察点及观测挂接">
+              <button class="vtab active" data-topology-view="objects" type="button">物体拓扑</button>
+              <button class="vtab" data-topology-view="navigation" type="button">园区综合拓扑</button>
             </span>
             <span class="sub" id="map-meta"></span>
             <span class="viewport-hint" title="滚轮缩放 / 拖拽平移 / 双击复位">滚轮缩放 · 拖拽平移 · 双击复位</span>
-            <span class="legend" id="map-legend">
-              <i class="l-cur">▲</i><span>当前</span>
-              <i class="l-vis">●</i><span>已访问</span>
-              <i class="l-int">★</i><span>语义兴趣</span>
-              <i class="l-neg">◌</i><span>负证据</span>
-              <i class="l-unc">✕</i><span>不可达</span>
-              <i class="l-cand">◎</i><span>候选</span>
-              <i class="l-conf">✓</i><span>确认</span>
-            </span>
           </div>
           <svg id="search-map" viewBox="0 0 600 400" preserveAspectRatio="xMidYMid meet"></svg>
           <div id="map-node-detail" class="map-node-detail hidden"></div>
         </div>
 
+        <!-- WEB_3D_START -->
         <div class="cell cell-slam3d">
           <div class="cell-title">Pandar 固定世界三维建图
             <span class="sub" id="slam3d-meta">等待 /go2w/slam/map_3d…</span>
@@ -155,6 +214,21 @@
           <div class="slam3d-capacity" id="slam3d-capacity">容量：等待地图…</div>
           <div class="slam3d-safety">mapping_assist · candidate_unconfirmed · 不接管 /go2w/odom/fused</div>
         </div>
+        <!-- WEB_3D_END -->
+
+        <!-- WEB_2D_START -->
+        <div class="cell cell-map2d">
+          <div class="cell-title">二维地图
+            <span class="sub" id="slam2d-meta">等待地图…</span>
+            <span class="viewport-hint">滚轮缩放 · 拖拽平移 · 双击复位</span>
+          </div>
+          <div class="slam2d-wrap">
+            <canvas id="slam-map-2d" width="1200" height="640"></canvas>
+            <div id="slam2d-state" class="slam2d-state">正在连接二维地图…</div>
+          </div>
+          <div class="slam2d-legend">浅色：可通行 · 深色：障碍物 · 灰色：未知 · 绿色：机器狗与轨迹</div>
+        </div>
+        <!-- WEB_2D_END -->
 
         <div class="cell cell-timeline">
           <div class="cell-title">事件时间线 <span id="tl-ws-state" class="sub">OFFLINE</span></div>
@@ -164,6 +238,37 @@
         <div class="cell cell-history">
           <div class="cell-title">最近搜索记录 <span class="sub">完整保留最近 10 次</span></div>
           <div id="search-history" class="search-history"><div class="muted">正在读取记录…</div></div>
+          <!-- 回放：只读成品，点历史记录后出现在这里。
+               视频/地图/封面都由后台编码器生成，接口只排队、不在请求里编码。 -->
+          <div id="replay-panel" class="replay-panel hidden">
+            <div class="replay-head">
+              <span class="replay-title">搜索回放</span>
+              <span id="replay-status" class="sub">--</span>
+              <span id="replay-progress" class="sub"></span>
+            </div>
+            <div class="replay-speeds" id="replay-speeds">
+              <span class="sub">播放倍速</span>
+              <button type="button" class="replay-speed" data-replay-speed="1">1×</button>
+              <button type="button" class="replay-speed" data-replay-speed="5">5×</button>
+              <button type="button" class="replay-speed" data-replay-speed="10">10×</button>
+              <button type="button" class="replay-speed" data-replay-speed="20">20×</button>
+            </div>
+            <video id="replay-video" class="replay-video hidden" controls
+                   preload="metadata" playsinline></video>
+            <div id="replay-placeholder" class="replay-placeholder muted">
+              选择一次已结束的搜索后，这里显示二维地图 + 实测轨迹回放。
+            </div>
+            <div id="replay-reasons" class="replay-reasons hidden"></div>
+            <div class="replay-actions">
+              <a id="replay-download" class="replay-link hidden" download>下载 MP4</a>
+              <a id="replay-final-map" class="replay-link hidden" target="_blank"
+                 rel="noopener">最终地图 PNG</a>
+              <a id="replay-cover" class="replay-link hidden" target="_blank"
+                 rel="noopener">封面 JPEG</a>
+              <button id="replay-regenerate" type="button" class="replay-link">生成 / 重新生成</button>
+              <button id="replay-close" type="button" class="replay-link">收起</button>
+            </div>
+          </div>
         </div>
 
         <div class="cell cell-debug hidden" id="debug-panel">
@@ -184,6 +289,9 @@
 
     <!-- ============================ Manual control ======================= -->
     <section id="tab-manual" class="tab-pane">
+      <!-- 实体遥控器建图模式（MANUAL_DEMO_DISPLAY_ONLY=1）下的只读横幅。
+           文案由 /api/status 的 control.display_only_reason 填充。 -->
+      <div id="display-only-banner" class="display-only-banner hidden"></div>
       <div class="manual-layout">
         <section class="camera-pane">
           <div class="camera-wrap">
@@ -219,7 +327,7 @@
         </section>
       </div>
 
-      <footer class="control-bar">
+      <footer class="control-bar" id="control-bar">
         <div class="keys">
           <div class="key-grid">
             <button class="keybtn" data-key="w" title="前进">W</button>
@@ -259,9 +367,13 @@
     </section>
   </main>
 
-  <script src="/static/search_map.js?v=go2w-fix-20260901"></script>
-  <script src="/static/slam_map_3d.js?v=go2w-fix-20260901"></script>
-  <script src="/static/search_ui.js?v=go2w-fix-20260901"></script>
-  <script src="/static/app.js?v=go2w-fix-20260901"></script>
+  <script src="/static/agent_trace.js?v=go2w-fix-20260911"></script>
+  <script src="/static/search_map.js?v=go2w-mobility-20261026"></script>
+  <script src="/static/slam_map_3d.js?v=go2w-fix-20260911"></script>
+  <script src="/static/slam_map_2d.js?v=20261104"></script>
+  <script src="/static/search_ui.js?v=go2w-auto-hazard-vlm-20261028"></script>
+  <script src="/static/camera_recorder.js?v=go2w-triple-recorder-20261028"></script>
+  <script src="/static/app.js?v=go2w-field-profile-20261023"></script>
+  <script src="/static/runtime_admin.js?v=go2w-runtime-admin-20261028"></script>
 </body>
 </html>

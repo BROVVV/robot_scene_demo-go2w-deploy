@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from app.config import Settings
 
 from app.schemas import (
     QuadrupedActionPrimitive,
@@ -65,6 +66,8 @@ class Ros2CommandExporterTest(unittest.TestCase):
         plan = build_ros2_motion_plan(
             result,
             generated_at="2026-06-17T00:00:00+00:00",
+            settings=Settings(siliconflow_api_key='',motion_horizon_profile='strict_safe',
+                platform_obstacle_avoidance_assumed=False,motion_strict_safe_max_step_m=.3),
         )
 
         self.assertTrue(plan.dry_run)
@@ -78,14 +81,16 @@ class Ros2CommandExporterTest(unittest.TestCase):
         self.assertEqual(move.route_step_id, 1)
         self.assertEqual(move.twist.linear.x, 0.25)
         self.assertEqual(move.twist.angular.z, 0.0)
-        self.assertEqual(move.distance_m, 0.8)
-        self.assertEqual(move.duration_sec, 3.2)
-        self.assertTrue(move.platform_obstacle_avoidance_assumed)
-        self.assertTrue(move.interruptible_by_platform)
+        # The current dynamic motion horizon clips the legacy route request to
+        # the supervised Go2-W limit of 0.30 m per forward command.
+        self.assertEqual(move.distance_m, 0.3)
+        self.assertEqual(move.duration_sec, 1.2)
+        self.assertFalse(move.platform_obstacle_avoidance_assumed)
+        self.assertFalse(move.interruptible_by_platform)
         self.assertTrue(plan.dynamic_motion_horizon_enabled)
         self.assertEqual(
             plan.motion_horizon_decision["motion_policy"],
-            "target_candidate_confirm",
+            "strict_safe",
         )
 
         self.assertEqual(plan.commands[1].source_action, "stop")

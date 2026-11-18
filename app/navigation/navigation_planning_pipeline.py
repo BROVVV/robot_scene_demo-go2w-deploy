@@ -61,7 +61,12 @@ def run_video_navigation_planning(
         frame_sample_interval=frame_sample_interval,
     )
     navigation_map = build_video_navigation_map(trajectory, _observations_from_result(target_search_result))
-    localization = localize_semantic_goal(target_search_result, trajectory, navigation_map)
+    # 离线视频链路没有任何深度通道，只能用固定距离启发式（§19：显式开启、
+    # provenance 标 heuristic_only，永远不参与真机 TARGET_REACHED 判定）。
+    localization = localize_semantic_goal(
+        target_search_result, trajectory, navigation_map,
+        allow_fixed_distance_fallback=True,
+    )
     target_status = "target_not_seen" if force_exploration else localization["target_status"]
     goal = _select_goal(
         target_search_result,

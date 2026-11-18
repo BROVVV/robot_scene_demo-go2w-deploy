@@ -1,0 +1,14 @@
+# Jetson Web/Core environment (Python 3.8, --system-site-packages).
+# ROS packages and Ubuntu's NumPy/OpenCV/SciPy stay in /usr/lib/python3/dist-packages.
+fastapi==0.103.2
+uvicorn==0.23.2
+websockets==11.0.3
+pydantic==2.8.2
+typing_extensions==4.8.0
+eval_type_backport==0.4.0
+python-dotenv==1.0.1
+PyYAML==5.3.1
+openai==1.39.0
+httpx==0.27.2
+networkx==3.1
+Pillow==10.4.0

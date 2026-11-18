@@ -134,10 +134,69 @@ fi
 cd "${project_root}"
 export MANUAL_DEMO_RUNTIME_DIR="${MANUAL_DEMO_RUNTIME_DIR:-outputs/manual_web_demo/runtime}"
 export MANUAL_DEMO_LOGS_DIR="${MANUAL_DEMO_LOGS_DIR:-outputs/manual_web_demo/logs}"
+# 计划书 §2.3：地图快照、地图元数据、对象快照三个路径显式给出，写端与读取端
+# 用的是同一份取值（本模式没有语义建图进程，所以对象快照通常不存在 —— 页面
+# 显示地图、不显示历史归档物体）。
+export GO2W_SLAM_MAP_SNAPSHOT="${GO2W_SLAM_MAP_SNAPSHOT:-${runtime_root}/slam_map_3d.json}"
+export GO2W_SLAM_MAP_META="${GO2W_SLAM_MAP_META:-${runtime_root}/slam_map_meta.json}"
+export GO2W_SEMANTIC_OBJECTS_SNAPSHOT="${GO2W_SEMANTIC_OBJECTS_SNAPSHOT:-${runtime_root}/semantic_objects.json}"
 setsid "$conda_python" -m uvicorn app.manual_web_demo.web_server:app \
   --host "${host}" --port "${port}" \
   > "${log_root}/web_server.log" 2>&1 &
 printf '%s\n' "$!" > "${runtime_root}/web.pid"
+
+# ---- 7b. WebUI 地图/物体快照写入器 ------------------------------------- #
+# 背景：WebUI 的 /api/slam/map3d **不订阅实时话题**，只读
+#   outputs/manual_web_demo/runtime/slam_map_3d.json 这个快照文件；
+# 该文件曾长期停留在 8 天前（内含 pose=2.28e11 的坏数据），这就是"WebUI 上地图重叠"的
+# 直接来源。这里按 WebUI 要求的格式周期性写入**权威 SLAM 地图**。
+#
+# 计划书 §2.3：**物体不在这里写**。本模式没有语义建图进程，于是就没有对象源 ——
+# 页面显示地图、不显示历史归档物体。旧写法是从 events.jsonl 里挑一份（glob 猜
+# 最新的 ∪ 写死的 Dataset D 归档），2026-09-17 实测挑中的是 09-10 的归档，当天
+# 搜索新定位的物体一个都没上屏。在线对象只由语义建图进程按 map_epoch 写。
+# 关闭：GO2W_WEBUI_SNAPSHOT_WRITER=0
+if [[ "${GO2W_WEBUI_SNAPSHOT_WRITER:-1}" == "1" ]]; then
+  WEBUI_SNAPSHOT_PYTHON="/usr/bin/python3"
+  # 同一份地图 JSON 只能有一个写进程：上一轮留下的写手（没走 stop 脚本就重启、
+  # 或 stop 脚本早先没清这个 pid）会带着它自己的 map_epoch 继续写同一个文件，
+  # 于是两个 epoch 交替上屏。与自主模式对地图桥的处理同一口径：先读 cmdline
+  # 验明正身，不是这个脚本才敢停。
+  if [[ -f "${runtime_root}/snapshot_writer.pid" ]]; then
+    old_writer_pid="$(<"${runtime_root}/snapshot_writer.pid")"
+    old_writer_cmd=""
+    if [[ -n "$old_writer_pid" && -r "/proc/${old_writer_pid}/cmdline" ]]; then
+      old_writer_cmd="$(tr '\0' ' ' <"/proc/${old_writer_pid}/cmdline" 2>/dev/null || true)"
+    fi
+    if [[ -n "$old_writer_pid" ]] && kill -0 "$old_writer_pid" 2>/dev/null \
+      && [[ "$old_writer_cmd" == *"scripts/go2w/webui_map_snapshot_writer.py"* ]]; then
+      printf 'Stopping previous map snapshot writer (pid %s) ...\n' "$old_writer_pid" >&2
+      kill "$old_writer_pid" 2>/dev/null || true
+      for _ in $(seq 1 20); do
+        kill -0 "$old_writer_pid" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+    rm -f "${runtime_root}/snapshot_writer.pid"
+  fi
+  PYTHONPATH="${HOME}/.local/lib/python3.10/site-packages${PYTHONPATH:+:${PYTHONPATH}}" \
+  setsid "${WEBUI_SNAPSHOT_PYTHON}" "${script_dir}/webui_map_snapshot_writer.py" --ros-args \
+    -p map_topic:="${GO2W_WEBUI_SNAPSHOT_MAP_TOPIC:-/go2w/slam/map_3d}" \
+    -p max_points:="${GO2W_WEBUI_SNAPSHOT_MAX_POINTS:-60000}" \
+    -p max_range_m:="${GO2W_WEBUI_SNAPSHOT_MAX_RANGE_M:-25.0}" \
+    -p min_range_m:=1.0 \
+    -p voxel_size_m:="${GO2W_WEBUI_SNAPSHOT_VOXEL_M:-0.05}" \
+    -p min_z_m:="${GO2W_WEBUI_SNAPSHOT_MIN_Z_M:-0.15}" \
+    -p max_z_m:="${GO2W_WEBUI_SNAPSHOT_MAX_Z_M:-2.80}" \
+    -p trajectory_radius_m:="${GO2W_WEBUI_SNAPSHOT_TRAJ_RADIUS_M:-12.0}" \
+    -p focus_margin_m:="${GO2W_WEBUI_SNAPSHOT_FOCUS_MARGIN_M:-3.0}" \
+    -p snapshot_path:="${GO2W_SLAM_MAP_SNAPSHOT}" \
+    -p meta_path:="${GO2W_SLAM_MAP_META}" \
+    > "${log_root}/webui_map_snapshot_writer.log" 2>&1 &
+  printf '%s\n' "$!" > "${runtime_root}/snapshot_writer.pid"
+  printf '[OK] WebUI map snapshot writer (map=%s)\n' \
+    "${GO2W_WEBUI_SNAPSHOT_MAP_TOPIC:-/go2w/slam/map_3d}"
+fi
 
 # ---- 8. Wait for the API to become ready ------------------------------ #
 ready=0

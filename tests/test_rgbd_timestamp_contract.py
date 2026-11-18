@@ -4,8 +4,13 @@ receive_time 并显式标记 timestamp_quality。"""
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
-from app.perception.realsense_http_rgbd_source import _resolve_capture_timestamp
+from app.perception.realsense_http_rgbd_source import (
+    RealSenseHTTPRGBDSource,
+    _resolve_capture_timestamp,
+)
+from app.perception.rgbd_source import RGBDFrame
 
 
 def test_valid_host_timestamp_used():
@@ -28,3 +33,32 @@ def test_receive_time_fallback_is_explicit():
     stamp, quality = _resolve_capture_timestamp(None, default=default)
     assert stamp == default
     assert quality == "receive_time"
+
+
+def test_materialize_preserves_timestamp_quality(tmp_path, monkeypatch):
+    source = RealSenseHTTPRGBDSource(cache_dir=tmp_path)
+    frame = RGBDFrame(
+        frame_id="fallback",
+        timestamp=12345.678,
+        color_ref="unused-color",
+        depth_ref="unused-depth",
+        width=2,
+        height=2,
+        fx=1.0,
+        fy=1.0,
+        cx=0.0,
+        cy=0.0,
+        timestamp_quality="receive_time",
+    )
+    (tmp_path / "color_fallback.jpg").write_bytes(b"jpg")
+    (tmp_path / "depth_fallback.png").write_bytes(b"png")
+    # Legacy flat cache files no longer establish capture identity. Exercise
+    # a real materialization while retaining the timestamp-quality contract.
+    monkeypatch.setattr(source, '_download', lambda url, path:
+        path.write_bytes(b'fresh jpg' if url == 'unused-color' else b'fresh png'))
+
+    materialized = source.materialize(frame)
+
+    assert materialized.timestamp == frame.timestamp
+    assert materialized.timestamp_quality == "receive_time"
+    assert Path(materialized.color_ref).read_bytes() == b'fresh jpg'

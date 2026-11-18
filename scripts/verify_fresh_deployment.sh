@@ -66,10 +66,21 @@ if [[ "$profile" == full ]]; then
     || fail 'SAM2 checkpoint is missing'
   [[ -s "$grounded/gdino_checkpoints/groundingdino_swint_ogc.pth" ]] \
     || fail 'GroundingDINO checkpoint is missing'
+  ram="${project_root}/external/recognize-anything"
+  [[ -d "$ram/ram" ]] \
+    || fail 'RAM++ (recognize-anything) source is missing'
+  [[ -s "${project_root}/external/ram_plus_ckpt/ram_plus_swin_large_14m.pth" ]] \
+    || fail 'RAM++ checkpoint is missing'
   "$python" - <<'PY'
 import groundingdino
 import sam2
 print('PASS: GroundingDINO and SAM2 imports')
+PY
+  # ram/models/vit.py 在模块级 import fairscale，所以它是推理依赖（实测）。
+  PYTHONPATH="${ram}:${PYTHONPATH:-}" "$python" - <<'PY'
+from ram import get_transform, inference_ram
+from ram.models import ram_plus
+print('PASS: RAM++ imports')
 PY
 fi
 

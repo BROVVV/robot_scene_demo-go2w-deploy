@@ -122,20 +122,43 @@ def test_store_target_match_and_candidates_and_goal() -> None:
     assert evidence["anchor_labels"] == ["饮水机"]
 
 
-def test_store_map_revision_monotonic() -> None:
+def test_action_started_clears_the_previous_goal_result() -> None:
     store = SearchStateStore()
-    graph = {"nodes": [], "edges": []}
+    store.apply(_event(SESSION_CREATED, payload={"target": "x"}))
+    store.apply(_event(ACTION_FINISHED, payload={
+        "status": "rejected",
+        "message": "old goal was too narrow",
+        "candidate_decision": {"accepted": False, "reject_reason": "TOO_NARROW"},
+    }))
+    assert store.snapshot()["robot"]["last_motion_result"] is not None
+
+    store.apply(_event(ACTION_STARTED, payload={"goal_id": "new_goal"}))
+
+    snapshot = store.snapshot()
+    assert snapshot["robot"]["motion_status"] == "EXECUTING"
+    assert snapshot["robot"]["last_motion_result"] is None
+
+
+def test_store_graph_revision_monotonic() -> None:
+    """图只有 `set_graph()` 一个写入口，revision 只增不减（§2.2）。
+
+    `MAP_UPDATED` 本身不再携带图 —— 这条同时钉住"事件流写不动图"，免得日后有人
+    把旧路径接回来。
+    """
+    store = SearchStateStore()
+    store.apply(_event(MAP_UPDATED, payload={"revision": 1}))
+    assert store.snapshot()["graph"] is None, "MAP_UPDATED 不许写图"
     for index in range(5):
-        store.apply(_event(MAP_UPDATED, payload={
-            "graph": {**graph, "nodes": [{"node_id": f"n{index}"}]},
-            "map_mode": "topological",
-        }))
-        assert store.map_snapshot()["revision"] == index + 1
-    final = store.map_snapshot()
-    assert final["schema_version"] == "live_exploration_graph_v1"
-    assert final["map_mode"] == "topological"
-    assert len(final["nodes"]) == 1
-    assert final["nodes"][0]["node_id"] == "n4"
+        assert store.set_graph({
+            "schema_version": "semantic_navigation_graph_v1",
+            "revision": index + 1,
+            "places": [], "edges": [], "objects": [], "frontiers": [],
+            "current_place_id": None, "object_topology": None,
+        }) is True
+        assert store.snapshot()["graph_revision"] == index + 1
+    final = store.snapshot()["graph"]
+    assert final["schema_version"] == "semantic_navigation_graph_v1"
+    assert final["revision"] == 5
 
 
 def test_store_target_confirmed_status() -> None:
@@ -198,9 +221,91 @@ def test_observer_retry_is_recoverable_warning_not_failed() -> None:
     assert "vision request timed out" in snapshot["phase_detail"]
 
 
+def test_bus_subscriber_sees_committed_store_state() -> None:
+    archived: list[str] = []
+    store = SearchStateStore(
+        on_change=lambda snapshot, _event: archived.append(snapshot["status"])
+    )
+    bus = SearchEventBus()
+    seen: list[tuple[str, str]] = []
+    bus.subscribe(lambda event: seen.append(
+        (event.event_type, store.snapshot()["status"])
+    ))
+    adapter = ExplorerSearchAdapter(bus, store, session_id="search_test")
+    adapter.on_explorer_event({"event": "session_start", "state": "BOOTSTRAP"})
+    assert seen
+    assert archived
+    assert seen[-1][1] == archived[-1]
+
+
+def test_store_surfaces_terminal_quick_vlm_timeout() -> None:
+    """Terminal perception failures retain the concrete VLM cause for WebUI."""
+    store = SearchStateStore()
+    bus = SearchEventBus()
+    adapter = ExplorerSearchAdapter(bus, store, session_id="search_test")
+    adapter.on_explorer_event({"event": "session_start", "state": "BOOTSTRAP"})
+    adapter.on_explorer_event({
+        "event": "session_finish",
+        "state": "FINISHED",
+        "result": "PERCEPTION_FAILURE",
+        "cause": "QUICK_VLM_TIMEOUT",
+        "attempts": 3,
+        "error": "SiliconFlow vision API timed out",
+        "error_detail": {
+            "code": "QUICK_VLM_TIMEOUT",
+            "message": "SiliconFlow vision API timed out",
+            "detail": "daemon request exceeded 65 seconds",
+        },
+    })
+    error = store.snapshot()["error"]
+    assert error["code"] == "QUICK_VLM_TIMEOUT"
+    assert error["message"] == "SiliconFlow vision API timed out"
+    assert error["category"] == "reasoning"
+
+
 def test_store_snapshot_is_a_copy() -> None:
     store = SearchStateStore()
     store.apply(_event(SESSION_CREATED, payload={"target": "x"}))
     first = store.snapshot()
     first["target"] = "mutated"
     assert store.snapshot()["target"] == "x"
+
+
+def test_candidate_decision_reaches_the_snapshot() -> None:
+    """计划书 §14：走廊判定/净空/速度上限必须能在快照里查到。
+
+    这条记录在 nav2 后端里是 NavigationResult.provenance 的一个字段，一路要
+    经过 explorer 事件 → 适配器 → 状态存储三跳。任何一跳把它丢掉，现场验收
+    的第 7 项就没有可查的东西了。
+    """
+    store = SearchStateStore()
+    bus = SearchEventBus()
+    adapter = ExplorerSearchAdapter(bus, store, session_id="contract")
+
+    decision = {
+        "candidate_id": "goal_7",
+        "goal_x": 1.5,
+        "goal_y": -0.25,
+        "goal_yaw": 12.0,
+        "path_length_m": 2.4,
+        "min_left_body_gap_m": 0.62,
+        "min_right_body_gap_m": 0.48,
+        "min_side_gap_m": 0.48,
+        "corridor_decision": "PASS",
+        "speed_limit_mps": 0.35,
+        "center_score": 0.71,
+        "accepted": True,
+        "reject_reason": "",
+    }
+    adapter.on_explorer_event({
+        "event": "navigation_result",
+        "goal_id": "goal_7",
+        "status": "succeeded",
+        "message": "navigate to pose succeeded",
+        "candidate_decision": decision,
+    })
+
+    recorded = store.snapshot()["robot"]["last_motion_result"]["candidate_decision"]
+    assert recorded["corridor_decision"] == "PASS"
+    assert recorded["min_left_body_gap_m"] == 0.62
+    assert recorded["speed_limit_mps"] == 0.35

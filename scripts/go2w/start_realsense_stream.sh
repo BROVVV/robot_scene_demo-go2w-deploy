@@ -4,6 +4,7 @@
 # 用法：
 #   bash scripts/go2w/start_realsense_stream.sh install    # 上传脚本到机器狗 + 安装 systemd 服务（开机自启）
 #   bash scripts/go2w/start_realsense_stream.sh start      # 启动服务
+#   bash scripts/go2w/start_realsense_stream.sh restart    # 重启服务
 #   bash scripts/go2w/start_realsense_stream.sh stop       # 停止服务
 #   bash scripts/go2w/start_realsense_stream.sh status     # 查看状态（服务 + /health）
 #   bash scripts/go2w/start_realsense_stream.sh logs       # 跟踪服务日志
@@ -25,13 +26,25 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd -- "${script_dir}/../.." && pwd)"
 LOCAL_SCRIPT="${script_dir}/realsense_stream.py"
 
-rssh() { sshpass -p "${ROBOT_PASS}" ssh -o StrictHostKeyChecking=accept-new "${ROBOT_USER}@${ROBOT_IP}" "$@"; }
+ssh_options=(
+  -F /dev/null
+  -o ControlMaster=no
+  -o ControlPath=none
+  -o ClearAllForwardings=yes
+  -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile="${HOME}/.ssh/known_hosts"
+  -o ConnectTimeout=5
+)
+rssh() {
+  sshpass -p "${ROBOT_PASS}" ssh "${ssh_options[@]}" \
+    "${ROBOT_USER}@${ROBOT_IP}" "$@"
+}
 
 case "${1:-}" in
   install)
     [[ -f "${LOCAL_SCRIPT}" ]] || { echo "ERROR: 缺少 ${LOCAL_SCRIPT}" >&2; exit 1; }
     echo ">> 上传 ${LOCAL_SCRIPT} -> ${ROBOT_IP}:${REMOTE_SCRIPT}"
-    sshpass -p "${ROBOT_PASS}" scp -o StrictHostKeyChecking=accept-new \
+    sshpass -p "${ROBOT_PASS}" scp "${ssh_options[@]}" \
       "${LOCAL_SCRIPT}" "${ROBOT_USER}@${ROBOT_IP}:${REMOTE_SCRIPT}"
     echo ">> 安装 systemd 服务 ${SERVICE}"
     rssh "echo '${ROBOT_PASS}' | sudo -S -p '' bash -c '
@@ -54,6 +67,7 @@ systemctl daemon-reload && systemctl enable ${SERVICE} && systemctl restart ${SE
     echo ">> 完成"
     ;;
   start)  rssh "echo '${ROBOT_PASS}' | sudo -S -p '' systemctl start ${SERVICE} && systemctl is-active ${SERVICE}" ;;
+  restart) rssh "echo '${ROBOT_PASS}' | sudo -S -p '' systemctl restart ${SERVICE} && systemctl is-active ${SERVICE}" ;;
   stop)   rssh "echo '${ROBOT_PASS}' | sudo -S -p '' systemctl stop ${SERVICE}" ;;
   status)
     rssh "systemctl is-active ${SERVICE} && systemctl is-enabled ${SERVICE}"
@@ -65,7 +79,7 @@ systemctl daemon-reload && systemctl enable ${SERVICE} && systemctl restart ${SE
     echo "  OpenCV:  ${script_dir}/view_realsense.py"
     ;;
   *)
-    echo "用法: $0 {install|start|stop|status|logs|view}" >&2
+    echo "用法: $0 {install|start|restart|stop|status|logs|view}" >&2
     exit 1
     ;;
 esac

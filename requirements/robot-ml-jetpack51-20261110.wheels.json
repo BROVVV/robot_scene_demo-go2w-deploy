@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "platform": "aarch64",
+  "python": "3.8",
+  "jetpack": "5.1.1",
+  "packages": [
+    {
+      "name": "certifi",
+      "version": "2024.8.30",
+      "wheel": "certifi-2024.8.30-py3-none-any.whl",
+      "sha256": "922820b53db7a7257ffbda3f597266d435245903d80737e34f8a45ff3e3230d8"
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.4.0",
+      "wheel": "charset_normalizer-3.4.0-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "6b493a043635eb376e50eedf7818f2f322eabbaa974e948bd8bdd29eb7ef2a51"
+    },
+    {
+      "name": "contourpy",
+      "version": "1.1.1",
+      "wheel": "contourpy-1.1.1-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "c5bd5680f844c3ff0008523a71949a3ff5e4953eb7701b28760805bc9bcff217"
+    },
+    {
+      "name": "cycler",
+      "version": "0.12.1",
+      "wheel": "cycler-0.12.1-py3-none-any.whl",
+      "sha256": "85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30"
+    },
+    {
+      "name": "filelock",
+      "version": "3.16.1",
+      "wheel": "filelock-3.16.1-py3-none-any.whl",
+      "sha256": "2082e5703d51fbf98ea75855d9d5527e33d8ff23099bec374a134febee6946b0"
+    },
+    {
+      "name": "fonttools",
+      "version": "4.57.0",
+      "wheel": "fonttools-4.57.0-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "6e3e1ec10c29bae0ea826b61f265ec5c858c5ba2ce2e69a71a62f285cf8e4595"
+    },
+    {
+      "name": "idna",
+      "version": "3.10",
+      "wheel": "idna-3.10-py3-none-any.whl",
+      "sha256": "946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3"
+    },
+    {
+      "name": "importlib-resources",
+      "version": "6.4.5",
+      "wheel": "importlib_resources-6.4.5-py3-none-any.whl",
+      "sha256": "ac29d5f956f01d5e4bb63102a5a19957f1b9175e45649977264a1416783bb717"
+    },
+    {
+      "name": "jinja2",
+      "version": "3.1.6",
+      "wheel": "jinja2-3.1.6-py3-none-any.whl",
+      "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"
+    },
+    {
+      "name": "kiwisolver",
+      "version": "1.4.7",
+      "wheel": "kiwisolver-1.4.7-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "08471d4d86cbaec61f86b217dd938a83d85e03785f51121e791a6e6689a3be95"
+    },
+    {
+      "name": "markupsafe",
+      "version": "2.1.5",
+      "wheel": "MarkupSafe-2.1.5-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "1f3fbcb7ef1f16e48246f704ab79d79da8a46891e2da03f8783a5b6fa41a9532"
+    },
+    {
+      "name": "matplotlib",
+      "version": "3.7.5",
+      "wheel": "matplotlib-3.7.5-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "d3e3bc79b2d7d615067bd010caff9243ead1fc95cf735c16e4b2583173f717eb"
+    },
+    {
+      "name": "mpmath",
+      "version": "1.3.0",
+      "wheel": "mpmath-1.3.0-py3-none-any.whl",
+      "sha256": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c"
+    },
+    {
+      "name": "networkx",
+      "version": "3.1",
+      "wheel": "networkx-3.1-py3-none-any.whl",
+      "sha256": "4f33f68cb2afcf86f28a45f43efc27a9386b535d567d2127f8f61d51dec58d36"
+    },
+    {
+      "name": "numpy",
+      "version": "1.23.5",
+      "wheel": "numpy-1.23.5-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "92c8c1e89a1f5028a4c6d9e3ccbe311b6ba53694811269b992c0b224269e2398"
+    },
+    {
+      "name": "nvidia-ml-py",
+      "version": "12.560.30",
+      "wheel": "nvidia_ml_py-12.560.30-py3-none-any.whl",
+      "sha256": "fea371c94d63e38a611c17bbb85fe400e9c8ddb9e8684a9cd0e47786a4bc3c73"
+    },
+    {
+      "name": "opencv-python",
+      "version": "4.8.1.78",
+      "wheel": "opencv_python-4.8.1.78-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "9814beca408d3a0eca1bae7e3e5be68b07c17ecceb392b94170881216e09b319"
+    },
+    {
+      "name": "packaging",
+      "version": "23.2",
+      "wheel": "packaging-23.2-py3-none-any.whl",
+      "sha256": "8c491190033a9af7e1d931d0b5dacc2ef47509b34dd0de67ed209b5203fc88c7"
+    },
+    {
+      "name": "pillow",
+      "version": "10.4.0",
+      "wheel": "pillow-10.4.0-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "b15e02e9bb4c21e39876698abf233c8c579127986f8207200bc8a8f6bb27acf2"
+    },
+    {
+      "name": "pip",
+      "version": "24.0",
+      "wheel": "pip-24.0-py3-none-any.whl",
+      "sha256": "ba0d021a166865d2265246961bec0152ff124de910c5cc39f1156ce3fa7c69dc"
+    },
+    {
+      "name": "polars",
+      "version": "0.20.31",
+      "wheel": "polars-0.20.31-cp38-abi3-manylinux_2_24_aarch64.whl",
+      "sha256": "87f43bce4d41abf8c8c5658d881e4b8378e5c61010a696bfea8b4106b908e916"
+    },
+    {
+      "name": "psutil",
+      "version": "6.1.1",
+      "wheel": "psutil-6.1.1-cp36-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "33431e84fee02bc84ea36d9e2c4a6d395d479c9dd9bba2376c1f6ee8f3a4e0b3"
+    },
+    {
+      "name": "pyparsing",
+      "version": "3.1.4",
+      "wheel": "pyparsing-3.1.4-py3-none-any.whl",
+      "sha256": "a6a7ee4235a3f944aa1fa2249307708f893fe5717dc603503c6c7969c070fb7c"
+    },
+    {
+      "name": "python-dateutil",
+      "version": "2.9.0.post0",
+      "wheel": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"
+    },
+    {
+      "name": "pyyaml",
+      "version": "6.0.2",
+      "wheel": "PyYAML-6.0.2-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "d7fded462629cfa4b685c5416b949ebad6cec74af5e2d42905d41e257e0869f5"
+    },
+    {
+      "name": "requests",
+      "version": "2.31.0",
+      "wheel": "requests-2.31.0-py3-none-any.whl",
+      "sha256": "58cd2187c01e70e6e26505bca751777aa9f2ee0b7f4300988b709f44e013003f"
+    },
+    {
+      "name": "setuptools",
+      "version": "44.0.0",
+      "wheel": "setuptools-44.0.0-py2.py3-none-any.whl",
+      "sha256": "180081a244d0888b0065e18206950d603f6550721bd6f8c0a10221ed467dd78e"
+    },
+    {
+      "name": "six",
+      "version": "1.16.0",
+      "wheel": "six-1.16.0-py2.py3-none-any.whl",
+      "sha256": "8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254"
+    },
+    {
+      "name": "sympy",
+      "version": "1.13.3",
+      "wheel": "sympy-1.13.3-py3-none-any.whl",
+      "sha256": "54612cf55a62755ee71824ce692986f23c88ffa77207b30c1368eda4a7060f73"
+    },
+    {
+      "name": "torch",
+      "version": "2.0.0+nv23.5",
+      "wheel": "torch-2.0.0+nv23.05-cp38-cp38-linux_aarch64.whl",
+      "sha256": "39eeb9894ef8c7b84249ab917f212a91703f30255d591b956ab12cc10e836532"
+    },
+    {
+      "name": "torchvision",
+      "version": "0.15.1a0",
+      "wheel": "torchvision-0.15.1a0-cp38-cp38-linux_aarch64.whl",
+      "sha256": "ca287b0ab9dc69ac040968c7427a1067bc2a5aea4cc09a43e6439973bf9f5e56"
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.8.0",
+      "wheel": "typing_extensions-4.8.0-py3-none-any.whl",
+      "sha256": "8f92fc8806f9a6b641eaa5318da32b44d401efaac0f6678c9bc448ba3605faa0"
+    },
+    {
+      "name": "ultralytics",
+      "version": "8.4.190",
+      "wheel": "ultralytics-8.4.190-py3-none-any.whl",
+      "sha256": "bd309728efa168af64d39040136828edd2dbcb4aeceb4510bdff4f3ca0ea01b8"
+    },
+    {
+      "name": "ultralytics-thop",
+      "version": "2.2.3",
+      "wheel": "ultralytics_thop-2.2.3-py3-none-any.whl",
+      "sha256": "d56c860b9422b6abfd7e9d7afdd8af3b1242a854c17305bd60ad05cbc7f4b5b6"
+    },
+    {
+      "name": "urllib3",
+      "version": "2.2.3",
+      "wheel": "urllib3-2.2.3-py3-none-any.whl",
+      "sha256": "ca899ca043dcb1bafa3e262d73aa25c465bfb49e0bd9dd5d59f1d0acba2f8fac"
+    },
+    {
+      "name": "zipp",
+      "version": "3.20.2",
+      "wheel": "zipp-3.20.2-py3-none-any.whl",
+      "sha256": "a817ac80d6cf4b23bf7f2828b7cabf326f15a001bea8b1f9b49631780ba28350"
+    }
+  ],
+  "private_environment_included": false,
+  "scope": "Reproducible isolated ML environment; no production cutover or motion acceptance",
+  "verification": {
+    "fresh_offline_install": true,
+    "pip_check_passed": true,
+    "single_frame_golden_detections": 20,
+    "prior_robot_all_items_exact": true,
+    "cuda_fp16_passed": true,
+    "worker_health_detect_shutdown_passed": true,
+    "loaded_native_libraries_aarch64": 127,
+    "selected_in_old_releases": false
+  }
+}

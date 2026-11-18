@@ -30,6 +30,8 @@ class ViewpointCandidate:
     local_clearance_m: float | None = None
     path_min_clearance_m: float | None = None
     path_mean_clearance_m: float | None = None
+    # 计划书 §7.5：路径离走廊中线的对称度，1 表示正中；没有栅格可量时为 None。
+    center_score: float | None = None
     view_quality: float = 0.0
     information_gain: float = 0.0
     camera_occlusion_risk: float = 0.0
@@ -52,6 +54,7 @@ class ViewpointCandidate:
             "local_clearance_m": _round(self.local_clearance_m),
             "path_min_clearance_m": _round(self.path_min_clearance_m),
             "path_mean_clearance_m": _round(self.path_mean_clearance_m),
+            "center_score": _round(self.center_score),
             "view_quality": round(self.view_quality, 3),
             "information_gain": round(self.information_gain, 3),
             "camera_occlusion_risk": round(self.camera_occlusion_risk, 3),

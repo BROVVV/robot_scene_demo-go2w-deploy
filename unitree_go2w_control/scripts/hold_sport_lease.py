@@ -7,19 +7,11 @@ import argparse
 import json
 import os
 import signal
-import socket
-import stat
 import threading
 import time
 from pathlib import Path
-from typing import Any
 
-from sdk_motion_protocol import (
-    MAX_REQUEST_BYTES,
-    ProtocolError,
-    decode_request,
-    execute_request,
-)
+from sdk_motion_executor import SdkMotionExecutor, executor_timeouts
 from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (
     MotionSwitcherClient,
 )
@@ -32,153 +24,14 @@ def _write_status(path: Path, value: str) -> None:
     temporary.write_text(value, encoding="ascii")
     os.replace(temporary, path)
 
-
-class SdkMotionExecutor:
-    """Local Unix-socket facade around the exact client that owns the lease."""
-
-    def __init__(
-        self,
-        client: SportClient,
-        client_lock: threading.Lock,
-        socket_path: Path,
-        stop_event: threading.Event,
-    ) -> None:
-        self._client = client
-        self._client_lock = client_lock
-        self._socket_path = socket_path
-        self._stop_event = stop_event
-        self._server: socket.socket | None = None
-
-    def _safe_unlink_stale_socket(self) -> None:
-        try:
-            mode = self._socket_path.lstat().st_mode
-        except FileNotFoundError:
-            return
-        if not stat.S_ISSOCK(mode):
-            raise RuntimeError(
-                f"refusing to replace non-socket path: {self._socket_path}"
-            )
-        self._socket_path.unlink()
-
-    def close(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            self._server = None
-        try:
-            self._socket_path.unlink()
-        except FileNotFoundError:
-            pass
-
-    def _response_for(self, raw: bytes) -> dict[str, Any]:
-        request_id = 0
-        api_id = 0
-        try:
-            request = decode_request(raw)
-            request_id = request.get("request_id", 0)
-            api_id = request.get("api_id", 0)
-            with self._client_lock:
-                lease_id = int(self._client.GetLeaseId())
-                response = execute_request(request, self._client, lease_id)
-        except ProtocolError as exc:
-            response = {
-                "request_id": request_id,
-                "api_id": api_id,
-                "lease_id": 0,
-                "status_code": -9996,
-                "data": {"error": str(exc), "transport": "sdk_direct"},
-            }
-        except Exception as exc:  # SDK boundary: return a structured failure.
-            response = {
-                "request_id": request_id,
-                "api_id": api_id,
-                "lease_id": 0,
-                "status_code": -9995,
-                "data": {
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "transport": "sdk_direct",
-                },
-            }
-        print(
-            json.dumps(
-                {
-                    "event": "sdk_motion_command",
-                    "request_id": response.get("request_id", 0),
-                    "api_id": response.get("api_id", 0),
-                    "lease_id": response.get("lease_id", 0),
-                    "status_code": response.get("status_code", -9999),
-                }
-            ),
-            flush=True,
-        )
-        return response
-
-    def _serve_connection(self, connection: socket.socket) -> None:
-        connection.settimeout(2.5)
-        chunks: list[bytes] = []
-        size = 0
-        while size <= MAX_REQUEST_BYTES:
-            chunk = connection.recv(min(4096, MAX_REQUEST_BYTES + 1 - size))
-            if not chunk:
-                break
-            if b"\n" in chunk:
-                chunks.append(chunk.split(b"\n", 1)[0])
-                break
-            chunks.append(chunk)
-            size += len(chunk)
-        response = self._response_for(b"".join(chunks))
-        connection.sendall(
-            json.dumps(response, separators=(",", ":")).encode("utf-8") + b"\n"
-        )
-
-    def serve(self) -> None:
-        self._socket_path.parent.mkdir(parents=True, exist_ok=True)
-        self._safe_unlink_stale_socket()
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._server = server
-        server.bind(str(self._socket_path))
-        os.chmod(self._socket_path, 0o600)
-        server.listen(8)
-        server.settimeout(0.2)
-        print(
-            json.dumps(
-                {
-                    "event": "sdk_motion_executor_ready",
-                    "socket": str(self._socket_path),
-                }
-            ),
-            flush=True,
-        )
-        try:
-            while not self._stop_event.is_set():
-                try:
-                    connection, _ = server.accept()
-                except socket.timeout:
-                    continue
-                except OSError:
-                    if self._stop_event.is_set():
-                        break
-                    raise
-                with connection:
-                    try:
-                        self._serve_connection(connection)
-                    except (OSError, socket.timeout) as exc:
-                        print(
-                            json.dumps(
-                                {
-                                    "event": "sdk_motion_transport_error",
-                                    "message": str(exc),
-                                }
-                            ),
-                            flush=True,
-                        )
-        finally:
-            self.close()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--interface", required=True)
     parser.add_argument("--ready-file")
+    parser.add_argument('--command-timeout-seconds', type=float,
+                        default=float(os.environ.get('GO2W_SDK_COMMAND_TIMEOUT_SECONDS', '0')))
+    parser.add_argument('--rpc-timeout-seconds', type=float,
+                        default=float(os.environ.get('GO2W_SDK_RPC_TIMEOUT_SECONDS', '5')))
     parser.add_argument(
         "--socket-path",
         default=os.environ.get(
@@ -192,6 +45,11 @@ def main() -> int:
     # Accepted for compatibility with old launch files; ROS runs in the bridge.
     parser.add_argument("--ros-status", action="store_true")
     args = parser.parse_args()
+    try:
+        command_timeout, rpc_timeout = executor_timeouts(
+            args.command_timeout_seconds, args.rpc_timeout_seconds)
+    except ValueError as error:
+        parser.error(str(error))
 
     stop_event = threading.Event()
 
@@ -213,6 +71,9 @@ def main() -> int:
     if lease_id == 0:
         print('{"event":"lease_error","message":"acquisition timeout"}', flush=True)
         return 1
+    # Acquisition keeps its original timeout. Command calls must finish before
+    # an enabled watchdog's deadline so it can acquire the shared SDK lock.
+    client.SetTimeout(rpc_timeout)
 
     status_dir = Path(args.status_dir)
     status_dir.mkdir(parents=True, exist_ok=True)
@@ -245,7 +106,8 @@ def main() -> int:
 
     client_lock = threading.Lock()
     executor = SdkMotionExecutor(
-        client, client_lock, Path(args.socket_path), stop_event
+        client, client_lock, Path(args.socket_path), stop_event,
+        command_timeout_seconds=command_timeout,
     )
     executor_thread = threading.Thread(
         target=executor.serve, name="sdk-motion-executor", daemon=True
@@ -258,6 +120,8 @@ def main() -> int:
     next_mode_check = 0.0
     try:
         while not stop_event.wait(0.2):
+            if not executor_thread.is_alive():
+                raise RuntimeError('SDK command executor exited; stopping lease holder')
             with client_lock:
                 current_id = int(client.GetLeaseId())
             _write_status(id_file, f"{max(0, current_id)}\n")

@@ -1,0 +1,4 @@
+# Ubuntu 20.04 arm64 runtime packages for replay encoding and Chinese labels.
+# Add these to the candidate robot environment; do not upgrade JetPack/CUDA.
+ffmpeg
+fonts-noto-cjk

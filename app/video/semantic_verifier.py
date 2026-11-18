@@ -148,7 +148,7 @@ def verify_video_candidates(
     }
 
 
-def _verification_region(
+def verification_region(
     candidate: dict[str, Any],
     frame_objects: list[dict[str, Any]],
     target_profile: TargetProfile,
@@ -166,7 +166,18 @@ def _verification_region(
     }
     if not context_terms:
         return bbox, []
-    matches: list[tuple[float, dict[str, Any], list[float]]] = []
+    # §15.2：关系约束点名的那个物体（「挂着书包的椅子」的背包）才是关系证据，
+    # 它比「桌子/门」这类只是提示位置的 context 优先。实测里 VLM 只裁到玻璃门
+    # 就宣布确认，就是这里按最近距离随便挑了一个 context 造成的。
+    anchor_terms = {
+        normalize_label(item)
+        for item in (
+            *target_profile.relation_anchor_labels_en,
+            *target_profile.relation_anchor_labels_zh,
+        )
+        if normalize_label(item)
+    }
+    matches: list[tuple[int, float, dict[str, Any], list[float]]] = []
     candidate_center = _bbox_center(bbox)
     for obj in frame_objects:
         if obj is candidate or obj.get("object_id") == candidate.get("object_id"):
@@ -189,10 +200,15 @@ def _verification_region(
         distance = (center[0] - candidate_center[0]) ** 2 + (
             center[1] - candidate_center[1]
         ) ** 2
-        matches.append((distance, obj, context_bbox))
+        is_anchor = any(
+            term == label or term in label or label in term
+            for term in anchor_terms
+            for label in labels
+        )
+        matches.append((0 if is_anchor else 1, distance, obj, context_bbox))
     if not matches:
         return bbox, []
-    _, anchor, anchor_bbox = min(matches, key=lambda item: item[0])
+    _, _, anchor, anchor_bbox = min(matches, key=lambda item: (item[0], item[1]))
     union = [
         min(bbox[0], anchor_bbox[0]),
         min(bbox[1], anchor_bbox[1]),
@@ -207,6 +223,10 @@ def _verification_region(
             "bbox": anchor_bbox,
         }
     ]
+
+
+# Backwards compatibility for autonomous-search callers and existing tests.
+_verification_region = verification_region
 
 
 def _valid_bbox(value: Any) -> list[float] | None:

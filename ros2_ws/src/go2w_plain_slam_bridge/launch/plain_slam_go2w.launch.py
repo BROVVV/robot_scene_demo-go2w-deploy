@@ -92,7 +92,15 @@ def generate_launch_description() -> LaunchDescription:
     odom_params.update(
         {
             "imu_pose_topic": "/go2w/slam/imu_pose_raw",
-            "imu_odom_topic": "/go2w/slam/imu_odom_raw",
+            # imu_odom_raw 是 lio_3d_node 在 IMU 回调里做的 250 Hz 纯开环预积分，
+            # 没有任何点云配准修正：IMU 一丢包，dt 就跳变，位置无界发散
+            # （实测静止 8 分钟飞到 2.3e4 m）。它和 10 Hz 的 imu_pose_raw
+            # 以前一起喂给同一个 odom_base，下游拿到的位姿在"正确值"和
+            # "发散值"之间反复跳，同一处墙面被写进两个天差地别的坐标，
+            # 这就是 WebUI 三维地图重影和语义拓扑碎片化的来源。
+            # 留空即只用配准后的 LIO 位姿；odom_base 由 250 Hz 降为 10 Hz，
+            # 建图/WebUI/占据栅格都够用，运动权威始终是 /go2w/odom/fused。
+            "imu_odom_topic": "",
             "odom_base_topic": "/go2w/slam/odom_base",
             "base_pose_topic": "/go2w/slam/base_pose",
             "odom_frame": "pslam_odom",
@@ -140,6 +148,19 @@ def generate_launch_description() -> LaunchDescription:
                 arguments=[
                     "--imu-topic", raw_imu_topic,
                     "--output-topic", slam_imu_topic,
+                    # /utlidar/imu 的 yaw 角速度与机身反向（实测见适配器 docstring）。
+                    "--gyro-sign", "1,1,-1",
+                    # 2026-09-08 P1 在线试用：离线可重放 A/B（每配置 2 次）测得补 25 ms 使
+                    # scan_overlap_rmse 0.0815 → 0.0666（−18%）、inlier 0.888 → 0.926。
+                    # 真机对照若无改善则删除此行回退。
+                    "--stamp-offset-s", "-0.025",
+                    # 锁定后的时钟阶跃容忍度。2026-09-11：真实偏移从 790.621 跳到
+                    # 795.294（+4.673 s），旧默认 5.0 s 刚好把它盖住，imu_n 从此
+                    # 恒为 0、地图被纯几何配准污染。门限必须小于消费端容忍度：
+                    # LIO 只取落在扫描自身跨度内的 IMU（实测 p50 0.099 s），再减
+                    # 掉下面那行 -25 ms 戳偏置，预算只剩约 0.075 s。实测到达间隔
+                    # p50 4.482 ms / max 8.994 ms，0.05 s 有 5.5 倍余量。
+                    "--max-offset-step-s", "0.05",
                 ],
             ),
             DeclareLaunchArgument(

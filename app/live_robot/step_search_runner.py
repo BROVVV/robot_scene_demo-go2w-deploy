@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from app.config import get_settings
 
 from app.live_robot.search_state_machine import (
     SearchMode,
@@ -29,6 +31,11 @@ from app.live_robot.step_planner import (
     verify_rejection_step,
 )
 from app.live_robot.search_directive_adapter import directive_to_step_plan
+from app.reasoning.semantic_navigation.task_agent import (
+    attach_trace,
+    enrich_context,
+    retrieve_knowledge,
+)
 from app.reasoning.semantic_navigation.models import SearchDirective, SearchReasoningContext
 
 
@@ -67,7 +74,12 @@ class StepSearchConfig:
     reach_area_ratio: float = 0.15
     scan_turn_deg: float = 30.0
     scan_span: int = 3
-    stop_settle_seconds: float = 0.8
+    # §15：默认值改为从 settings 取（默认仍是 0.8）。用 default_factory 而不是
+    # 直接写 get_settings() 当默认值 —— 后者在 import 期就把配置冻住，
+    # 测试里改环境变量再也影响不到它。
+    stop_settle_seconds: float = field(
+        default_factory=lambda: get_settings().go2w_perception_settle_seconds
+    )
     forward_estimate_m: float = 0.15
     verify_rejection_turn_deg: float = 15.0
     semantic_reasoning_enabled: bool = False
@@ -259,7 +271,18 @@ class StepSearchRunner:
                     minimum_seconds=self.config.reasoner_min_replan_seconds,
                 )
             else:
-                directive = self._reason_next_view(context)
+                # 计划书 §5.4：把任务 Agent 的 trace 挂到 directive 上，WebUI 的
+                # Agent 面板才有数据。这条路径手上只有 target，没有任务上下文
+                # 和拓扑，如实留空 —— trace 的 missing_sources 会写明是哪几项
+                # 缺席，而不是填 0 冒充"测量值为零"。
+                enrich_context(
+                    context,
+                    task_context=None,
+                    knowledge_items=retrieve_knowledge(str(self.config.target or "")),
+                    topology_summary=None,
+                    run_mode="live",
+                )
+                directive = attach_trace(context, self._reason_next_view(context))
                 self._last_reasoner_key = reasoner_key
                 self._last_reasoner_time = now
                 self._last_reasoner_directive = directive

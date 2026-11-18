@@ -27,8 +27,19 @@ from .robot_backend import (
 
 
 def create_backend(kind: str, **kwargs: Any) -> RobotBackend:
-    """Build a backend by name: go2w_experimental / mock / mock_metric."""
+    """Build a backend by name: nav2 / go2w_experimental / mock / mock_metric.
+
+    计划书 §6.6：真实自主搜索只允许 ``nav2``。这里不做任何自动回退——名字不认识
+    就抛 ``ValueError``，请求 nav2 而 Nav2 没起来时由后端返回 ``REJECTED``，
+    绝不会悄悄换成相对移动后端。
+    """
     normalized = str(kind or "").strip().lower()
+    if normalized == "nav2":
+        from .nav2_search_backend import create_nav2_search_backend
+        node = kwargs.pop("node", None)
+        if node is None:
+            raise ValueError("nav2 backend needs a live ROS 2 node: node=<rclpy Node>")
+        return create_nav2_search_backend(node, **kwargs)
     if normalized in {"go2w", "go2w_experimental", "go2w_experimental_backend"}:
         from .go2w_experimental_backend import Go2WExperimentalBackend
         return Go2WExperimentalBackend(**kwargs)

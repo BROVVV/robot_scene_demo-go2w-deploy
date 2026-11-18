@@ -1,0 +1,375 @@
+{
+  "session_id": "search_20260901_120501_96392a00",
+  "node_count": 1,
+  "edge_count": 1,
+  "observed_sectors": [
+    3
+  ],
+  "nodes": [
+    {
+      "node_id": "node_bundle_191132",
+      "timestamp": 1788235529.5238948,
+      "pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw": 1.6534597180559232,
+        "frame_id": "odom",
+        "quality": "relative",
+        "timestamp": 1788235529.5219345,
+        "source": "wheel_fused_odom"
+      },
+      "pose_quality": "relative",
+      "heading": 94.73626343949545,
+      "heading_sector": 3,
+      "objects": [
+        "办公椅",
+        "电视",
+        "垃圾桶",
+        "黄色墙壁"
+      ],
+      "relations": [],
+      "scene_graph": {
+        "nodes": [
+          {
+            "node_id": "place_001",
+            "node_type": "place",
+            "label": "unknown",
+            "label_zh": "未知地点",
+            "category": "place",
+            "source": "observed",
+            "confidence": 0.9375,
+            "evidence_level": "observed_confirmed",
+            "based_on": [
+              "frame_191132"
+            ],
+            "can_confirm_target": true,
+            "attributes": {
+              "start_time": 1788235504.013,
+              "end_time": 1788235504.013,
+              "start_frame": 191132,
+              "end_frame": 191132,
+              "dominant_labels": [
+                "furniture",
+                "landmark",
+                "办公椅",
+                "垃圾桶",
+                "电视",
+                "黄色墙壁"
+              ],
+              "passage_candidates": [],
+              "free_space_hint": null,
+              "split_reason": "initial_segment",
+              "object_track_ids": [
+                "obj_办公椅_001",
+                "obj_垃圾桶_001",
+                "obj_电视_001",
+                "obj_黄色墙壁_001"
+              ],
+              "navigation_role": "place",
+              "observed_from_pose": {
+                "x": 0.0,
+                "y": 0.0,
+                "yaw_rad": 1.6534597180559232,
+                "yaw_deg": 94.73626343949543
+              },
+              "heading_sector": 3,
+              "observed_heading_deg": 94.73626343949543,
+              "position_status": "observation_pose_only"
+            }
+          },
+          {
+            "node_id": "obj_办公椅_001",
+            "node_type": "landmark",
+            "label": "办公椅",
+            "label_zh": "办公椅",
+            "category": "furniture",
+            "source": "observed",
+            "confidence": 0.98,
+            "evidence_level": "observed_confirmed",
+            "based_on": [
+              "frame_191132"
+            ],
+            "can_confirm_target": true,
+            "attributes": {
+              "navigation_role": "landmark",
+              "stable_position_2d": "center",
+              "first_seen_sec": 1788235504.0127676,
+              "last_seen_sec": 1788235504.0127676,
+              "best_frame_id": 191132,
+              "best_frame_path": "/home/mxt/robotscene/runtime/go2w/semantic_observe_cache/bundle_191132.jpg",
+              "representative_bbox": [
+                0.17,
+                0.0,
+                0.92,
+                0.99
+              ],
+              "attributes": [],
+              "place_ids": [
+                "place_001"
+              ],
+              "primary_place_id": "place_001",
+              "observed_from_pose": {
+                "x": 0.0,
+                "y": 0.0,
+                "yaw_rad": 1.6534597180559232,
+                "yaw_deg": 94.73626343949543
+              },
+              "heading_sector": 3,
+              "observed_heading_deg": 94.73626343949543,
+              "position_status": "observation_pose_only",
+              "depth_m": 0.468,
+              "bearing_deg": 3.77,
+              "camera_xyz": [
+                0.0308,
+                -0.0005,
+                0.468
+              ],
+              "spatial_quality": "CAMERA_LOCAL"
+            }
+          },
+          {
+            "node_id": "obj_电视_001",
+            "node_type": "landmark",
+            "label": "电视",
+            "label_zh": "电视",
+            "category": "furniture",
+            "source": "observed",
+            "confidence": 0.94,
+            "evidence_level": "observed_confirmed",
+            "based_on": [
+              "frame_191132"
+            ],
+            "can_confirm_target": true,
+            "attributes": {
+              "navigation_role": "landmark",
+              "stable_position_2d": "left",
+              "first_seen_sec": 1788235504.0127676,
+              "last_seen_sec": 1788235504.0127676,
+              "best_frame_id": 191132,
+              "best_frame_path": "/home/mxt/robotscene/runtime/go2w/semantic_observe_cache/bundle_191132.jpg",
+              "representative_bbox": [
+                0.0,
+                0.14,
+                0.17,
+                0.4
+              ],
+              "attributes": [],
+              "place_ids": [
+                "place_001"
+              ],
+              "primary_place_id": "place_001",
+              "observed_from_pose": {
+                "x": 0.0,
+                "y": 0.0,
+                "yaw_rad": 1.6534597180559232,
+                "yaw_deg": 94.73626343949543
+              },
+              "heading_sector": 3,
+              "observed_heading_deg": 94.73626343949543,
+              "position_status": "observation_pose_only",
+              "depth_m": 2.653,
+              "bearing_deg": -30.111,
+              "camera_xyz": [
+                -1.5386,
+                -0.4738,
+                2.653
+              ],
+              "spatial_quality": "CAMERA_LOCAL"
+            }
+          },
+          {
+            "node_id": "obj_垃圾桶_001",
+            "node_type": "landmark",
+            "label": "垃圾桶",
+            "label_zh": "垃圾桶",
+            "category": "furniture",
+            "source": "observed",
+            "confidence": 0.92,
+            "evidence_level": "observed_confirmed",
+            "based_on": [
+              "frame_191132"
+            ],
+            "can_confirm_target": true,
+            "attributes": {
+              "navigation_role": "landmark",
+              "stable_position_2d": "right",
+              "first_seen_sec": 1788235504.0127676,
+              "last_seen_sec": 1788235504.0127676,
+              "best_frame_id": 191132,
+              "best_frame_path": "/home/mxt/robotscene/runtime/go2w/semantic_observe_cache/bundle_191132.jpg",
+              "representative_bbox": [
+                0.77,
+                0.7,
+                0.91,
+                0.99
+              ],
+              "attributes": [],
+              "place_ids": [
+                "place_001"
+              ],
+              "primary_place_id": "place_001",
+              "observed_from_pose": {
+                "x": 0.0,
+                "y": 0.0,
+                "yaw_rad": 1.6534597180559232,
+                "yaw_deg": 94.73626343949543
+              },
+              "heading_sector": 3,
+              "observed_heading_deg": 94.73626343949543,
+              "position_status": "observation_pose_only",
+              "depth_m": 1.246,
+              "bearing_deg": 25.633,
+              "camera_xyz": [
+                0.5979,
+                0.3428,
+                1.246
+              ],
+              "spatial_quality": "CAMERA_LOCAL"
+            }
+          },
+          {
+            "node_id": "obj_黄色墙壁_001",
+            "node_type": "landmark",
+            "label": "黄色墙壁",
+            "label_zh": "黄色墙壁",
+            "category": "furniture",
+            "source": "observed",
+            "confidence": 0.91,
+            "evidence_level": "observed_confirmed",
+            "based_on": [
+              "frame_191132"
+            ],
+            "can_confirm_target": true,
+            "attributes": {
+              "navigation_role": "landmark",
+              "stable_position_2d": "right",
+              "first_seen_sec": 1788235504.0127676,
+              "last_seen_sec": 1788235504.0127676,
+              "best_frame_id": 191132,
+              "best_frame_path": "/home/mxt/robotscene/runtime/go2w/semantic_observe_cache/bundle_191132.jpg",
+              "representative_bbox": [
+                0.89,
+                0.0,
+                0.99,
+                0.99
+              ],
+              "attributes": [],
+              "place_ids": [
+                "place_001"
+              ],
+              "primary_place_id": "place_001",
+              "observed_from_pose": {
+                "x": 0.0,
+                "y": 0.0,
+                "yaw_rad": 1.6534597180559232,
+                "yaw_deg": 94.73626343949543
+              },
+              "heading_sector": 3,
+              "observed_heading_deg": 94.73626343949543,
+              "position_status": "observation_pose_only",
+              "depth_m": 1.147,
+              "bearing_deg": 31.784,
+              "camera_xyz": [
+                0.7107,
+                -0.0012,
+                1.147
+              ],
+              "spatial_quality": "CAMERA_LOCAL"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "edge_0001",
+            "source_node_id": "place_001",
+            "target_node_id": "obj_办公椅_001",
+            "relation": "contains",
+            "source": "observed",
+            "confidence": 0.98,
+            "evidence_level": "observed_confirmed",
+            "reason": "办公椅 observed in place_001",
+            "attributes": {}
+          },
+          {
+            "edge_id": "edge_0002",
+            "source_node_id": "place_001",
+            "target_node_id": "obj_电视_001",
+            "relation": "contains",
+            "source": "observed",
+            "confidence": 0.94,
+            "evidence_level": "observed_confirmed",
+            "reason": "电视 observed in place_001",
+            "attributes": {}
+          },
+          {
+            "edge_id": "edge_0003",
+            "source_node_id": "place_001",
+            "target_node_id": "obj_垃圾桶_001",
+            "relation": "contains",
+            "source": "observed",
+            "confidence": 0.92,
+            "evidence_level": "observed_confirmed",
+            "reason": "垃圾桶 observed in place_001",
+            "attributes": {}
+          },
+          {
+            "edge_id": "edge_0004",
+            "source_node_id": "place_001",
+            "target_node_id": "obj_黄色墙壁_001",
+            "relation": "contains",
+            "source": "observed",
+            "confidence": 0.91,
+            "evidence_level": "observed_confirmed",
+            "reason": "黄色墙壁 observed in place_001",
+            "attributes": {}
+          }
+        ]
+      },
+      "target_match_level": "zero_match",
+      "target_score": 0.0,
+      "semantic_relevance": 0.0,
+      "information_gain": 1.0,
+      "visited_count": 1,
+      "negative_evidence_count": 1,
+      "navigation_fail_count": 0,
+      "reachable_state": "VISITED",
+      "source_bundle_id": "bundle_191132",
+      "provenance": {
+        "source": "live_observation",
+        "place_id": "P1",
+        "negative_reasons": [
+          {
+            "reason": "target not observed in this view",
+            "host_s": 1788235529.523919
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_node_id": "node_bundle_191132",
+      "target_node_id": "node_bundle_191132",
+      "action_type": "ROTATE_VIEW",
+      "requested_motion": {
+        "step": "l30",
+        "relative_yaw_deg": 30.0
+      },
+      "observed_motion": {
+        "yaw_delta_deg": 30.947
+      },
+      "navigation_result": "succeeded",
+      "cost": 7.33
+    }
+  ],
+  "recent_goals": [
+    {
+      "goal_id": "local_scan_001",
+      "goal_type": "ROTATE_VIEW",
+      "status": "succeeded",
+      "target_node_id": "node_bundle_191132",
+      "heading_sector": 4,
+      "host_s": 1788235537.826903
+    }
+  ]
+}

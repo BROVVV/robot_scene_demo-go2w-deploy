@@ -1,0 +1,5 @@
+<library path="go2w_spin_compat">
+  <class type="go2w_foxy_spin::Spin" base_class_type="nav2_core::Recovery">
+    <description>Nav2 1.1.20 Spin with a separate duration-capable action type.</description>
+  </class>
+</library>

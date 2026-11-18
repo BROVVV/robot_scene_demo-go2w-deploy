@@ -1,0 +1,165 @@
+{
+  "boot_id": "3e6700dd-5afe-4822-945c-bf729c80a909",
+  "scope": "measured standing reference and floor only; unchanged sensor transforms and safety tolerances",
+  "posture": {
+    "joint_q": [
+      -0.02607637643814087,
+      0.701885998249054,
+      -1.351346492767334,
+      0.03803598880767822,
+      0.7167521715164185,
+      -1.368438959121704,
+      -0.03655749559402466,
+      0.7248552441596985,
+      -1.3673962354660034,
+      0.033469200134277344,
+      0.7007542252540588,
+      -1.3340964317321777
+    ],
+    "rpy": [
+      0.003912447486072779,
+      0.011647759936749935,
+      0.07580077648162842
+    ],
+    "mode": 1,
+    "error_code": 0,
+    "geometry": {
+      "wall_time": 1792392404.24438,
+      "profile_sha256": "11edbf3e1f3a9e5ad7cd36cab549852be171ea255605107da840c6d0f4ed86b3",
+      "execution_scope": "operator_supervised_field",
+      "self_surface_points_removed": 68,
+      "posture_valid": false,
+      "manufacturer_calibration": false
+    },
+    "joint_deltas": [
+      0.0038149356842041016,
+      0.03391081094741821,
+      -0.07200253009796143,
+      -0.026644229888916016,
+      0.06246250867843628,
+      -0.11917245388031006,
+      -0.043296873569488525,
+      -0.01223212480545044,
+      0.017803192138671875,
+      0.04565852880477905,
+      -0.016016840934753418,
+      0.004059791564941406
+    ]
+  },
+  "height": {
+    "scope": "kinematic estimate with side-photo posture crosscheck; not measured calibration",
+    "urdf_sha256": "f5940cbef9be28b76c075a94ed535c9c8c22c89a79b54ec8c854dc9f023c1ab8",
+    "posture_captured_at_unix": null,
+    "wheel_nominal_radius_m": 0.0889,
+    "legs": [
+      {
+        "leg": "FR",
+        "joint_angles_deg": [
+          -1.4940663148998543,
+          40.21510539899748,
+          -77.42645069537426
+        ],
+        "axle_xyz_in_level_base_m": [
+          0.1995924166211463,
+          -0.13484934176477875,
+          -0.34316319222261016
+        ],
+        "inferred_base_height_m": 0.43204136047228814
+      },
+      {
+        "leg": "FL",
+        "joint_angles_deg": [
+          2.1793016282867983,
+          41.066874384727676,
+          -78.40577687894903
+        ],
+        "axle_xyz_in_level_base_m": [
+          0.17449696127432454,
+          0.16990095470818817,
+          -0.3383049060073682
+        ],
+        "inferred_base_height_m": 0.4271267107012308
+      },
+      {
+        "leg": "RR",
+        "joint_angles_deg": [
+          -2.0945902071057154,
+          41.53114624827554,
+          -78.34603321427893
+        ],
+        "axle_xyz_in_level_base_m": [
+          -0.19070304334792273,
+          -0.16799298416573405,
+          -0.3352442431824822
+        ],
+        "inferred_base_height_m": 0.4240968834888803
+      },
+      {
+        "leg": "RL",
+        "joint_angles_deg": [
+          1.91764391137278,
+          40.15025958301738,
+          -76.43809500171673
+        ],
+        "axle_xyz_in_level_base_m": [
+          -0.21185941996185384,
+          0.13919370692994879,
+          -0.3389914116406353
+        ],
+        "inferred_base_height_m": 0.4278293134241086
+      }
+    ],
+    "four_leg_height_spread_m": 0.007944476983407833,
+    "base_height_m": 0.4274780120626697,
+    "radar_vertical_offset_m": -0.05019283317869274,
+    "lidar_center_height_m": 0.377285178883977,
+    "practical_estimate_interval_m": [
+      0.34728517888397703,
+      0.407285178883977
+    ],
+    "interval_kind": "engineering allowance, not statistical confidence interval",
+    "assumptions": [
+      "level floor",
+      "all four wheels in contact",
+      "official link geometry and SDK joint zero/order",
+      "nominal 7-inch tire diameter; compression and wheel lateral offsets not calibrated"
+    ],
+    "authorizes_motion": false,
+    "writes_safety_configuration": false
+  },
+  "floor_checks": [
+    {
+      "capture": "reboot_calibration_raw",
+      "plane": {
+        "normal": [
+          -0.12486389380584553,
+          0.21097537186696846,
+          0.9694835741203855
+        ],
+        "distance_m": 0.4375456607447656,
+        "inliers": 10927,
+        "candidates": 14027,
+        "rmse_m": 0.00915841679676983
+      },
+      "body_normal_angle_error_deg": 0.09664352751318192,
+      "body_floor_height_error_m": -0.011176918471713981
+    },
+    {
+      "capture": "reboot_calibration_heldout",
+      "plane": {
+        "normal": [
+          -0.12429502414195907,
+          0.2111538672434231,
+          0.9695178138238084
+        ],
+        "distance_m": 0.43692559736293696,
+        "inliers": 11059,
+        "candidates": 13982,
+        "rmse_m": 0.009146543803252232
+      },
+      "body_normal_angle_error_deg": 0.06885909440403894,
+      "body_floor_height_error_m": -0.011793712337929363
+    }
+  ],
+  "authorizes_motion": false
+}

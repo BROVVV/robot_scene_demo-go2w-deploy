@@ -220,7 +220,9 @@ void IMUPreintegrator::DeskewScanCloud(
 
   for (size_t i = 0; i < scan_cloud.size(); ++i) {
     const double stamp = scan_stamps[i];
-    int idx = -1;
+    // Points after the last IMU sample are extrapolated from the last interval
+    // instead of being left un-deskewed.
+    size_t idx = imu_measures.size() - 1;
     for (size_t j = 1; j < imu_measures.size(); ++j) {
       if (stamp < imu_measures[j].stamp) {
         idx = j - 1;
@@ -228,19 +230,17 @@ void IMUPreintegrator::DeskewScanCloud(
       }
     }
 
-    if (idx < 0) {
-      continue;
-    }
-
     const float dt = static_cast<float>(stamp - imu_measures[idx].stamp);
     const Eigen::Vector3f acc = imu_measures[idx].acc - ab;
     const Eigen::Vector3f gyro = imu_measures[idx].gyro - gb;
 
+    // preint_Ts_[k] / preint_vs_[k] hold the state at imu_measures[k - 1].stamp,
+    // so the base of imu_measures[idx].stamp is index idx + 1.
     const Sophus::SO3f dR = Sophus::SO3f::exp(gyro * dt);
-    const Sophus::SO3f R = preint_Ts_[idx].so3() * dR;
+    const Sophus::SO3f R = preint_Ts_[idx + 1].so3() * dR;
     const Eigen::Vector3f wacc = R * acc - gacc;
-    const Eigen::Vector3f v_prev = preint_vs_[idx];
-    const Eigen::Vector3f t = preint_Ts_[idx].translation()
+    const Eigen::Vector3f v_prev = preint_vs_[idx + 1];
+    const Eigen::Vector3f t = preint_Ts_[idx + 1].translation()
                             + v_prev * dt + 0.5f * wacc * dt * dt;
     const Sophus::SE3f Toi(R, t);
 

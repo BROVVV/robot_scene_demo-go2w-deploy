@@ -1,0 +1,249 @@
+{
+  "scope": "partial current body-fixed surface revalidation; not full physical navigation acceptance",
+  "method": "raw_background_registration_body_vs_world",
+  "radius_m": 0.03,
+  "body_match_m": 0.03,
+  "world_mismatch_all_fits_m": 0.08,
+  "registered_motion": {
+    "motion_sent": false,
+    "hypothesis_only": true,
+    "before": "artifacts/go2w_live_20261019/rear_occupancy_geometry",
+    "after": "artifacts/go2w_live_20261019/rear_occupancy_after_move_raw",
+    "wheel_body_rotation_rpy": [
+      0.0072576917098702955,
+      0.015900190009482174,
+      -0.08866117306971244
+    ],
+    "wheel_body_translation_m": [
+      -0.4721671626424402,
+      0.03672528892517794,
+      -0.00526204841498376
+    ],
+    "source_points": 20649,
+    "target_points": 20007,
+    "fits": [
+      {
+        "raw_rotation_rpy": [
+          -0.013991538136344838,
+          0.007789582457389255,
+          0.09045534269141946
+        ],
+        "raw_translation_m": [
+          -0.25042837133097834,
+          0.3813066653012484,
+          -0.09963569602941569
+        ],
+        "last": {
+          "iteration": 9,
+          "matches": 11380,
+          "median_plane_error": 0.011303918042027954,
+          "singular_values": [
+            114.6060164391965,
+            97.62097825616274,
+            80.69789656894922,
+            77.92132558124096,
+            47.78356610108046,
+            27.360729881984845
+          ]
+        },
+        "body_yaw_change_deg": -5.209451049700656,
+        "planar_translation_estimate_m": [
+          0.08481578841872568,
+          0.056603071955011366
+        ],
+        "translation_equation_residual_m": 0.014807235595890235,
+        "translation_singular_values": [
+          0.09188224164625323,
+          0.09093185427741131
+        ]
+      },
+      {
+        "raw_rotation_rpy": [
+          -0.014849915683829294,
+          0.007799410841585086,
+          0.08974104272818102
+        ],
+        "raw_translation_m": [
+          -0.24735429439057316,
+          0.3828675521806259,
+          -0.10095685137637035
+        ],
+        "last": {
+          "iteration": 30,
+          "matches": 10499,
+          "median_plane_error": 0.01061603167160338,
+          "singular_values": [
+            110.75824327088694,
+            97.15361504860851,
+            76.80879010563945,
+            74.64992550423422,
+            47.41934785381944,
+            26.668308029443484
+          ]
+        },
+        "body_yaw_change_deg": -5.176202733287504,
+        "planar_translation_estimate_m": [
+          0.12296075530121336,
+          0.059421472997432834
+        ],
+        "translation_equation_residual_m": 0.013018271624095206,
+        "translation_singular_values": [
+          0.09131926304557571,
+          0.09035291554052521
+        ]
+      },
+      {
+        "raw_rotation_rpy": [
+          -0.013991522091405462,
+          0.007789563809182942,
+          0.09045536427213205
+        ],
+        "raw_translation_m": [
+          -0.25042835276226105,
+          0.38130664148604626,
+          -0.09963558322512375
+        ],
+        "last": {
+          "iteration": 14,
+          "matches": 11380,
+          "median_plane_error": 0.011303809948763736,
+          "singular_values": [
+            114.60602726988176,
+            97.62095618159329,
+            80.69788968123682,
+            77.921308292553,
+            47.78356492799792,
+            27.36072930225573
+          ]
+        },
+        "body_yaw_change_deg": -5.209451875653808,
+        "planar_translation_estimate_m": [
+          0.08481589771156499,
+          0.05660352492999146
+        ],
+        "translation_equation_residual_m": 0.01480734401899031,
+        "translation_singular_values": [
+          0.0918822586687826,
+          0.09093186877606313
+        ]
+      }
+    ],
+    "warning": "One short turn does not establish the full horizontal extrinsic. No live configuration changed."
+  },
+  "candidate": {
+    "motion_sent": false,
+    "authorizes_motion": false,
+    "candidate_only": true,
+    "body_match_m": 0.03,
+    "must_reject_all_registered_world_hypotheses_m": 0.08,
+    "surface_radius_unchanged_m": 0.03,
+    "before_points_selected": 928,
+    "after_points_selected": 774,
+    "candidate_points": 1636,
+    "body_bounds": [
+      [
+        -0.5497645676941674,
+        -0.4383256242987154,
+        -0.37995764135863586
+      ],
+      [
+        -0.4214957388087573,
+        -0.15069980610275643,
+        -0.2446038841920325
+      ],
+      [
+        -0.15006504038650498,
+        0.39696195617302643,
+        -0.11187207700641852
+      ]
+    ],
+    "independent_heldout_newly_filtered_points": 31,
+    "heldout_filtered_body_bounds": [
+      [
+        -0.35478586621702624,
+        -0.30645596315579743,
+        -0.4057748215548357
+      ],
+      [
+        -0.2709773175345489,
+        -0.24849455980543325,
+        -0.3216376012581267
+      ],
+      [
+        -0.14283502281107077,
+        0.34641477228585765,
+        -0.10930901563867815
+      ]
+    ],
+    "heldout_far_points_newly_filtered": 0
+  },
+  "development_replay": {
+    "old": {
+      "frames": 62,
+      "floor_rejected_frames": 0,
+      "total_obstacles": 36927,
+      "frames_with_endpoint_in_start_footprint": 3,
+      "newly_removed_raw_points": 0,
+      "far_points_newly_removed": 0,
+      "remaining_intruding_points_body": []
+    },
+    "refined": {
+      "frames": 62,
+      "floor_rejected_frames": 0,
+      "total_obstacles": 36906,
+      "frames_with_endpoint_in_start_footprint": 0,
+      "newly_removed_raw_points": 48,
+      "far_points_newly_removed": 0,
+      "remaining_intruding_points_body": []
+    }
+  },
+  "new_location_heldout": {
+    "old": {
+      "frames": 77,
+      "floor_rejected_frames": 0,
+      "total_obstacles": 38283,
+      "frames_with_endpoint_in_start_footprint": 12,
+      "newly_removed_raw_points": 0,
+      "far_points_newly_removed": 0,
+      "remaining_intruding_points_body": []
+    },
+    "refined": {
+      "frames": 77,
+      "floor_rejected_frames": 0,
+      "total_obstacles": 38253,
+      "frames_with_endpoint_in_start_footprint": 3,
+      "newly_removed_raw_points": 61,
+      "far_points_newly_removed": 0,
+      "remaining_intruding_points_body": [
+        [
+          -0.43213325355498444,
+          0.09947047250344579,
+          -0.3577075579914514
+        ],
+        [
+          -0.4374081204871284,
+          0.09770028216205548,
+          -0.3609977456948641
+        ],
+        [
+          -0.43903984794558626,
+          0.09374123657230832,
+          -0.35403030546855774
+        ]
+      ]
+    }
+  },
+  "limitations": [
+    "The new-location heldout retains three previously unobserved returns; they are NOT erased or claimed to be self.",
+    "Only sampled body-fixed surfaces are added; no box-shaped mask or radius expansion.",
+    "Body-match criterion is 3cm (existing model radius); world rejection is increased from the prior 6cm to 8cm.",
+    "No claim that every position or future joint posture is validated. Existing current-footprint and live collision gates remain mandatory."
+  ],
+  "input_sha256": {
+    "artifacts/go2w_live_20261019/rear_occupancy_geometry/cloud.npz": "1d8413c299318eb99d33960e8d30ca1ab819f4a2ff5d1cf58ae5fffcebae1943",
+    "artifacts/go2w_live_20261019/rear_occupancy_after_move_raw/cloud.npz": "74ad472002487c02a64c299f4efa04d3920cb112d3beb2946a545b12110d3232",
+    "artifacts/go2w_live_20261019/compensated_current_geometry/cloud.npz": "b279e9aeea11f46e48fa099defa3bc70af881b6d7ffc8924fc5425558a2169f5",
+    "artifacts/go2w_live_20261019/rear_surface_final_heldout/cloud.npz": "507cc5e08470453c196589ac7ee6493e1e811383f575de5ef6016c2485226706"
+  },
+  "model_sha256": "eb181f65df70dbd954110dddada34bd0d99ae7b3e881546be0f53634a7235993"
+}

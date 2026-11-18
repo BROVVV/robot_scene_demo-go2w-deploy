@@ -1,0 +1,23 @@
+extrinsic_lidar2base_quat_xyzw_xyz: [0.0025613, 0.0081921, 0.0989708, 0.995053, 0.130, 0.015, 0.014]
+extrinsic_imu2base_quat_xyzw_xyz: [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+lidar_frame: pandarxt16_link_unvalidated
+imu_frame: utlidar_imu
+base_frame: base_link
+odom_frame: rko_odom
+deskew: true
+lidar_timestamps.force_absolute: true
+lidar_timestamps.multiplier_to_seconds: 1.0
+double_downsample: true
+max_iterations: 30
+initialization_phase: true
+voxel_size: 1.0
+max_points_per_voxel: 20
+max_range: 60.0
+min_range: 1.0
+max_correspondence_distance: 0.5
+odom_topic: /rko_lio/odom
+publish_deskewed_scan: true
+deskewed_scan_topic: /rko_lio/frame
+publish_local_map: true
+map_topic: /rko_lio/local_map
+publish_map_after: 2.0

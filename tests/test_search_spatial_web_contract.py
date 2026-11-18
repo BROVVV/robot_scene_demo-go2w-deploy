@@ -1,15 +1,18 @@
-"""Web contract tests (plan §19.8).
+"""Web contract tests (plan §19.8, reshaped by §2.2).
 
-Verifies that /api/search/state / WebSocket snapshots expose the persistent
-semantic graph, route plan, startup lifecycle and next-motion data required by
-the WebUI.
+Verifies that /api/search/state / WebSocket snapshots expose the session's
+**single** graph, the route plan, the startup lifecycle and next-motion data
+required by the WebUI.
+
+§2.2 之前这里有 `spatial.semantic_graph` / `spatial.route_plan` 两个投影口；
+现在图走 `state.graph`，`spatial` 只留"不是图"的运行时字段。
 """
 
 from __future__ import annotations
 
 from app.live_robot.search_event import (
     DECISION_RECORDED,
-    MAP_UPDATED,
+    LONG_TERM_GOAL_SELECTED,
     SEARCH_STATE_CHANGED,
     SearchEvent,
 )
@@ -26,11 +29,11 @@ def _event(event_type: str, payload: dict, event_id: int = 1) -> SearchEvent:
     )
 
 
-def test_snapshot_has_semantic_graph_and_route():
+def test_snapshot_has_one_graph_and_a_route_plan():
     store = SearchStateStore()
     store.reset(session_id="s1", target="目标")
-    graph = {
-        "schema_version": "semantic_entity_graph_v1",
+    store.set_graph({
+        "schema_version": "semantic_navigation_graph_v1",
         "revision": 3,
         "current_place_id": "P2",
         "nodes": [
@@ -43,17 +46,27 @@ def test_snapshot_has_semantic_graph_and_route():
         "places": [{"place_id": "P1"}],
         "objects": [{"object_id": "obj_001", "label": "桌", "status": "CONFIRMED"}],
         "frontiers": [],
+        "object_topology": None,
+    })
+    store.apply(_event(LONG_TERM_GOAL_SELECTED, {
+        "intent": {"intent_id": "i1"},
         "route_plan": {
-            "route_id": "route_001", "frame_id": "map", "target_type": "FRONTIER_CANDIDATE",
+            "route_id": "route_001", "frame_id": "map",
+            "target_type": "FRONTIER_CANDIDATE",
             "target_id": "F1", "target_position": [1.0, 1.0],
             "waypoints": [[0.0, 0.0]], "reachable": True,
             "planner_source": "grid_astar", "cost_components": {},
         },
-    }
-    store.apply(_event(MAP_UPDATED, {"graph": graph}))
-    spatial = store.spatial_snapshot()
-    assert spatial["semantic_graph"] is not None
-    assert spatial["route_plan"]["route_id"] == "route_001"
+    }))
+    snapshot = store.snapshot()
+    assert snapshot["graph"]["revision"] == 3
+    assert snapshot["graph_revision"] == 3
+    assert snapshot["graph"]["current_place_id"] == "P2"
+    # route_plan 不是图 —— 它每次选目标都变，留在 spatial 里。
+    assert snapshot["spatial"]["route_plan"]["route_id"] == "route_001"
+    # 第二份图不许回来。
+    for stale in ("semantic_graph", "place_graph", "frontiers", "semantic_objects"):
+        assert stale not in snapshot["spatial"]
 
 
 def test_snapshot_has_last_decision_and_next_motion():
@@ -102,22 +115,22 @@ def test_start_btn_state_gates_active():
 
 
 def test_snapshot_has_object_topology_projection():
-    """Plan §35 / §38: spatial.semantic_graph.object_topology must exist.
+    """Plan §35 / §38：对象拓扑必须是 `state.graph.object_topology`。
 
-    The WebUI semantic-topology view reads
-    ``state.spatial.semantic_graph.object_topology`` directly - no second state
-    store, no extra endpoint.
+    WebUI 的语义拓扑页直接读这一份 —— 没有第二个 state store、没有额外端点、
+    也没有第二张图。对象拓扑来自生产者的 `web_snapshot()`，store 只负责保管。
     """
     store = SearchStateStore()
     store.reset(session_id="s1", target="目标")
     graph = {
-        "schema_version": "semantic_entity_graph_v1",
+        "schema_version": "semantic_navigation_graph_v1",
         "revision": 7,
         "nodes": [],
         "edges": [],
         "places": [],
         "objects": [],
         "frontiers": [],
+        "current_place_id": None,
         "object_topology": {
             "schema_version": "semantic_object_topology_v1",
             "revision": 7,
@@ -133,12 +146,9 @@ def test_snapshot_has_object_topology_projection():
             ],
             "stats": {"node_count": 1, "edge_count": 1, "connected_components": 1},
         },
-        "route_plan": None,
     }
-    store.apply(_event(MAP_UPDATED, {"graph": graph}))
-    spatial = store.spatial_snapshot()
-    assert spatial["semantic_graph"] is not None
-    topology = spatial["semantic_graph"].get("object_topology")
+    store.set_graph(graph)
+    topology = store.snapshot()["graph"].get("object_topology")
     assert topology is not None
     assert topology["schema_version"] == "semantic_object_topology_v1"
     assert isinstance(topology["nodes"], list)

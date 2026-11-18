@@ -23,7 +23,10 @@ pid_root="${project_root}/runtime/go2w/pids"
 mkdir -p "${log_root}" "${pid_root}"
 
 target=""
-backend="go2w_experimental"
+# 计划书 §4.3：这里不再有默认后端。真实运动只有一个后端 nav2，而它的生产入口是
+# scripts/go2w/start_nav2_autonomous_search.sh；本脚本是 §23.2 的有人监督实验壳，
+# 必须由调用方显式说明要跑哪条链，不许替人静默挑一个。
+backend=""
 max_seconds=600
 max_motion_steps=50
 turn_only=""
@@ -58,6 +61,14 @@ done
 
 if [[ -z "${target}" ]]; then
   printf '%s\n' 'ERROR: --target is required (e.g. 饮水机旁边的蓝色垃圾桶)' >&2
+  exit 2
+fi
+
+if [[ -z "${backend}" ]]; then
+  printf '%s\n' \
+    'ERROR: --backend is required.' \
+    '  真实运动只有 nav2 一个后端，生产入口是 scripts/go2w/start_nav2_autonomous_search.sh；' \
+    '  本脚本只用于 mock / mock_metric 离线实验（--backend mock|mock_metric）。' >&2
   exit 2
 fi
 
@@ -285,7 +296,7 @@ if [[ "${NO_VLM_DAEMON:-0}" != "1" ]]; then
 fi
 
 # --- run the exploration CLI ---------------------------------------------------------
-args=(scripts/go2w/run_semantic_exploration.py --target "${target}" --backend go2w_experimental)
+args=(scripts/go2w/run_semantic_exploration.py --target "${target}" --backend "${backend}")
 [[ -n "${turn_only}" ]] && args+=( "${turn_only}" )
 [[ -n "${record_video}" ]] && args+=( --record-video "${record_video}" )
 [[ -n "${output}" ]] && args+=( --output "${output}" )

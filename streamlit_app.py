@@ -38,12 +38,12 @@ from app.services.psg_builder import (
 from app.services.route_planner import format_route_plan
 from app.services.scene_analyzer import SceneAnalyzer
 from app.services.target_matcher import format_target_decision
+from app.task_understanding import task_pipeline
 from app.task_understanding.task_pipeline import (
     gate_result_to_dict,
     navigation_target_text,
     navigation_task_to_dict,
     parsed_task_to_dict,
-    prepare_navigation_task_from_text,
     write_task_understanding_outputs,
 )
 from app.video.video_target_search_pipeline import run_video_target_search_pipeline
@@ -474,7 +474,7 @@ def _render_runtime_status(settings: dict) -> None:
     gate_result = None
     nav_task = None
     try:
-        parsed_task, gate_result, nav_task = prepare_navigation_task_from_text(
+        parsed_task, gate_result, nav_task = task_pipeline.prepare_navigation_task_from_text(
             settings["target_text"]
         )
     except ValueError:
@@ -521,7 +521,7 @@ def _run_and_render(settings: dict) -> None:
                         "enable_llm_reasoning_memory": False,
                     },
                 )
-            parsed_task, gate_result, nav_task = prepare_navigation_task_from_text(
+            parsed_task, gate_result, nav_task = task_pipeline.prepare_navigation_task_from_text(
                 settings["target_text"]
             )
             task_paths = write_task_understanding_outputs(
@@ -630,7 +630,7 @@ def _run_and_render(settings: dict) -> None:
 
 
 def _run_video_and_render(settings: dict) -> None:
-    parsed_task, gate_result, nav_task = prepare_navigation_task_from_text(
+    parsed_task, gate_result, nav_task = task_pipeline.prepare_navigation_task_from_text(
         settings["target_text"]
     )
     task_paths = write_task_understanding_outputs(
@@ -1135,7 +1135,9 @@ def _run_api(
         target_text.strip(),
         use_llm=settings.enable_target_profile,
     )
-    parsed_task, _, nav_task = prepare_navigation_task_from_text(target_text.strip())
+    parsed_task, _, nav_task = task_pipeline.prepare_navigation_task_from_text(
+        target_text.strip()
+    )
     if use_grounded_sam:
         analyzer = SceneAnalyzer(
             object_detector=GroundedSAMSubprocessDetector(
@@ -1203,7 +1205,9 @@ def _build_ui_visual_retry_callback(settings: dict):
         target_text,
         use_llm=runtime.enable_target_profile,
     )
-    parsed_task, _, nav_task = prepare_navigation_task_from_text(target_text)
+    parsed_task, _, nav_task = task_pipeline.prepare_navigation_task_from_text(
+        target_text
+    )
     if settings["mode"] == "GroundingDINO+SAM2":
         detector = GroundedSAMSubprocessDetector(
             runtime,
@@ -1268,8 +1272,11 @@ def _render_result(
         st.text(format_route_plan(result))
 
     task_text = target_text or result.target_decision.target_text
-    legacy_task = parse_robot_task(task_text)
-    parsed_task, gate_result, nav_task = prepare_navigation_task_from_text(
+    # Task understanding is already performed below.  This compatibility
+    # projection must stay local so a page render never starts a second,
+    # unbounded remote interpretation request.
+    legacy_task = parse_robot_task(task_text, use_llm=False)
+    parsed_task, gate_result, nav_task = task_pipeline.prepare_navigation_task_from_text(
         task_text
     )
     tab_names = ["物体", "关系", "拓扑", "标注", "任务"]

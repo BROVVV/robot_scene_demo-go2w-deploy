@@ -8,11 +8,14 @@ current_evidence:
   footprint_confirmed: true
   scan_frame_valid: true
   lidar_fresh: false
-  lio_fresh: false
+  navigation_localization_valid: false
   map_valid: false
   tf_valid: false
   compute_path_to_pose_ready: false
-  nav2_allow_execute: false
+  nav2_lifecycle_active: false
+  speed_chain_single_publisher: false
+  control_source_nav2: false
+  nav2_allow_execute: true
   collision_monitor_active: false
   velocity_smoother_active: false
   lease_valid: false
@@ -35,4 +38,10 @@ notes:
   - The base_link scan frame and stationary LiDAR preprocessing passed read-only live validation; lidar_fresh remains a live runtime field and is false while the stack is stopped.
   - Official Unitree Point-LIO passed a five-minute stationary read-only trial, but lio_fresh remains a live runtime field and is false while the stack is stopped; Level D motion/map trials were not run.
   - Runtime health fields must come from live ROS observations, never operator assumptions.
-  - This file authorizes neither motion nor a Sport lease.
+  - >
+    nav2_allow_execute was enabled on 2026-10-23 after the owner explicitly
+    granted continuing motion authorization and a supervised Nav2 validation
+    produced 0.257 m wheel-odometry displacement. This static switch does not
+    replace the live lidar, localization, collision, lease, error, estop,
+    control-source, command-watchdog, or per-goal wheel-travel gates.
+  - This file does not itself acquire a Sport lease or arm motion.

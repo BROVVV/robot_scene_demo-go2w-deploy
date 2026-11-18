@@ -31,6 +31,25 @@ class Clearance:
     right: float
 
 
+def sensor_header_fresh(
+    *, now_ns: int, stamp_sec: int, stamp_nanosec: int,
+    timeout_seconds: float, future_tolerance_seconds: float = 0.05,
+) -> bool:
+    """Reject newly received scans whose acquisition time is stale or future.
+
+    Receive-time freshness alone stayed true when an obsolete clock fit made
+    every scan roughly seven minutes old, leaving Nav2's obstacle layer blind.
+    """
+    if (stamp_sec <= 0 or not 0 <= stamp_nanosec < 1_000_000_000
+            or not math.isfinite(timeout_seconds) or timeout_seconds <= 0
+            or not math.isfinite(future_tolerance_seconds)
+            or future_tolerance_seconds < 0):
+        return False
+    age_ns = int(now_ns) - (int(stamp_sec) * 1_000_000_000 + int(stamp_nanosec))
+    return (-int(future_tolerance_seconds * 1e9)
+            <= age_ns <= int(timeout_seconds * 1e9))
+
+
 def rotation_observability_report(
     p: PreprocessParameters, *, angular_samples: int = 720
 ) -> dict:
@@ -266,9 +285,28 @@ def directional_clearance(obstacles: np.ndarray, p: PreprocessParameters) -> Cle
     forward = values[:, 0]
     left_axis = values[:, 1]
     radial = np.hypot(forward, left_axis)
-    front_mask = (forward > 0.0) & (np.abs(left_axis) <= p.front_corridor_half_width)
-    left_mask = (left_axis > 0.0) & (radial <= p.rotation_envelope_radius)
-    right_mask = (left_axis < 0.0) & (radial <= p.rotation_envelope_radius)
+    # Keep clearance on exactly the same observable planar range as the
+    # published safety scan.  ``filter_points_base_link`` bounds the 3-D norm,
+    # so a low wheel/leg return can have a valid 3-D distance while its planar
+    # projection is inside the LiDAR blind radius.  Feeding that projection to
+    # clearance produced millimetre-scale false stops even though the same
+    # return was correctly absent from ``/go2w/lidar/scan``.
+    observable = (radial >= p.minimum_range) & (radial <= p.maximum_range)
+    front_mask = (
+        observable
+        & (forward > 0.0)
+        & (np.abs(left_axis) <= p.front_corridor_half_width)
+    )
+    left_mask = (
+        observable
+        & (left_axis > 0.0)
+        & (radial <= p.rotation_envelope_radius)
+    )
+    right_mask = (
+        observable
+        & (left_axis < 0.0)
+        & (radial <= p.rotation_envelope_radius)
+    )
 
     def minimum(values_: np.ndarray) -> float:
         return float(np.min(values_)) if values_.size else math.inf
@@ -302,6 +340,7 @@ def laser_scan_ranges(
         & (distances <= range_max)
     )
     bins = ((angles[valid] - angle_min) / angle_increment).astype(np.int64)
-    for index, distance in zip(bins, distances[valid]):
-        ranges[index] = min(ranges[index], float(distance))
+    # Repeated bins must reduce to their nearest return. ``at`` performs the
+    # reduction in NumPy without a Python iteration for every LiDAR point.
+    np.minimum.at(ranges, bins, distances[valid])
     return ranges

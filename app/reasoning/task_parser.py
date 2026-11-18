@@ -14,13 +14,16 @@ from app.task_understanding.task_pipeline import (
 )
 
 
-def parse_robot_task(target_text: str) -> RobotTask:
+def parse_robot_task(target_text: str, *, use_llm: bool = True) -> RobotTask:
     """
     Deprecated compatibility wrapper.
 
     New code should call
     app.task_understanding.task_pipeline.run_task_understanding_pipeline directly.
     """
+    if not use_llm:
+        return _offline_compat_task(target_text)
+
     result = run_task_understanding_pipeline(target_text)
     task = convert_new_task_to_legacy_format(result)
     if result.parsed_task.parser_source in {

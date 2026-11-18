@@ -1,56 +1,189 @@
-amcl:
-  ros__parameters: {use_sim_time: false, base_frame_id: base_link, global_frame_id: map, odom_frame_id: odom}
+# GO2-W 自主搜索单链路 Nav2 参数（计划书 §6.3 / §6.4）。
+#
+# Coordinate chain: map -> odom_fused -> base_link.
+# SLAM Toolbox (or AMCL/map_server) owns map localization, wheel odometry
+# owns fused->base. Their launch and health monitor are independent of Nav2.
+# Unknown map cells remain unknown; NavFn must not plan through them.
+#
+# velocity_smoother 在 Humble 里没有 cmd_vel_in_topic / cmd_vel_out_topic 参数，
+# 它的输入输出固定叫 cmd_vel / cmd_vel_smoothed，只能在 launch 里 remap。
+# collision_monitor 有这两个参数，所以直接写在它自己的 yaml 里。
+
+bt_navigator:
+  ros__parameters:
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /go2w/odom/fused
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    # plugin_lib_names 必须显式给。Foxy 0.4.7 的 nav2_bt_navigator 二进制内置默认值
+    # 里有 nav2_change_goal_node_bt_node，而同版本的 ros-foxy-nav2-behavior-tree
+    # 只装了 24 个库、里面没有 change_goal（dpkg -V 干净，不是这台机器装坏了）。
+    # 于是 bt_navigator 在 configure 阶段 "Could not load library" 失败，
+    # lifecycle_manager 跟着 "Failed to bring up all requested nodes. Aborting bringup."
+    # 这里只列 behavior_trees/navigate_to_pose_robot_scene.xml 用到的节点。该 XML 的
+    # 节点类型是固定的，将来若改了 XML 而漏列，configure 阶段会立刻报出来。
+    # ReactiveFallback 是 BT.CPP 内建控制节点，不需要库，所以不在表里。
+    #
+    # **两棵树都由 launch 填**（default_nav_to_pose_bt_xml 与 default_nav_through_poses_bt_xml
+    # 用同一个按模式选出的 XML，见 launch）。这曾经是个坑：Humble 的 bt_navigator 在
+    # on_activate 里会把**两棵默认树都先解析一遍**，所以只要有一棵落在库存默认值上，
+    # 那棵树的节点就会成为真正的要求。库存的 navigate_through_poses_w_replanning_and_recovery.xml
+    # 含 BackUp / RemovePassedGoals / Spin，本表没有、behavior_plugins 也刻意不注册 backup，
+    # 于是整条 bringup 在激活阶段中止：
+    #   [bt_navigator]: "backup" action server not available after waiting for 1.00s
+    #   Exception when loading BT: Action server backup not available
+    #   [lifecycle_manager_navigation] Failed to bring up all requested nodes. Aborting bringup.
+    # 中止之后 velocity_smoother / collision_monitor / behavior_server 全停在 inactive，
+    # 而 planner_server 与 controller_server 已经是 active —— 只看那两个会误判成好的。
+    # 只规划模式看不出来（PLAN_ONLY_NODES 里没有 controller_server，走的是另一棵更小的树），
+    # 执行模式必炸。
+    plugin_lib_names:
+      - nav2_clear_costmap_service_bt_node          # ClearEntireCostmap
+      - nav2_compute_path_to_pose_action_bt_node    # ComputePathToPose
+      - nav2_follow_path_action_bt_node             # FollowPath
+      - nav2_goal_updated_condition_bt_node         # GoalUpdated
+      - nav2_pipeline_sequence_bt_node              # PipelineSequence
+      - nav2_rate_controller_bt_node                # RateController
+      - nav2_recovery_node_bt_node                  # RecoveryNode
+      - nav2_round_robin_node_bt_node               # RoundRobin
+      - nav2_wait_action_bt_node                    # Wait
+    # BT XML 的绝对路径由 launch 填成仓库自带的 navigate_to_pose_robot_scene.xml
+    # （只有 ComputePathToPose + FollowPath，恢复分支只清代价地图和等待，不会
+    # backup / drive_on_heading）。参数名在两个 distro 上不同，见 launch。
+
 planner_server:
   ros__parameters:
+    expected_planner_frequency: 5.0
     planner_plugins: [GridBased]
-    GridBased: {plugin: "nav2_navfn_planner/NavfnPlanner", tolerance: 0.25, use_astar: true, allow_unknown: false}
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.10
+      use_astar: true
+      allow_unknown: false
+
 controller_server:
   ros__parameters:
     controller_frequency: 20.0
-    controller_plugins: [FollowPath]
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    odom_topic: /go2w/odom/fused
+    progress_checker_plugin: "progress_checker"
     goal_checker_plugins: [general_goal_checker]
-    general_goal_checker: {plugin: "nav2_controller::SimpleGoalChecker", xy_goal_tolerance: 0.25, yaw_goal_tolerance: 0.25, stateful: true}
-    FollowPath: {plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController", desired_linear_vel: 0.15, lookahead_dist: 0.35, use_velocity_scaled_lookahead_dist: true, max_angular_accel: 0.40}
+    controller_plugins: [FollowPath]
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.10
+      movement_time_allowance: 8.0
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.20
+      yaw_goal_tolerance: 0.20
+      # SLAM may correct map->odom while aligning yaw; recheck XY every tick.
+      stateful: false
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      # Recorded short physical working command (2026-10-27): the complete
+      # command chain and SDK accepted 0.30 m/s. Collision stopping remains.
+      desired_linear_vel: 0.30
+      min_approach_linear_velocity: 0.30
+      lookahead_dist: 0.30
+      min_lookahead_dist: 0.20
+      max_lookahead_dist: 0.45
+      use_velocity_scaled_lookahead_dist: true
+      use_collision_detection: true
+      max_allowed_time_to_collision_up_to_carrot: 1.5
+      use_cost_regulated_linear_velocity_scaling: true
+      cost_scaling_dist: 0.80
+      cost_scaling_gain: 0.50
+      # RPP inverts the inflation cost using this coefficient; it must match
+      # both costmaps below rather than silently using its default 3.0.
+      inflation_cost_scaling_factor: 2.0
+      regulated_linear_scaling_min_speed: 0.30
+      max_angular_accel: 0.80
+      transform_tolerance: 0.3
+
+behavior_server:
+  ros__parameters:
+    global_frame: odom_fused
+    robot_base_frame: base_link
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    # 只保留无平移的行为：backup / drive_on_heading / assisted_teleop 会让机器人
+    # 在没经过走廊分析的情况下位移，因此不注册。树里也不会调用它们。
+    behavior_plugins: [spin, wait]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    transform_tolerance: 0.3
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 0.50
+    min_rotational_vel: 0.10
+    rotational_acc_lim: 0.80
+
 global_costmap:
   global_costmap:
     ros__parameters:
       global_frame: map
       robot_base_frame: base_link
-      # Unitree Go2-W official 0.70 x 0.43 m standing envelope, centered on base_link.
-      # Execution still requires live clearance validation and the separate hard gate.
-      footprint: "[[0.35,0.215],[0.35,-0.215],[-0.35,-0.215],[-0.35,0.215]]"
+      # Unitree Go2-W 官方站立外廓 0.70 x 0.43 m，以 base_link 为中心。
+      footprint: "[[0.35, 0.215], [0.35, -0.215], [-0.35, -0.215], [-0.35, 0.215]]"
+      footprint_padding: 0.04
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      transform_tolerance: 0.3
+      resolution: 0.05
+      track_unknown_space: true
       plugins: [static_layer, obstacle_layer, inflation_layer]
-      static_layer: {plugin: "nav2_costmap_2d::StaticLayer"}
-      obstacle_layer: {plugin: "nav2_costmap_2d::ObstacleLayer", observation_sources: scan, scan: {topic: /go2w/lidar/scan, data_type: LaserScan, clearing: true, marking: true}}
-      inflation_layer: {plugin: "nav2_costmap_2d::InflationLayer", inflation_radius: 0.55}
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: /map
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        observation_sources: scan
+        scan:
+          topic: /go2w/lidar/navigation_scan
+          data_type: LaserScan
+          clearing: true
+          marking: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # 有梯度的软代价：宽走廊中线代价最低，窄走廊仍可在满足 footprint 与
+        # 硬安全距离时通过（计划书 §6.4 的说明）。
+        inflation_radius: 1.00
+        cost_scaling_factor: 2.0
+
 local_costmap:
   local_costmap:
     ros__parameters:
-      global_frame: odom
+      global_frame: odom_fused
       robot_base_frame: base_link
       rolling_window: true
       width: 4
       height: 4
       resolution: 0.05
-      # Same manufacturer standing envelope as the global costmap.
-      footprint: "[[0.35,0.215],[0.35,-0.215],[-0.35,-0.215],[-0.35,0.215]]"
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      transform_tolerance: 0.3
+      footprint: "[[0.35, 0.215], [0.35, -0.215], [-0.35, -0.215], [-0.35, 0.215]]"
+      footprint_padding: 0.04
       plugins: [obstacle_layer, inflation_layer]
-      obstacle_layer: {plugin: "nav2_costmap_2d::ObstacleLayer", observation_sources: scan, scan: {topic: /go2w/lidar/scan, data_type: LaserScan, clearing: true, marking: true}}
-      inflation_layer: {plugin: "nav2_costmap_2d::InflationLayer", inflation_radius: 0.55}
-bt_navigator:
-  ros__parameters: {global_frame: map, robot_base_frame: base_link, odom_topic: /lio/odom}
-behavior_server:
-  ros__parameters: {global_frame: map, robot_base_frame: base_link}
-map_server:
-  ros__parameters: {yaml_filename: ""}
-velocity_smoother:
-  ros__parameters:
-    smoothing_frequency: 20.0
-    scale_velocities: false
-    feedback: OPEN_LOOP
-    max_velocity: [0.15, 0.0, 0.20]
-    min_velocity: [-0.15, 0.0, -0.20]
-    max_accel: [0.20, 0.0, 0.40]
-    max_decel: [-0.20, 0.0, -0.40]
-    odom_topic: /lio/odom
-    velocity_timeout: 0.30
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        observation_sources: scan
+        scan:
+          topic: /go2w/lidar/navigation_scan
+          data_type: LaserScan
+          clearing: true
+          marking: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 1.00
+        cost_scaling_factor: 2.0
+
+# velocity_smoother 的参数只在 config/velocity_smoother.yaml 里写一份，由 launch
+# 传给该节点；同一个参数不在两个文件里各写一遍。

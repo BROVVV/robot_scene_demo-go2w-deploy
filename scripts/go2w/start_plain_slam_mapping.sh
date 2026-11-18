@@ -75,9 +75,7 @@ topic_alive() {
 
 topic_receiving() {
   local topic="$1"
-  local out
-  out="$(timeout "$2" ros2 topic hz "${topic}" --window 3 2>/dev/null || true)"
-  [[ -n "${out}" ]]
+  /usr/bin/python3 "${script_dir}/check_ros_topic_flow.py" "${topic}" "$2" >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------
@@ -131,6 +129,65 @@ fi
 # ---------------------------------------------------------------------------
 # 6. + 7. launch + readiness
 # ---------------------------------------------------------------------------
+# 磁盘预检：建图会话会往 map_cache_dir 里无限写点云（每个关键帧两个 .bin，
+# 回环检测和 BuildMapCloud 都要读回它们，所以运行中不能删）。起步就留够
+# 余量，别让一次长会话把根盘写满 —— 2026-09-11 实测写满到 100%，清掉 47G
+# 才恢复。运行期的守护见 guard_plain_slam_disk.sh。
+min_free_gb="${GO2W_SLAM_DISK_MIN_FREE_GB:-20}"
+free_gb="$(df -BG --output=avail /tmp 2>/dev/null | tail -n 1 | tr -cd '0-9' || true)"
+if (( ${free_gb:-0} < min_free_gb )); then
+  printf 'ERROR: /tmp 只剩 %sG，低于下限 %sG，拒绝启动建图。\n' \
+    "${free_gb:-0}" "${min_free_gb}" >&2
+  printf '%s\n' '先清理磁盘，或调低 GO2W_SLAM_DISK_MIN_FREE_GB 再重试。' >&2
+  exit 1
+fi
+
+# A new mapping session starts from an empty pose graph.  ClearSLAMDataDir()
+# only runs in the node constructor, so the old nodes must die *and* the cache
+# directory must go; otherwise the previous session's keyframe poses (and their
+# accumulated drift) are re-stacked into every map_3d message.
+# Path source: configs/go2w/plain_slam.yaml map_cache_dir -> generator ->
+# generated_{lio,slam}_3d_config.yaml map_cloud_dir (both nodes share it).
+# 必须连 launch 树一起杀。只杀 lio/slam 两个节点会把 imu_fallback_adapter、
+# pandar_slam_adapter、plain_slam_odom_adapter 等留下来，下一次启动就多出一份
+# /go2w/slam/imu 和 /go2w/slam/pandar_points 发布者：IMU 预积分把同一时刻的数据
+# 吃两遍三遍，机器狗静止不动 odom_base 也会飞到 1e10 m。
+pkill -f 'plain_slam_go2w.launch.py|lio_3d_node|slam_3d_node|imu_fallback_adapter|pandar_slam_adapter|plain_slam_odom_adapter|pointcloud_to_occupancy|plain_slam_health_monitor|lidar_delay_buffer' 2>/dev/null || true
+sleep 2
+rm -rf /tmp/go2w_plain_slam
+
+# WebUI 轨迹文件同理必须清。上面这段让位姿图从零开始 —— 也就是 pslam_map 的
+# 原点随每个会话重置；而快照写入器启动时会 _load_trajectory() 把上一会话的点
+# 读回来（它本来只是为了让写入器在**同一会话内**重启不丢数据）。两套坐标系的
+# 点混在一起，focus_bounds（画幅）和 _drop_far_from_trajectory（幽灵点过滤）
+# 会同时算错。这只动 WebUI 的显示缓存，不属于三维建图。
+# 归档成 .prev 而不是删，只留一份，不累积。
+webui_runtime_dir="${project_root}/outputs/autonomous_search/runtime"
+mv -f "${webui_runtime_dir}/slam_map_trajectory.json" \
+      "${webui_runtime_dir}/slam_map_trajectory.json.prev" 2>/dev/null || true
+
+# 运行期磁盘保护。上面的 rm -rf 只在启动时清一次，而运行中缓存目录只增不减
+# （每个关键帧两个 .bin，回环和出图都要读回，删不得），会话跑久了就会把根盘
+# 写满。守护越界时有序停掉 mapping 栈保住磁盘；它不碰运动栈，也不删缓存。
+guard_pidfile="${pid_root}/plain_slam_disk_guard.pid"
+if [[ -f "${guard_pidfile}" ]]; then
+  old_guard_pid="$(tr -cd '0-9' <"${guard_pidfile}")"
+  if [[ -n "${old_guard_pid}" ]]; then
+    kill "${old_guard_pid}" 2>/dev/null || true
+  fi
+  rm -f "${guard_pidfile}"
+fi
+setsid env GO2W_SLAM_MAP_CACHE_DIR=/tmp/go2w_plain_slam \
+  GO2W_SLAM_DISK_GUARD_PIDFILE="${guard_pidfile}" \
+  bash "${script_dir}/guard_plain_slam_disk.sh" \
+  >"${log_root}/plain_slam_disk_guard.log" 2>&1 < /dev/null &
+# pid 不由这里写：setsid 在开了 job control 的 shell 里会 fork，$! 是那个
+# fork 完就退出的父进程，写进 pid 文件就是个死 pid，stop 脚本会因此停不掉
+# 守护。守护进程自己把 $$ 写进去（见 guard_plain_slam_disk.sh）。
+printf '[OK] 磁盘守护: 缓存上限 %sGB / 磁盘剩余下限 %sGB (%s)\n' \
+  "${GO2W_SLAM_DISK_MAX_CACHE_GB:-20}" "${GO2W_SLAM_DISK_MIN_FREE_GB:-20}" \
+  "${log_root}/plain_slam_disk_guard.log"
+
 launch_log="${log_root}/plain_slam_go2w.launch.log"
 printf 'Launching plain_slam mapping (log: %s)...\n' "${launch_log}"
 # Detach the launch process into its own session.  A plain `nohup ... &`
@@ -171,6 +228,27 @@ if [[ "${ready_ok}" == "1" ]]; then
   printf '[OK] plain_slam LIO: running\n'
   printf '[OK] Spatial mapping ready (mode=MAPPING_ASSIST)\n'
   printf '%s\n' '[INFO] /go2w/odom/fused remains motion authority'
+
+  # ---- LiDAR 延迟缓冲（IMU 覆盖修复，见 docs/SLAM_VALIDATION_REPORT.md §3.5.9）----
+  # IMU 数据比 LiDAR 帧晚到 ≈89 ms，直接喂 LIO 时每帧只有 3/25 个 IMU（窗口覆盖 8.7%），
+  # deskew 残差 2.7 cm，同一面墙反复重建时层层偏移 → 地图上"墙很厚 / 多角度稀疏叠加"。
+  # 这里把点云缓冲 0.12 s 后转发（header 时间戳不变），IMU 即可覆盖整帧：
+  # imu_n 12–14 → 24–26、dsk_max 0.026 → 0.003–0.008 m。
+  # 关闭：设 GO2W_SLAM_LIDAR_DELAY_S=0，并把 configs/go2w/plain_slam.yaml 的
+  #       pandar_adapted 改回 /go2w/slam/pandar_points。
+  lidar_delay_s="${GO2W_SLAM_LIDAR_DELAY_S:-0.12}"
+  if [[ "${lidar_delay_s}" != "0" && "${lidar_delay_s}" != "0.0" ]]; then
+    setsid /usr/bin/python3 "${script_dir}/lidar_delay_buffer.py" --ros-args \
+      -p input_topic:=/go2w/slam/pandar_points \
+      -p output_topic:=/go2w/slam/pandar_points_buffered \
+      -p delay_s:="${lidar_delay_s}" \
+      >"${log_root}/lidar_delay_buffer.log" 2>&1 &
+    printf '%s\n' "$!" >"${pid_root}/lidar_delay_buffer.pid"
+    printf '[OK] LiDAR delay buffer: %ss (IMU deskew coverage fix)\n' "${lidar_delay_s}"
+  else
+    printf '[INFO] LiDAR delay buffer disabled (GO2W_SLAM_LIDAR_DELAY_S=%s)\n' "${lidar_delay_s}"
+  fi
+
   # Display-only bridge: the raw aligned scan stays local to the mapping
   # host; only the compact XYZ stream crosses to the machine-dog WebUI.
   if [[ -f "${web_relay_pidfile}" ]]; then

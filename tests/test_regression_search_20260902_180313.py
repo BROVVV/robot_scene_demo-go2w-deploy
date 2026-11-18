@@ -91,21 +91,33 @@ class TestTargetConfirmationLandsOnTarget(unittest.TestCase):
         _put(explorer, "obj_005", "纸箱")
         self.assertIsNone(explorer._target_object_id())
 
-    def test_confirmed_flag_is_inside_the_webui_snapshot(self) -> None:
-        """带语义图的 memory_update 必须已经含确认标记，否则 WebUI 永远看不到。"""
+    def test_confirmed_flag_is_inside_the_webui_graph(self) -> None:
+        """送进 WebUI 的那份图必须已经含确认标记。
+
+        §2.1 之后图不再搭 `memory_update` 走 —— explorer 的事件只带
+        `graph_revision`，图本身由 worker 的 `graph_snapshot` 送
+        `semantic_graph.web_snapshot()`。所以这里同时钉两件事：图里有标记，
+        且事件里的 revision 与那份图对得上（否则 WebUI 拉到的会是另一份）。
+        """
         explorer = _explorer("蓝色垃圾桶", _scene(["蓝色垃圾桶"]))
         result = explorer.run()
         self.assertEqual(result.result, "TARGET_FOUND")
-        snapshots = [
-            event["semantic_navigation_graph"] for event in explorer.events
-            if event.get("event") == "memory_update"
-            and event.get("semantic_navigation_graph")
-        ]
-        self.assertTrue(snapshots, "确认路径没有发出带语义图的 memory_update")
-        places = snapshots[-1].get("places") or []
+
+        graph = explorer.semantic_graph.web_snapshot()
+        places = graph.get("places") or []
         self.assertTrue(
             any(place.get("target_confirmed") for place in places),
             f"快照里没有已确认的 Place: {[p.get('place_id') for p in places]}",
+        )
+
+        revisions = [
+            event.get("graph_revision") for event in explorer.events
+            if event.get("event") == "memory_update"
+        ]
+        self.assertTrue(revisions, "确认路径没有发出 memory_update")
+        self.assertIn(
+            graph["revision"], revisions,
+            f"事件里的图版本与最终图对不上：{revisions} vs {graph['revision']}",
         )
 
 
@@ -124,22 +136,17 @@ class TestTargetConfirmationLandsOnTarget(unittest.TestCase):
         entry = explorer.semantic_graph.object_map.objects[object_id]
         self.assertEqual(entry.label, "蓝色垃圾桶")
 
-    def test_object_topology_in_the_snapshot_marks_the_target(self) -> None:
+    def test_object_topology_in_the_graph_marks_the_target(self) -> None:
         """§12.6 第 8 条下半句：WebUI 那份 object_topology 要有 is_target_confirmed。
 
-        `object_topology` 是 `to_dict()` 里现算的投影（`object_relation_store`
+        `object_topology` 是 `web_snapshot()` 里现算的投影（`object_relation_store`
         读 `provenance["target_confirmed"]`），所以 mark 的时机决定它是 true 还是
         false —— 180313 归档 35 个对象节点全 false 就是这么来的。
         """
         explorer = _explorer("蓝色垃圾桶", _scene(["蓝色垃圾桶"]))
         self.assertEqual(explorer.run().result, "TARGET_FOUND")
-        snapshots = [
-            event["semantic_navigation_graph"] for event in explorer.events
-            if event.get("event") == "memory_update"
-            and event.get("semantic_navigation_graph")
-        ]
-        self.assertTrue(snapshots, "确认路径没有发出带语义图的 memory_update")
-        nodes = (snapshots[-1].get("object_topology") or {}).get("nodes") or []
+        graph = explorer.semantic_graph.web_snapshot()
+        nodes = (graph.get("object_topology") or {}).get("nodes") or []
         confirmed = [node for node in nodes if node.get("is_target_confirmed")]
         self.assertTrue(
             confirmed,

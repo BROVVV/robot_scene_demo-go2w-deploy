@@ -29,7 +29,11 @@ frames:
 # Topic layout (all mapping topics live under /go2w/slam/*).
 topics:
   pandar_raw: /hesai/pandarxt16/points_raw
-  pandar_adapted: /go2w/slam/pandar_points
+  # LIO 的输入点云。2026-09-10 实测：LiDAR 帧窗口 0.1 s，而 IMU 比点云晚到 ≈89 ms，
+  # 直接喂给 LIO 时每帧只有 3 个 IMU（覆盖 8.7%），deskew 残差 2.7 cm、墙体重叠变厚。
+  # 因此改用 lidar_delay_buffer.py 延迟 0.12 s 转发后的话题（IMU 就能覆盖整帧）。
+  # 回退：把下面一行改回 /go2w/slam/pandar_points 即可（同时停掉延迟缓冲节点）。
+  pandar_adapted: /go2w/slam/pandar_points_buffered
   # Host-clock-aligned copy of the real /utlidar/imu stream.  The Unitree
   # sensor epoch can lag the corrected DCU/host clock after boot.
   imu: /go2w/slam/imu

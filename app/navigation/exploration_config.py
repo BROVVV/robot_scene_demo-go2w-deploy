@@ -19,6 +19,7 @@ DEFAULT_EXPERIMENT_PROFILE = "configs/go2w/high_level_experiment.yaml"
 
 @dataclass
 class ExplorationBudget:
+    # 0 disables the session duration limit; action/sensor timeouts are separate.
     max_search_seconds: float = 600.0
     max_planning_cycles: int = 100
     max_motion_steps: int = 50
@@ -31,13 +32,16 @@ class ExplorationBudget:
 
     def remaining(self, *, elapsed_sec: float, planning_cycles: int,
                   motion_steps: int) -> bool:
-        if elapsed_sec >= self.max_search_seconds:
+        if self.time_expired(elapsed_sec):
             return False
         if self.max_planning_cycles > 0 and planning_cycles >= self.max_planning_cycles:
             return False
         if self.max_motion_steps > 0 and motion_steps >= self.max_motion_steps:
             return False
         return True
+
+    def time_expired(self, elapsed_sec: float) -> bool:
+        return self.max_search_seconds != 0 and elapsed_sec >= self.max_search_seconds
 
     def to_dict(self) -> dict[str, Any]:
         return {

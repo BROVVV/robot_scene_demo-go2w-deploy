@@ -14,6 +14,7 @@
 #include "go2w_motion_control/motion_state_monitor.hpp"
 #include "go2w_motion_control/safety_guard.hpp"
 #include "go2w_motion_control/yaw_controller.hpp"
+#include "go2w_motion_control/velocity_stream.hpp"
 #include "go2w_motion_interfaces/action/motion_command.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -52,7 +53,7 @@ class MotionActionServer : public rclcpp::Node {
     double stationary_max_abs_vx{0.02};
     double stationary_max_abs_vy{0.02};
     double stationary_max_abs_yaw_rate{0.03};
-    double timed_refresh_hz{2.0};
+    double timed_refresh_hz{20.0};
     double turn_control_hz{20.0};
     double turn_publish_max_hz{5.0};
     double command_change_threshold{0.01};
@@ -117,6 +118,9 @@ class MotionActionServer : public rclcpp::Node {
   void RunRelativeYaw(const std::shared_ptr<GoalHandle> &goal_handle,
                       ExecutionState &execution,
                       const std::shared_ptr<GoalLogger> &logger);
+  void RunStreamingVelocity(const std::shared_ptr<GoalHandle> &goal_handle,
+                            ExecutionState &execution,
+                            const std::shared_ptr<GoalLogger> &logger);
   void CheckRuntimeSafety(const std::shared_ptr<GoalHandle> &goal_handle,
                           const std::shared_ptr<GoalLogger> &logger);
   void PublishFeedback(const std::shared_ptr<GoalHandle> &goal_handle,
@@ -143,6 +147,9 @@ class MotionActionServer : public rclcpp::Node {
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr arm_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr emergency_stop_service_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr motion_name_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr velocity_stream_sub_;
+  std::mutex velocity_stream_mutex_;
+  VelocityStream velocity_stream_;
   rclcpp::TimerBase::SharedPtr arm_timer_;
   rclcpp::CallbackGroup::SharedPtr action_group_;
   rclcpp::CallbackGroup::SharedPtr arm_group_;

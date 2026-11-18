@@ -12,6 +12,11 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from app.navigation.clearance_map import ClearanceMap
+from app.navigation.corridor_analyzer import (
+    CENTER_SCORE_WEIGHT,
+    CorridorGrid,
+    path_center_score,
+)
 from app.navigation.exploration_config import ScoringWeights
 from app.navigation.view_quality import (
     ViewQualityConfig,
@@ -71,6 +76,7 @@ class ViewpointPlanner:
         clearance_map: ClearanceMap,
         frontiers: Sequence[tuple[str, Sequence[float]]] = (),
         traversal_failures: Mapping[str, int] | None = None,
+        occupancy_grid: CorridorGrid | None = None,
         now: float | None = None,
     ) -> list[ViewpointCandidate]:
         poses = self._candidate_poses(request, robot_pose)
@@ -84,6 +90,7 @@ class ViewpointPlanner:
                 clearance_map=clearance_map,
                 frontiers=frontiers,
                 traversal_failures=failures,
+                occupancy_grid=occupancy_grid,
                 provenance=provenance,
                 now=now,
             )
@@ -145,14 +152,17 @@ class ViewpointPlanner:
         clearance_map: ClearanceMap,
         frontiers: Sequence[tuple[str, Sequence[float]]],
         traversal_failures: int,
+        occupancy_grid: CorridorGrid | None,
         provenance: dict[str, Any],
         now: float | None,
     ) -> ViewpointCandidate:
         config = self.config
         local = clearance_map.pose_clearance(pose, config.footprint_radius_m, now=now)
+        # 机器人→候选点这一段同时喂给两处：净空查询，以及 §7.5 的对称净空分。
+        # 同一段路算两件事，不会出现「净空说能过、居中分按另一条路算」。
+        segment = [(float(robot_pose[0]), float(robot_pose[1])), (pose[0], pose[1])]
         path = clearance_map.path_clearance(
-            [(float(robot_pose[0]), float(robot_pose[1])), (pose[0], pose[1])],
-            config.footprint_radius_m, now=now)
+            segment, config.footprint_radius_m, now=now)
         subject = request.subject_position
         subject_distance = None if subject is None else math.hypot(
             pose[0] - float(subject[0]), pose[1] - float(subject[1]))
@@ -198,6 +208,10 @@ class ViewpointPlanner:
             local_clearance_m=local,
             path_min_clearance_m=path.min_clearance_m,
             path_mean_clearance_m=path.mean_clearance_m,
+            center_score=(
+                None if occupancy_grid is None
+                else path_center_score(segment, occupancy_grid)
+            ),
             view_quality=view.view_quality,
             information_gain=0.6 * view.visible_unknown_ratio
             + 0.4 * view.frontier_visibility,
@@ -231,6 +245,10 @@ class ViewpointPlanner:
             * clamp01((candidate.path_min_clearance_m or 0.0) / preferred),
             "path_mean_clearance": weights.path_mean_clearance_weight
             * clamp01((candidate.path_mean_clearance_m or 0.0) / preferred),
+            # 计划书 §7.5：权重固定 0.25，只在这个候选已经过了硬安全门之后
+            # 参与排序，绝不参与「路径过窄」的判定（那道判定在 hard_safe）。
+            # 没有栅格就算不出这条证据，记 0 分而不是当它居中。
+            "center_score": CENTER_SCORE_WEIGHT * clamp01(candidate.center_score or 0.0),
             "route_reachability": weights.route_reachability_weight
             * (1.0 if candidate.route_reachable else 0.0),
             "information_gain": weights.information_gain * candidate.information_gain,

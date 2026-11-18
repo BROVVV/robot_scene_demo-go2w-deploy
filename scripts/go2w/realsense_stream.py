@@ -25,9 +25,10 @@ import os
 import threading
 import time
 import traceback
+import uuid
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import unquote, parse_qs, urlsplit
 
 import cv2
 import numpy as np
@@ -44,6 +45,50 @@ STREAM_ACTIVE = threading.Event()
 DEVICE_INFO = {}     # 设备/内参/外参缓存（由采集线程启动后填充一次）
 
 
+class CaptureCadence:
+    """Recent completed RGB-D updates, independent of HTTP polling phase.
+
+    Call under BUFFER_LOCK. This counts distinct delivered framesets, so an
+    eager encoder that cannot keep up reports its actual prepared-frame rate,
+    rather than the configured sensor rate or skipped hardware frame numbers.
+    """
+    def __init__(self):
+        self._samples = deque(maxlen=128)
+        self._last_frame_id = None
+
+    def reset(self):
+        self._samples.clear()
+        self._last_frame_id = None
+
+    def _prune(self, now):
+        while self._samples and self._samples[0] < now - 2.:
+            self._samples.popleft()
+
+    def record(self, frame_id):
+        now = time.monotonic()
+        if not math.isfinite(now):
+            self.reset()
+            return
+        if self._samples and now < self._samples[-1]:
+            self.reset()
+        self._prune(now)
+        if frame_id != self._last_frame_id:
+            self._samples.append(now)
+            self._last_frame_id = frame_id
+
+    def value(self):
+        now = time.monotonic()
+        self._prune(now)
+        if (len(self._samples) < 2 or not math.isfinite(now)
+                or not 0 <= now - self._samples[-1] <= 1.):
+            return 0.
+        elapsed = self._samples[-1] - self._samples[0]
+        return (len(self._samples) - 1) / elapsed if elapsed > 0 else 0.
+
+
+CAPTURE_CADENCE = CaptureCadence()
+
+
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -54,6 +99,69 @@ DEVICE_INFO = {}     # 设备/内参/外参缓存（由采集线程启动后填�
 # 这里从内参实时算出 HFOV/VFOV 用于校验模式；真正超过硬件上限需要改镜头或让机器狗
 # 转头/换位扫视。见 docs/REALSENSE_D435_DEPLOYMENT.md。
 # ---------------------------------------------------------------------------
+def _depth_preview_jpeg(depth, max_depth, clipped=None):
+    z_m = (np.clip(depth.astype(np.float32) / 1000., 0., max_depth)
+           if clipped is None else clipped)
+    d8 = (z_m / max_depth * 255.).astype(np.uint8)
+    image = cv2.applyColorMap(d8, cv2.COLORMAP_JET)
+    cx, cy = depth.shape[1] // 2, depth.shape[0] // 2
+    cv2.circle(image, (cx, cy), 4, (255, 255, 255), -1)
+    cv2.putText(image, "%.2f m" % (int(depth[cy, cx]) / 1000.), (cx + 10, cy - 8),
+                cv2.FONT_HERSHEY_SIMPLEX, .6, (255, 255, 255), 2)
+    ok, encoded = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    if not ok:
+        raise RuntimeError('depth preview encoding failed')
+    return encoded.tobytes()
+
+
+class FrameEncoder:
+    """Own an immutable RGB-D pair; encode each representation at most once."""
+    def __init__(self, color, depth, max_depth):
+        self.color = np.array(color, copy=True)
+        self.depth = np.array(depth, copy=True)
+        self.color.flags.writeable = False
+        self.depth.flags.writeable = False
+        self.max_depth = max_depth
+        self._bytes = {}
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            if key not in self._bytes:
+                if key == 'depth_jpg':
+                    value = _depth_preview_jpeg(self.depth, self.max_depth)
+                else:
+                    if key == 'color_jpg':
+                        ok, encoded = cv2.imencode('.jpg', self.color,
+                                                  [cv2.IMWRITE_JPEG_QUALITY, 82])
+                    elif key == 'depth_raw_png':
+                        ok, encoded = cv2.imencode('.png', self.depth)
+                    else:
+                        raise ValueError('unknown frame encoding: ' + key)
+                    if not ok:
+                        raise RuntimeError('frame encoding failed: ' + key)
+                    value = encoded.tobytes()
+                self._bytes[key] = value
+            return self._bytes[key]
+
+
+def _frame_bytes(frame, key):
+    encoder = frame.get('_encoder')
+    return encoder.get(key) if encoder is not None else frame.get(key)
+
+
+def _mjpeg_interval(url):
+    values = parse_qs(urlsplit(url).query, keep_blank_values=True).get('fps')
+    if values is None:
+        return 0.
+    if len(values) != 1:
+        raise ValueError('fps must be one finite number in (0,30]')
+    value = float(values[0])
+    if not math.isfinite(value) or not 0 < value <= 30:
+        raise ValueError('fps must be one finite number in (0,30]')
+    return 1. / value
+
+
 def fov_deg_from_intrinsics(intr):
     """从内参（fx/fy/width/height）计算水平/垂直视场（度）。"""
     if not intr:
@@ -95,6 +203,10 @@ def rs_capture_loop():
             cfg.enable_stream(rs.stream.color, ARGS.width, ARGS.height, rs.format.bgr8, ARGS.fps)
             cfg.enable_stream(rs.stream.depth, ARGS.width, ARGS.height, rs.format.z16, ARGS.fps)
             profile = pipe.start(cfg)
+            capture_epoch = uuid.uuid4().hex
+            capture_sequence = 0
+            with BUFFER_LOCK:
+                CAPTURE_CADENCE.reset()
             depth_sensor = profile.get_device().first_depth_sensor()
             color_sensor = profile.get_device().query_sensors()[1]
             align = rs.align(rs.stream.color)
@@ -185,32 +297,25 @@ def rs_capture_loop():
                 cimg = np.asanyarray(color.get_data())
                 dimg = np.asanyarray(depth.get_data())  # uint16, mm
 
-                # ---- 彩色 JPEG ----
-                ok, cjpg = cv2.imencode(".jpg", cimg, [cv2.IMWRITE_JPEG_QUALITY, 82])
-                if not ok:
-                    continue
-
-                # ---- 深度伪彩 + 中心距离叠加 ----
-                z_m = dimg.astype(np.float32) / 1000.0
-                z_m = np.clip(z_m, 0.0, ARGS.max_depth)
-                d8 = (z_m / ARGS.max_depth * 255.0).astype(np.uint8)
-                djpg = cv2.applyColorMap(d8, cv2.COLORMAP_JET)
-                cx, cy = dimg.shape[1] // 2, dimg.shape[0] // 2
-                center_mm = int(dimg[cy, cx])
-                cv2.circle(djpg, (cx, cy), 4, (255, 255, 255), -1)
-                cv2.putText(djpg, "%.2f m" % (center_mm / 1000.0), (cx + 10, cy - 8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                ok, djpg_b = cv2.imencode(".jpg", djpg, [cv2.IMWRITE_JPEG_QUALITY, 82])
-                if not ok:
-                    continue
-
-                # ---- 原始 16-bit 深度 PNG ----
-                ok, d16png = cv2.imencode(".png", dimg)
-                if not ok:
-                    continue
+                z_m=np.clip(dimg.astype(np.float32)/1000.,0.,ARGS.max_depth)
+                cy,cx=dimg.shape[0]//2,dimg.shape[1]//2
+                center_mm=int(dimg[cy,cx])
+                encoder=None
+                if ARGS.encoding_mode=='on-demand':
+                    encoder=FrameEncoder(cimg,dimg,ARGS.max_depth)
+                    color_jpeg=depth_jpeg=depth_png=None
+                else:
+                    ok,cjpg=cv2.imencode('.jpg',cimg,[cv2.IMWRITE_JPEG_QUALITY,82])
+                    if not ok:continue
+                    depth_jpeg=_depth_preview_jpeg(dimg,ARGS.max_depth,z_m)
+                    ok,d16png=cv2.imencode('.png',dimg)
+                    if not ok:continue
+                    color_jpeg=cjpg.tobytes();depth_png=d16png.tobytes()
 
                 stamp = time.time()
                 frame_id = str(frames.frame_number)
+                capture_sequence += 1
+                capture_id = f"{capture_epoch}-{capture_sequence}"
                 device_timestamp_ms = _safe_frame_timestamp_ms(color)
                 color_intr = ((DEVICE_INFO.get("color_intrinsics") or {}) if DEVICE_INFO else {})
                 color_fov = fov_deg_from_intrinsics(color_intr)
@@ -220,6 +325,7 @@ def rs_capture_loop():
                     "stamp": stamp,
                     "frame_number": frames.frame_number,
                     "frame_id": frame_id,
+                    "capture_id": capture_id,
                     "device_timestamp_ms": device_timestamp_ms,
                     "color": {"width": color.get_width(), "height": color.get_height(),
                               "fps": ARGS.fps, "format": "bgr8"},
@@ -250,10 +356,11 @@ def rs_capture_loop():
                 }
                 rgbd_frame = {
                     "frame_id": frame_id,
+                    "capture_id": capture_id,
                     "device_timestamp_ms": device_timestamp_ms,
                     "host_timestamp": stamp,
-                    "color_url": f"/rgbd/frame/{frame_id}/color.jpg",
-                    "depth_url": f"/rgbd/frame/{frame_id}/depth.png",
+                    "color_url": f"/rgbd/frame/{frame_id}/color.jpg?capture_id={capture_id}",
+                    "depth_url": f"/rgbd/frame/{frame_id}/depth.png?capture_id={capture_id}",
                     "depth_aligned_to_color": True,
                     "depth_unit_m": 0.001,
                     "width": int(color.get_width()),
@@ -265,21 +372,25 @@ def rs_capture_loop():
                         "cy": float(color_intr.get("ppy", 0.0)),
                     },
                     "info": info,
-                    "color_jpg": cjpg.tobytes(),
-                    "depth_raw_png": d16png.tobytes(),
+                    "color_jpg": color_jpeg,
+                    "depth_raw_png": depth_png,
+                    "depth_jpg": depth_jpeg,
+                    "_encoder": encoder,
                 }
                 with BUFFER_LOCK:
                     BUFFER.update({
-                        "color_jpg": cjpg.tobytes(),
-                        "depth_jpg": djpg_b.tobytes(),
-                        "depth_raw_png": d16png.tobytes(),
+                        "frame": rgbd_frame,
+                        "color_jpg": color_jpeg,
+                        "depth_jpg": depth_jpeg,
+                        "depth_raw_png": depth_png,
                         "color_shape": cimg.shape,
                         "depth_shape": dimg.shape,
                         "stamp": stamp,
                         "info": info,
                     })
                     FRAME_CACHE.append(rgbd_frame)
-        except rs.error as e:
+                    CAPTURE_CADENCE.record(frame_id)
+        except RuntimeError as e:
             print("[rs] realsense error: %s, retry in 5s" % e, flush=True)
             STREAM_ACTIVE.clear()
             time.sleep(5)
@@ -419,23 +530,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stream_mjpeg(self, key, snap_key):
         """从共享缓存持续发送最新一帧 MJPEG"""
+        try:
+            interval = _mjpeg_interval(self.path)
+        except ValueError:
+            self._send_json({'error': 'fps must be one finite number in (0,30]'}, 400)
+            return
         self.wfile.write(mjpeg_headers())
         self.wfile.flush()
         last = -1
+        next_at=0.
         while True:
+            delay = next_at - time.monotonic()
+            if delay > 0:
+                time.sleep(min(.01, delay));continue
             with BUFFER_LOCK:
-                data = BUFFER.get(key)
-                stamp = BUFFER.get("stamp", 0)
-            if data is not None and stamp != last:
-                last = stamp
-                chunk = (b"--frame\r\nContent-Type: image/jpeg\r\n"
-                         b"Content-Length: " + str(len(data)).encode() + b"\r\n\r\n")
-                self.wfile.write(chunk)
-                self.wfile.write(data)
-                self.wfile.write(b"\r\n")
-                self.wfile.flush()
-            else:
-                time.sleep(0.01)
+                frame=BUFFER.get('frame')
+                stamp=BUFFER.get('stamp',0)
+                data=BUFFER.get(key) if frame is None else None
+            if stamp!=last:
+                if frame is not None:data=_frame_bytes(frame,key)
+                if data is None:time.sleep(.01);continue
+                last=stamp
+                chunk=(b"--frame\r\nContent-Type: image/jpeg\r\n"
+                       b"Content-Length: "+str(len(data)).encode()+b"\r\n\r\n")
+                self.wfile.write(chunk);self.wfile.write(data);self.wfile.write(b"\r\n");self.wfile.flush()
+                next_at=time.monotonic()+interval
+            else:time.sleep(.01)
 
     # ---- routes ----
     def do_POST(self):
@@ -462,7 +582,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._stream_mjpeg("depth_jpg", "stamp")
             elif path == "/depth_raw":
                 with BUFFER_LOCK:
-                    data = BUFFER.get("depth_raw_png")
+                    frame=BUFFER.get("frame")
+                    data=BUFFER.get("depth_raw_png") if frame is None else None
+                if frame is not None:data=_frame_bytes(frame,"depth_raw_png")
                 if data:
                     self._send_bytes(data, "image/png")
                 else:
@@ -491,12 +613,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/health":
                 with BUFFER_LOCK:
                     stamp = BUFFER.get("stamp", 0)
+                    active = STREAM_ACTIVE.is_set()
+                    fps = CAPTURE_CADENCE.value() if active else 0.
                 age = time.time() - stamp if stamp else 999
                 self._send_json({
-                    "ok": STREAM_ACTIVE.is_set() and age < 5,
-                    "streaming": STREAM_ACTIVE.is_set(),
+                    "ok": active and age < 5,
+                    "streaming": active,
                     "age_s": round(age, 3),
-                    "fps": round(1.0 / age, 2) if 0 < age < 5 else 0,
+                    "fps": round(fps, 2),
                 })
             elif path == "/snapshot":
                 self._do_snapshot()
@@ -519,6 +643,7 @@ class Handler(BaseHTTPRequestHandler):
         info = frame.get("info") or {}
         return {
             "frame_id": frame["frame_id"],
+            "capture_id": frame.get("capture_id"),
             "device_timestamp_ms": frame.get("device_timestamp_ms"),
             "host_timestamp": frame.get("host_timestamp"),
             "color_url": frame.get("color_url"),
@@ -550,15 +675,25 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "expected /rgbd/frame/<id>/color.jpg|depth.png"}, 400)
             return
         frame_id, name = parts
+        query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+        tokens = query.get("capture_id")
+        if tokens is not None and (len(tokens) != 1 or not tokens[0]):
+            self._send_json({"error": "expected one nonempty capture_id"}, 400)
+            return
         if name not in {"color.jpg", "depth.png"}:
             self._send_json({"error": "only color.jpg and depth.png are served"}, 404)
             return
         with BUFFER_LOCK:
-            frame = next((item for item in FRAME_CACHE if item["frame_id"] == frame_id), None)
+            matches = [item for item in FRAME_CACHE if item["frame_id"] == frame_id
+                       and (tokens is None or item.get("capture_id") == tokens[0])]
+        if len(matches) > 1:
+            self._send_json({"error": "ambiguous frame counter; use capture_id URL"}, 409)
+            return
+        frame = matches[0] if matches else None
         if frame is None:
             self._send_json({"error": f"frame {frame_id} not in cache"}, 404)
             return
-        data = frame.get("color_jpg" if name == "color.jpg" else "depth_raw_png")
+        data = _frame_bytes(frame,"color_jpg" if name == "color.jpg" else "depth_raw_png")
         self._send_bytes(data, "image/jpeg" if name == "color.jpg" else "image/png")
 
     def _do_snapshot(self):
@@ -566,10 +701,12 @@ class Handler(BaseHTTPRequestHandler):
             if "color_jpg" not in BUFFER:
                 self._send_json({"error": "no frame yet"}, 503)
                 return
-            color = BUFFER["color_jpg"]
-            depth = BUFFER["depth_jpg"]
-            raw = BUFFER["depth_raw_png"]
-            info = BUFFER["info"]
+            frame=BUFFER.get('frame')
+            color=BUFFER['color_jpg'];depth=BUFFER['depth_jpg'];raw=BUFFER['depth_raw_png']
+            info=BUFFER['info']
+        if frame is not None:
+            color=_frame_bytes(frame,'color_jpg');depth=_frame_bytes(frame,'depth_jpg')
+            raw=_frame_bytes(frame,'depth_raw_png')
         ts = time.strftime("%Y%m%d_%H%M%S")
         d = os.path.join(ARGS.snap_dir, ts)
         os.makedirs(d, exist_ok=True)
@@ -628,6 +765,8 @@ def main():
     ap.add_argument("--max-depth", type=float, default=6.0, help="depth colormap range (m)")
     ap.add_argument("--snap-dir", type=str,
                     default=os.path.expanduser("~/realsense_snapshots"))
+    ap.add_argument("--encoding-mode", choices=("eager","on-demand"), default="eager",
+                    help="on-demand retains full raw RGB-D frames and memoizes requested encodings")
     ap.add_argument("--verbose", action="store_true")
     ARGS = ap.parse_args()
     if ARGS.wide:

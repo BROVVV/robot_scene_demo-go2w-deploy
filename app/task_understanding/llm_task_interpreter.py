@@ -33,6 +33,11 @@ from app.utils.json_utils import extract_json_from_text
 
 
 VERIFIER_CONFIDENCE_THRESHOLD = 0.75
+# The WebUI start request must not inherit the OpenAI SDK's retry-amplified
+# timeout (40 s x multiple attempts).  Scene reasoning has its own budgets;
+# this small task-schema call gets one bounded attempt and then the caller may
+# use the conservative explicit-search fallback.
+TASK_INTERPRETER_TIMEOUT_SECONDS = 15.0
 
 
 class LLMTaskInterpreter:
@@ -190,7 +195,11 @@ def _default_openai_client() -> OpenAI:
     return OpenAI(
         api_key=settings.siliconflow_api_key,
         base_url=settings.siliconflow_base_url,
-        timeout=settings.siliconflow_reasoning_timeout_seconds,
+        timeout=min(
+            float(settings.siliconflow_reasoning_timeout_seconds),
+            TASK_INTERPRETER_TIMEOUT_SECONDS,
+        ),
+        max_retries=0,
     )
 
 

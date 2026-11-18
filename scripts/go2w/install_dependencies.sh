@@ -98,4 +98,21 @@ if (( current_wmem < minimum_dds_buffer )); then
   sudo sysctl -w "net.core.wmem_max=$minimum_dds_buffer"
 fi
 
+# 上面两次 -w 重启即失效。失效后每个新建的 ROS 节点都会报
+# "failed to increase socket receive buffer size to at least 16777216 bytes"
+# → "rmw_create_node: failed to create domain"，而这串报错与"机器狗网卡掉了"
+# **逐字相同**，每次都把人引到网线上去查。写成 sysctl.d 配置持久化掉。
+sysctl_dropin=/etc/sysctl.d/99-go2w-dds.conf
+if ! grep -qs "net.core.rmem_max *= *${minimum_dds_buffer}" "${sysctl_dropin}"; then
+  sudo tee "${sysctl_dropin}" >/dev/null <<EOF
+# Go2-W DDS：runtime/go2w/cyclonedds_enp3s0.xml 要求 16 MiB 收包缓冲，内核上限
+# 必须放得下。由 scripts/go2w/install_dependencies.sh 写入；缺了它，重启会把两个
+# 值重置回 212992，新建节点全部建不出 DDS domain。
+net.core.rmem_max = ${minimum_dds_buffer}
+net.core.wmem_max = ${minimum_dds_buffer}
+EOF
+  sudo sysctl --system >/dev/null
+  printf 'Persisted DDS socket buffers in %s.\n' "${sysctl_dropin}"
+fi
+
 printf 'Dependency installation complete.\n'

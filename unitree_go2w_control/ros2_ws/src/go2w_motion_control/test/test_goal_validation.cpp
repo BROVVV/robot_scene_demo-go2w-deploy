@@ -22,6 +22,17 @@ Action::Goal Timed() {
 TEST(GoalValidation, AcceptsBoundedTimedVelocity) {
   EXPECT_TRUE(ValidateGoal(Timed(), GoalLimits{}, Ready()).valid);
 }
+TEST(GoalValidation, StreamCannotExpandWatchdogOrRunWithoutIdentity) {
+  auto g=Timed();g.mode=Action::Goal::MODE_STREAMING_VELOCITY;
+  g.duration_sec=.25;g.timeout_sec=30;g.velocity_stream_token=std::string(32,'a');
+  EXPECT_TRUE(ValidateGoal(g,GoalLimits{},Ready()).valid);
+  g.duration_sec=.26;EXPECT_FALSE(ValidateGoal(g,GoalLimits{},Ready()).valid);
+  g.duration_sec=.25;g.velocity_stream_token="";EXPECT_FALSE(ValidateGoal(g,GoalLimits{},Ready()).valid);
+  g.velocity_stream_token=std::string(32,'a');g.timeout_sec=31;
+  EXPECT_FALSE(ValidateGoal(g,GoalLimits{},Ready()).valid);
+  g.timeout_sec=30;g.vx=.30;EXPECT_TRUE(ValidateGoal(g,GoalLimits{},Ready()).valid);
+  g.vx=.31;EXPECT_FALSE(ValidateGoal(g,GoalLimits{},Ready()).valid);
+}
 
 TEST(GoalValidation, RejectsNanInfAndLimits) {
   auto goal = Timed();

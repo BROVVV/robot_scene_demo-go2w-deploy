@@ -4,7 +4,13 @@ import math
 
 import numpy as np
 import rclpy
-from rclpy._rclpy_pybind11 import RCLError
+# 同 go2w_sensor_time_bridge/time_bridge_node.py：RCLError 在 Foxy 上叫
+# rclpy._rclpy，_rclpy_pybind11 这个名字是 Galactic 才有的。只写后者会让这个节点
+# 在机器狗上启动即 ModuleNotFoundError，而报错离真因很远（看着像环境没 source 好）。
+try:  # Foxy（机器狗）
+    from rclpy._rclpy import RCLError
+except ImportError:  # Humble 及以后（控制主机）
+    from rclpy._rclpy_pybind11 import RCLError
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from nav_msgs.msg import Odometry, Path
 from rclpy.executors import ExternalShutdownException
@@ -61,12 +67,16 @@ def transform_lidar_points_to_odom(
 
 
 def _cloud_xyz(message: PointCloud2) -> np.ndarray:
+    # 同 go2w_lidar_preprocessor/preprocessor_node.py：read_points 在 Humble 上返回
+    # 结构化数组、在 Foxy 上返回生成器，两种都要能读。
     records = point_cloud2.read_points(
         message, field_names=("x", "y", "z"), skip_nans=True
     )
-    return np.column_stack(
-        tuple(np.asarray(records[name], dtype=np.float64) for name in ("x", "y", "z"))
-    )
+    if getattr(getattr(records, "dtype", None), "names", None):
+        return np.column_stack([records[name] for name in ("x", "y", "z")]).astype(
+            np.float64
+        )
+    return np.asarray(list(records), dtype=np.float64).reshape(-1, 3)
 
 
 def _stamp_key(message) -> int:

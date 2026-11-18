@@ -103,8 +103,14 @@ unset CMAKE_PREFIX_PATH PYTHONPATH
 
 set +u
 # shellcheck disable=SC1090
-source "$GO2W_ROS_SETUP"
+GO2W_SETUP_STATUS=0
+source "$GO2W_ROS_SETUP" || GO2W_SETUP_STATUS=$?
 set -u
+if (( GO2W_SETUP_STATUS )); then
+  printf 'ERROR: ROS 2 setup failed (%s): %s\n' "$GO2W_SETUP_STATUS" "$GO2W_ROS_SETUP" >&2
+  return "$GO2W_SETUP_STATUS" 2>/dev/null || exit "$GO2W_SETUP_STATUS"
+fi
+unset GO2W_SETUP_STATUS
 
 # A colcon setup.bash records every underlay that was active when that
 # workspace was built.  Avoid an incompatible recorded underlay, but retain
@@ -119,26 +125,38 @@ fi
 source_overlay_safely() {
   local setup_file="$1"
   local local_setup="${setup_file%/setup.bash}/local_setup.bash"
+  local selected_setup="$setup_file" source_status=0
   set +u
   if [[ "$GO2W_VENDOR_CHAIN_MODE" == "0" ]] \
     && grep -Eq 'COLCON_CURRENT_PREFIX="/opt/ros/[^"/]+' "$setup_file" \
     && grep -E 'COLCON_CURRENT_PREFIX="/opt/ros/[^"/]+' "$setup_file" \
       | grep -Fvq "/opt/ros/${ROS_DISTRO}" \
     && [[ -f "$local_setup" ]]; then
-    # shellcheck disable=SC1090
-    source "$local_setup"
-  else
-    # shellcheck disable=SC1090
-    source "$setup_file"
+    selected_setup="$local_setup"
   fi
+  # The caller may deliberately disable errexit for diagnostics, or source
+  # this entry in an `if`. Preserve the hook's status before restoring nounset;
+  # `set -u` must not turn a failed source into a successful environment.
+  # shellcheck disable=SC1090
+  source "$selected_setup" || source_status=$?
   set -u
+  if (( source_status )); then
+    printf 'ERROR: ROS overlay setup failed (%s): %s\n' "$source_status" "$selected_setup" >&2
+  fi
+  return "$source_status"
 }
 
 if [[ -n "${GO2W_UNITREE_SETUP:-}" && -f "$GO2W_UNITREE_SETUP" ]]; then
-  source_overlay_safely "$GO2W_UNITREE_SETUP"
+  source_overlay_safely "$GO2W_UNITREE_SETUP" || {
+    GO2W_SETUP_STATUS=$?
+    return "$GO2W_SETUP_STATUS" 2>/dev/null || exit "$GO2W_SETUP_STATUS"
+  }
 fi
 if [[ -f "$GO2W_WORKSPACE_SETUP" ]]; then
-  source_overlay_safely "$GO2W_WORKSPACE_SETUP"
+  source_overlay_safely "$GO2W_WORKSPACE_SETUP" || {
+    GO2W_SETUP_STATUS=$?
+    return "$GO2W_SETUP_STATUS" 2>/dev/null || exit "$GO2W_SETUP_STATUS"
+  }
 fi
 if [[ -z "${GO2W_CONTROL_SETUP:-}" ]]; then
   for candidate in \
@@ -156,8 +174,24 @@ if [[ -z "${GO2W_CONTROL_SETUP:-}" ]]; then
   :
 fi
 if [[ -n "${GO2W_CONTROL_SETUP:-}" && -f "$GO2W_CONTROL_SETUP" ]]; then
-  source_overlay_safely "$GO2W_CONTROL_SETUP"
+  source_overlay_safely "$GO2W_CONTROL_SETUP" || {
+    GO2W_SETUP_STATUS=$?
+    return "$GO2W_SETUP_STATUS" 2>/dev/null || exit "$GO2W_SETUP_STATUS"
+  }
 fi
+# Explicit Jetson overlays only. Desktop defaults do not source these paths.
+for nav2_setup in "${GO2W_NAV2_SAFETY_SETUP:-}" "${GO2W_NAV2_RPP_SETUP:-}" "${GO2W_NAV2_SPIN_SETUP:-}" "${GO2W_NAV2_BT_SETUP:-}" "${GO2W_NAV2_CONTROLLER_SETUP:-}" "${GO2W_LIDAR_HOTPATH_SETUP:-}"; do
+  [[ -n "$nav2_setup" ]] || continue
+  if [[ "${ROS_DISTRO:-}" != foxy || ! -f "$nav2_setup" ]]; then
+    printf 'ERROR: required native Foxy compatibility overlay missing: %s\n' "$nav2_setup" >&2
+    return 2 2>/dev/null || exit 2
+  fi
+  source_overlay_safely "$nav2_setup" || {
+    GO2W_SETUP_STATUS=$?
+    return "$GO2W_SETUP_STATUS" 2>/dev/null || exit "$GO2W_SETUP_STATUS"
+  }
+done
+unset nav2_setup
 unset -f source_overlay_safely
 
 export GO2W_CONTROL_ROOT GO2W_UNITREE_ROOT GO2W_CONTROL_SETUP GO2W_UNITREE_SETUP

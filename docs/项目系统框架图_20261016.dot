@@ -1,0 +1,65 @@
+digraph robotscene {
+  graph [rankdir=TB, bgcolor="#F7F9FC", pad="0.35", nodesep="0.32", ranksep="0.55", splines=polyline, fontname="Noto Sans CJK SC", fontsize=24, labelloc=t, label="robotscene · Go2-W 自然语言目标搜索系统\n当前源码正常 Nav2 启动链 · 2026-10-16", compound=true];
+  node [shape=box, style="rounded,filled", color="#D0DAE8", penwidth=1.4, fillcolor=white, fontname="Noto Sans CJK SC", fontsize=15, margin="0.22,0.16", fontcolor="#172B4D"];
+  edge [color="#7586A1", penwidth=1.5, arrowsize=0.75, fontname="Noto Sans CJK SC", fontsize=11, fontcolor="#52637A"];
+
+  subgraph cluster_entry {
+    label="01  任务与交互"; fontsize=17; fontcolor="#2463A6"; color="#CBDCF1"; style="rounded,filled"; fillcolor="#EEF5FE";
+    user [label="用户自然语言任务\n例：找饮水机旁的蓝色垃圾桶"];
+    web [label="WebUI / FastAPI\n任务会话 · 暂停恢复 · 地图与回放"];
+    task [label="任务理解与能力检查\n目标类别 / 属性 / 关系 / 限制\nSearchTaskContext + TargetProfile"];
+    user -> web -> task;
+    {rank=same; user; web; task;}
+  }
+
+  subgraph cluster_inputs {
+    label="02  传感器、视觉与地图"; fontsize=17; fontcolor="#15745E"; color="#BDDDD2"; style="rounded,filled"; fillcolor="#EEF8F4";
+    camera [label="D435 RGB-D 相机\n同帧图像 + 深度 + 内参"];
+    lidar [label="原装 LiDAR + 轮式里程计\n时间 / 外参 / 自体过滤 / 新鲜度"];
+    hesai [label="Hesai PandarXT-16 + IMU\n独立三维建图输入"];
+    vision [label="视觉检测与目标复核\n网页配置：RAM++ + DINO + SAM2\n可选：VLM 路线\n场景物体 / 目标候选 / 关系锚点"];
+    metric [label="二维导航地图与定位\n关键帧 SLAM Toolbox / 保存图 AMCL\n/map + map → odom_fused → base_link"];
+    cloud [label="plain_slam 三维建图辅助\n独立 pslam_map 世界点云\n用于三维展示；独立于二维导航"];
+    camera -> vision;
+    lidar -> metric [label="建图 / 里程计 TF"];
+    hesai -> cloud;
+    {rank=same; camera; lidar; hesai;}
+    {rank=same; vision; metric; cloud;}
+  }
+
+  subgraph cluster_cognition {
+    label="03  世界模型与搜索协调"; fontsize=17; fontcolor="#6C46A3"; color="#D6CBE7"; style="rounded,filled"; fillcolor="#F4F0FA";
+    world [label="语义世界模型\nRGB-D 物体定位 + 采集时刻 TF\n持久物体表 / 地点图 / 关系 / 前沿\nSemanticNavigationGraph"];
+    memory [label="记忆与先验\n观测历史 / 负证据 / 前沿尝试记录\n知识、常识与 PSG 搜索假设"];
+    explorer [label="AutonomousExplorer 主协调器\n观察 → 匹配 → 复核 → 更新记忆\n→ 规划 → 执行 → 等待结果 → 再观察\n暂停 / 重试 / 等地图 / 卡死恢复", fillcolor="#E9DFFA", color="#A48AC7", penwidth=2];
+    decision [label="下一观察位置选择\nSpatialSearchReasoner + LongTermGoalSelector\n语义相关度 / 信息增益 / 路程 / 失败惩罚\nLocalGoalExecutor → 地图目标位姿"];
+    world -> explorer [label="场景与空间证据"];
+    memory -> explorer [label="搜索经验与假设"];
+    explorer -> decision [label="选择探索 / 锚点 / 目标视点"];
+    {rank=same; world; memory;}
+  }
+
+  subgraph cluster_act {
+    label="04  路径、控制与运动"; fontsize=17; fontcolor="#A36A16"; color="#E7D3B5"; style="rounded,filled"; fillcolor="#FFF7EB";
+    nav [label="Nav2SearchBackend\nComputePathToPose → 通道 / 转向空间检查\n→ NavigateToPose"];
+    safety [label="速度与安全控制链\n控制器 → 平滑 → 速度守卫 → 碰撞监视\n控制仲裁 → cmd_vel bridge\n授权 / arm / 租约 / 急停 / 超时 / 定位 / 预算"];
+    robot [label="Go2-W 运动执行与反馈\n/go2w/motion Action → Unitree 控制链\n位移、转角、状态与执行结果", fillcolor="#FFF0D4", color="#D8B06A", penwidth=2];
+    nav -> safety -> robot;
+  }
+
+  trace [label="运行证据与展示\n事件 / 图 revision / 决策理由 / 最终结果\noutputs/live_runs + Web 状态", fillcolor="#EAF0F7"];
+
+  task -> explorer [label="结构化任务"];
+  user -> camera [style=invis];
+  web -> lidar [style=invis];
+  task -> hesai [style=invis];
+  vision -> world [label="框 / 掩码 / 类别 + 深度"];
+  metric -> world [label="坐标、定位和前沿"];
+  vision -> explorer [label="目标候选及复核结果"];
+  decision -> nav [label="下一导航目标"];
+  robot -> explorer [label="动作结果与新观测，循环搜索", style=dashed, color="#9564C4", constraint=false];
+  explorer -> trace [label="事件与决策", style=dashed];
+  world -> trace [label="统一图快照", style=dashed];
+  cloud -> trace [label="三维点云", style=dashed];
+  trace -> web [label="实时展示与回放", style=dashed, constraint=false];
+}

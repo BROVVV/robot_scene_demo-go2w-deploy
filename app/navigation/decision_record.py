@@ -43,6 +43,23 @@ class StructuredDecisionRecord:
     task_text: str = ""
     canonical_target: str = ""
     current_place_id: str | None = None
+    task_id: str | None = None
+    snapshot_id: str | None = None
+    map_id: str | None = None
+    map_epoch: str | None = None
+    graph_revision: int | None = None
+    grid_revision: int | None = None
+    semantic_revision: int | None = None
+    sensor_profile_id: str | None = None
+    source_observation_ids: list[str] = field(default_factory=list)
+    evidence_age_ms: float | None = None
+    candidates: list[dict[str, Any]] = field(default_factory=list)
+    selected_candidate_id: str | None = None
+    downstream_selected_id: str | None = None
+    downstream_rejection: str | None = None
+    execution_result: str | None = None
+    arrival_verified: bool = False
+    target_verified: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -68,6 +85,23 @@ def build_decision_record(
     task_text: str = "",
     canonical_target: str = "",
     current_place_id: str | None = None,
+    task_id: str | None = None,
+    snapshot_id: str | None = None,
+    map_id: str | None = None,
+    map_epoch: str | None = None,
+    graph_revision: int | None = None,
+    grid_revision: int | None = None,
+    semantic_revision: int | None = None,
+    sensor_profile_id: str | None = None,
+    source_observation_ids: list[str] | None = None,
+    evidence_age_ms: float | None = None,
+    candidates: list[dict[str, Any]] | None = None,
+    selected_candidate_id: str | None = None,
+    downstream_selected_id: str | None = None,
+    downstream_rejection: str | None = None,
+    execution_result: str | None = None,
+    arrival_verified: bool = False,
+    target_verified: bool = False,
     timestamp: float | None = None,
 ) -> StructuredDecisionRecord:
     """Build a record whose explanations come from structured rules.
@@ -112,6 +146,23 @@ def build_decision_record(
         task_text=task_text,
         canonical_target=canonical_target,
         current_place_id=current_place_id,
+        task_id=task_id,
+        snapshot_id=snapshot_id,
+        map_id=map_id,
+        map_epoch=map_epoch,
+        graph_revision=graph_revision,
+        grid_revision=grid_revision,
+        semantic_revision=semantic_revision,
+        sensor_profile_id=sensor_profile_id,
+        source_observation_ids=list(source_observation_ids or []),
+        evidence_age_ms=evidence_age_ms,
+        candidates=list(candidates or []),
+        selected_candidate_id=selected_candidate_id,
+        downstream_selected_id=downstream_selected_id,
+        downstream_rejection=downstream_rejection,
+        execution_result=execution_result,
+        arrival_verified=bool(arrival_verified),
+        target_verified=bool(target_verified),
     )
 
 

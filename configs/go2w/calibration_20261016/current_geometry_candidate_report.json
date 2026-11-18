@@ -1,0 +1,60 @@
+{
+  "scope": "current floor and pinned-URDF engineering estimate; not field qualification",
+  "authorizes_motion": false,
+  "held_out": {
+    "base_to_cloud": {
+      "floor_angle_deg": 0.03340628323785028,
+      "floor_distance_m": 0.00028155269849927667
+    },
+    "base_to_camera": {
+      "floor_angle_deg": 0.25152846317114474,
+      "floor_distance_m": 0.00983804150822265
+    }
+  },
+  "base_to_cloud": {
+    "rotation_change_deg": 0.31672702392445956,
+    "translation_m": [
+      0.06881458940911286,
+      0.00980355697333788,
+      0.021943983061739863
+    ]
+  },
+  "base_to_camera": {
+    "rotation_change_deg": 5.814462077891226,
+    "translation_m": [
+      0.3,
+      0.0,
+      0.06357023842215363
+    ]
+  },
+  "self_model": {
+    "old_points": 2278,
+    "current_supported_old_centers": 646,
+    "old_radius_m": 0.03,
+    "new_radius_m": 0.015,
+    "expands_raw_removal_volume": false
+  },
+  "posture": {
+    "joint_q": [
+      0.05612713098526001,
+      0.7018254399299622,
+      -1.3770639896392822,
+      0.014389246702194214,
+      0.6963451504707336,
+      -1.3230700492858887,
+      -0.03952468931674957,
+      0.6927307844161987,
+      -1.304492712020874,
+      -0.019728422164916992,
+      0.720041036605835,
+      -1.3451542854309082
+    ],
+    "rpy": [
+      0.003743057604879141,
+      -0.0015887214103713632,
+      0.2911915183067322
+    ],
+    "captured_at_unix": 1792136278.2609122
+  },
+  "base_height_m": 0.4338194450975058
+}

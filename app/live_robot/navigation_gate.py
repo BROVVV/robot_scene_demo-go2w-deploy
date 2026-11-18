@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
+
+UTC = timezone.utc
 
 
 PLAN_ONLY_REQUIRED = (
@@ -13,10 +15,17 @@ PLAN_ONLY_REQUIRED = (
     "footprint_confirmed",
     "scan_frame_valid",
     "lidar_fresh",
-    "lio_fresh",
+    # 计划书 §6.5：执行不再依赖 /lio/valid，改看坐标桥发布的
+    # /go2w/nav/localization_valid（map -> odom_fused -> base_link 的新鲜度）。
+    "navigation_localization_valid",
     "map_valid",
     "tf_valid",
     "compute_path_to_pose_ready",
+    # 计划书 §10：只规划模式还要求 Nav2 lifecycle 全 active、速度链话题只有
+    # 预期发布者、/go2w/control_source 能正确切到 nav2（但不实际放行速度）。
+    "nav2_lifecycle_active",
+    "speed_chain_single_publisher",
+    "control_source_nav2",
 )
 
 EXECUTE_REQUIRED = PLAN_ONLY_REQUIRED + (
@@ -44,10 +53,13 @@ class NavigationReadiness:
     footprint_confirmed: bool = False
     scan_frame_valid: bool = False
     lidar_fresh: bool = False
-    lio_fresh: bool = False
+    navigation_localization_valid: bool = False
     map_valid: bool = False
     tf_valid: bool = False
     compute_path_to_pose_ready: bool = False
+    nav2_lifecycle_active: bool = False
+    speed_chain_single_publisher: bool = False
+    control_source_nav2: bool = False
     nav2_allow_execute: bool = False
     collision_monitor_active: bool = False
     velocity_smoother_active: bool = False

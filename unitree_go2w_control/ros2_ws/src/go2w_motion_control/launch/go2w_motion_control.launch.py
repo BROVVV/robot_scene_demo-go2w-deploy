@@ -9,6 +9,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
 
 
 def _detect_interface() -> str:
@@ -74,6 +75,8 @@ def generate_launch_description() -> LaunchDescription:
     post_turn_zero_velocity_hold_sec = LaunchConfiguration(
         "post_turn_zero_velocity_hold_sec"
     )
+    arm_timeout_sec = LaunchConfiguration("arm_timeout_sec")
+    remote_override_cleared = LaunchConfiguration("remote_override_cleared")
 
     lease_holder = ExecuteProcess(
         cmd=[
@@ -163,6 +166,14 @@ def generate_launch_description() -> LaunchDescription:
             f"{project_root}/scripts/go2w/motion_local_gateway.py",
             "--socket",
             motion_gateway_socket,
+            "--sport-state-topic",
+            "/go2w/motion/local_sportmodestate",
+            "--lease-status-dir",
+            lease_status_dir,
+            # 必须与 motion_control.yaml 的 arm_timeout_sec 一致：网关只是
+            # 镜像动作服务器那条 60 秒空闲租约规则，两边不同步就会报错的值。
+            "--arm-timeout-sec",
+            arm_timeout_sec,
         ],
         output="screen",
         sigterm_timeout="5",
@@ -172,10 +183,18 @@ def generate_launch_description() -> LaunchDescription:
         cmd=[
             "/bin/bash",
             "-lc",
-            "export ROS_LOCALHOST_ONLY=0; "
-            f"source {project_root}/scripts/go2w/setup_environment.sh; "
-            f"exec {ros_python_executable} {project_root}/scripts/go2w/"
-            f"motion_network_proxy.py --socket {motion_gateway_socket}",
+            # ``-lc`` 只吃一个参数，所以这一整条命令是**一个** cmd 元素；而它
+            # 里面要插一个 LaunchConfiguration，就必须写成"替换项列表"，
+            # 不能写成 f-string —— f-string 会当场 str() 出 LaunchConfiguration
+            # 的 repr，参数原样带进命令行，不报错、也不生效。
+            [
+                "export ROS_LOCALHOST_ONLY=0; ",
+                f"source {project_root}/scripts/go2w/setup_environment.sh; ",
+                f"exec {ros_python_executable} {project_root}/scripts/go2w/",
+                f"motion_network_proxy.py --socket {motion_gateway_socket} ",
+                "--remote-override-cleared=",
+                remote_override_cleared,
+            ],
         ],
         output="screen",
         sigterm_timeout="5",
@@ -235,8 +254,8 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("interface", default_value=_detect_interface()),
             DeclareLaunchArgument(
                 "config_file",
-                default_value=f"{root}/ros2_ws/install/go2w_motion_control/share/"
-                "go2w_motion_control/config/motion_control.yaml",
+                default_value=str(Path(get_package_share_directory(
+                    "go2w_motion_control")) / "config" / "motion_control.yaml"),
             ),
             DeclareLaunchArgument("robot_ip", default_value="192.168.123.18"),
             DeclareLaunchArgument("require_arm", default_value="true"),
@@ -259,6 +278,22 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "post_turn_zero_velocity_hold_sec", default_value="1.0"
+            ),
+            # 与 motion_control.yaml 的 arm_timeout_sec 成对改动：网关镜像的是
+            # 动作服务器那条 60 秒空闲租约，不同步就会报错的值。
+            DeclareLaunchArgument("arm_timeout_sec", default_value="60.0"),
+            # 默认 false = 不替操作员断言遥控器状态，gate 的 remote_override
+            # 因此保持拦着；只有操作员显式传 true 才放行。理由见
+            # scripts/go2w/motion_gate_state_core.py 的模块文档第 3 条。
+            DeclareLaunchArgument(
+                "remote_override_cleared",
+                default_value="false",
+                description=(
+                    "Assert that no remote operator holds the physical controller. "
+                    "No remote-teleop input exists in this deployment, so this cannot "
+                    "be measured, only asserted. Leave false unless an operator "
+                    "decides otherwise."
+                ),
             ),
             DeclareLaunchArgument("log_root", default_value=f"{root}/logs"),
             lease_holder,

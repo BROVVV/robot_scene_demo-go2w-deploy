@@ -19,14 +19,14 @@ slam_3d_node:
       min_local_map_matching_rate: 0.70
 
     loop_closure:
-      num_loop_candidates: 10
+      num_loop_candidates: 30
       loop_detection_distance_thresh: 12.0
       loop_detection_height_thresh: 3.0
       error_average_th: 0.8
       active_points_rate_th: 0.45
       gicp_max_iteration: 8
       gicp_epsilon: 0.3
-      gicp_max_correspondence_dist: 3.0
+      gicp_max_correspondence_dist: 1.0
       gicp_huber_delta: 0.5
 
     pose_graph:

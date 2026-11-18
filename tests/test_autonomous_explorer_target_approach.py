@@ -9,7 +9,10 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
+
+import pytest
 
 from app.live_robot.autonomous_explorer import (
     AutonomousExplorer,
@@ -253,3 +256,111 @@ def test_target_lost_during_approach_enters_lost_strategy() -> None:
     assert aborted[-1]["reason"] == "TARGET_LOST_DURING_APPROACH"
     assert not _events(explorer, "target_found")
     assert result.result != "TARGET_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# 计划书 §3.2：位姿这一帧丢了，不能当成「机器人在原点」
+#
+# `_pose_xy_yaw` 对缺失字段一律回落到 0，于是「位姿真的是原点」和「这帧没有
+# 位姿」在它的返回值上长得一模一样。凡是拿它去**发地图系目标**的地方，都必须
+# 先问 `_has_xy`——否则位姿一丢，§6.7 的原地观察转向就变成「开回地图原点」。
+# ---------------------------------------------------------------------------
+
+
+def test_pose_reader_distinguishes_the_origin_from_a_missing_pose() -> None:
+    """判据本身：原点返回 True，缺位姿返回 False —— 这正是 _pose_xy_yaw 做不到的。"""
+    from app.live_robot.autonomous_explorer import _has_xy, _pose_xy_yaw
+
+    # 两件事的**读取结果**完全相同，所以只看 _pose_xy_yaw 分不出来。
+    assert _pose_xy_yaw(None) == _pose_xy_yaw({"x": 0.0, "y": 0.0, "yaw_rad": 0.0}) == (
+        0.0, 0.0, 0.0)
+    assert _has_xy({"x": 0.0, "y": 0.0}) is True, "真的站在原点是个合法位姿"
+    assert _has_xy(None) is False
+    assert _has_xy({}) is False
+    assert _has_xy({"yaw_rad": 1.0}) is False, "只有朝向没有坐标，等于没有位姿"
+    assert _has_xy({"x": None, "y": 2.0}) is False
+
+
+def test_plan_context_never_hands_a_synthesized_origin_to_the_generator() -> None:
+    """没有位姿时交给候选生成器的必须是 None，不是一个编出来的原点。
+
+    分辨力在于两遍跑的是**同一个** explorer、同一份 frontier/净空地图，只换
+    观测里有没有坐标：有坐标那遍必须真的交出 (x, y)，没有那遍必须交 None。
+    少了前半句，一个恒交 None 的实现也能让这条测试变绿。
+    """
+    from app.navigation.clearance_map import clearance_map_from_local_safety
+    from app.navigation.safety_models import (
+        SECTOR_COUNT,
+        SECTOR_WIDTH_DEG,
+        STATE_CLEAR,
+        build_local_safety_snapshot,
+    )
+
+    scene = ApproachScene()
+    explorer = _explorer(scene, finish_on_visual_confirmation=False)
+
+    evidence = [
+        {"sector": index, "state": STATE_CLEAR, "distance_m": 3.0,
+         "bearing_deg": wrap_deg(index * SECTOR_WIDTH_DEG)}
+        for index in range(SECTOR_COUNT)
+    ]
+    snapshot = build_local_safety_snapshot(
+        sector_evidence=evidence, timestamp=1_700_000_000.0,
+        lidar_fresh=True, geometry_validated=True, pose_quality="metric")
+    clearance_map = clearance_map_from_local_safety(snapshot)
+    # 前端点非空 —— `_candidate_plan_context` 里那道闸就是这次回归的现场。
+    explorer.semantic_graph.frontiers["frontier:p0:00"] = {
+        "frontier_id": "frontier:p0:00", "position": [2.0, 0.0],
+        "status": "OPEN", "state": "OPEN", "failure_count": 0,
+    }
+    perception = scene.perception_provider()(
+        LiveObservation(bundle_id="b", timestamp=1_700_000_000.0, pose=None), 0.0)
+
+    def _context(pose):
+        observation = LiveObservation(
+            bundle_id="b", timestamp=1_700_000_000.0, pose=pose)
+        return explorer._candidate_plan_context(
+            observation=observation, safety=snapshot, perception=perception,
+            clearance_map=clearance_map, safety_rejections=[])
+
+    located = _context({"x": 1.5, "y": -2.0, "yaw_rad": 0.3})
+    assert located["robot_pose"] == (1.5, -2.0, 0.3), located["robot_pose"]
+
+    missing = _context(None)
+    assert missing.get("frontiers"), "这遍必须真的走进 frontier 分支，否则什么也没测"
+    assert "robot_pose" in missing
+    assert missing["robot_pose"] is None, (
+        "位姿丢了就不能交出一个原点冒充机器人位置："
+        f"{missing['robot_pose']!r}"
+    )
+
+
+def test_metric_approach_never_rotates_toward_the_map_origin() -> None:
+    """§6.7 的「原地转向」在拿不到位姿时必须不出目标，而不是转到 (0, 0)。
+
+    对照那遍用真实位姿：同一个 decision 必须真的产出以机器人为原地的
+    NAVIGATE_POSE —— 少了它，一个恒返回 None 的实现也能让这条测试变绿。
+    """
+    from app.navigation.models import LiveObservation as _Obs
+
+    class _Decision:
+        action = "ROTATE_SMALL"
+        relative_dyaw_deg = 30.0
+        reason = "turn toward target"
+        def to_dict(self):
+            return {"action": self.action}
+
+    def _goal(pose):
+        return AutonomousExplorer._metric_approach_goal(
+            _Decision(), _Obs(bundle_id="b", timestamp=1.0, pose=pose),
+            None, object_id="o1", steps=1)
+
+    located = _goal({"x": 1.5, "y": -2.0, "yaw_rad": math.radians(17.0)})
+    assert located is not None, "有位姿时这条转向必须表达得出来"
+    assert located.goal_type == "NAVIGATE_POSE"
+    assert located.position == (1.5, -2.0)
+    assert located.yaw == pytest.approx(17.0 + 30.0)
+    assert located.frame == "map"
+
+    assert _goal(None) is None, "没有位姿就不许编一个原点当转向目标"
+    assert _goal({"yaw_rad": math.radians(17.0)}) is None

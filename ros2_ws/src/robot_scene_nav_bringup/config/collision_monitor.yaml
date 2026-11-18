@@ -1,16 +1,43 @@
+# GO2-W 自主搜索单链路碰撞监视（计划书 §6.4）。
+#
+# 只有一个停止区和一个减速区，都是按 GO2-W 实际 footprint 生成的矩形顶点：
+#   停止区：前方 0.60 m、后方 0.40 m、左右各 0.35 m
+#   减速区：前方 1.00 m、后方 0.60 m、左右各 0.60 m
+# 停止区触发输出零速度。外层区保留为接近告警，但不再把 0.12 m/s
+# 的唯一实测可工作速度压成 0.042 m/s：2026-10-23 真机证据显示这种低速
+# 在稀疏后侧回波的 10 Hz 抖动下无法形成有效位移，并会让 Nav2 误判无进展。
+# 前方 0.60 m 硬停止、RPP 碰撞预测和两层 costmap 均保持不变。
+# points 在 Humble 里是扁平的 double 数组，不是嵌套数组。
 collision_monitor:
   ros__parameters:
     base_frame_id: base_link
-    odom_frame_id: odom
-    cmd_vel_in_topic: /cmd_vel
-    cmd_vel_out_topic: /go2w/nav2_cmd_vel
-    state_topic: collision_monitor_state
-    transform_tolerance: 0.2
+    odom_frame_id: odom_fused
+    # Final velocity_guard follows collision processing; a blocked TF lookup
+    # here must never delay a localization/freshness/controller stop.
+    cmd_vel_in_topic: /cmd_vel_nav_smoothed
+    cmd_vel_out_topic: /cmd_vel_nav_collision_checked
+    transform_tolerance: 0.3
     source_timeout: 0.30
+    base_shift_correction: true
+    stop_pub_timeout: 2.0
     polygons: [Stop, Slowdown]
+    Stop:
+      type: "polygon"
+      points: [0.60, 0.35, 0.60, -0.35, -0.40, -0.35, -0.40, 0.35]
+      action_type: "stop"
+      max_points: 4
+      visualize: false
+      enabled: true
+    Slowdown:
+      type: "polygon"
+      points: [1.00, 0.60, 1.00, -0.60, -0.60, -0.60, -0.60, 0.60]
+      action_type: "slowdown"
+      slowdown_ratio: 1.0
+      max_points: 4
+      visualize: false
+      enabled: true
     observation_sources: [scan]
-    # Polygons enclose the official 0.70 x 0.43 m standing envelope. Runtime
-    # validation and the execution gate remain mandatory before motion.
-    Stop: {type: polygon, points: "[[0.45, 0.30], [0.45, -0.30], [-0.35, -0.30], [-0.35, 0.30]]", action_type: stop, min_points: 4}
-    Slowdown: {type: polygon, points: "[[0.8, 0.5], [0.8, -0.5], [-0.6, -0.5], [-0.6, 0.5]]", action_type: slowdown, slowdown_ratio: 0.35, min_points: 4}
-    scan: {type: scan, topic: /go2w/lidar/scan, min_height: 0.05, max_height: 1.5, enabled: true}
+    scan:
+      type: "scan"
+      topic: /go2w/lidar/scan
+      enabled: true

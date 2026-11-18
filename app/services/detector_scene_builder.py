@@ -100,6 +100,8 @@ def _scene_object_from_detection(index: int, detection: DetectedObject) -> Scene
         detector_score=detection.score,
         text_score=detection.text_score,
         mask_area_ratio=detection.mask_area_ratio,
+        mask_rle=detection.mask_rle,
+        mask_size=detection.mask_size,
     )
 
 

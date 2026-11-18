@@ -7,12 +7,8 @@ project_root="$(cd -- "${script_dir}/../.." && pwd)"
 # Keep the provider credential in the daemon process, where the API client
 # actually lives.  The ROS worker can then use the Unix socket without
 # receiving the secret in its own environment.
-if [[ -f "${project_root}/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "${project_root}/.env"
-  set +a
-fi
+source "${script_dir}/load_env_defaults.sh"
+go2w_load_env_defaults "${project_root}/.env"
 # httpx/OpenAI will prefer ALL_PROXY over HTTPS_PROXY.  The deployment's
 # forwarder exposes an HTTP CONNECT endpoint, while the inherited socks5h
 # alias is not understood by the pinned httpx runtime.

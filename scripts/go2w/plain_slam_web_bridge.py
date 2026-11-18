@@ -30,6 +30,7 @@ from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import String
 
 from app.spatial.pointcloud_web_codec import extract_xyz_array, extract_xyz_points
+from app.spatial.object_display_snapshot import meta_payload
 from app.spatial.slam_web_map_state import MotionEpisodeGate, SlamWebMapState
 
 
@@ -49,6 +50,13 @@ class PlainSlamWebBridge(Node):
         super().__init__("plain_slam_web_bridge")
         self._output = Path(args.output).resolve()
         self._output.parent.mkdir(parents=True, exist_ok=True)
+        # §2.3：点云之外的轻量元数据（map_epoch/frame_id/map_revision）。对象
+        # 生产者只读这一份，不必解析几万点的大地图 JSON。
+        self._meta_output = (
+            Path(args.meta_output).resolve() if args.meta_output
+            else self._output.parent / "slam_map_meta.json"
+        )
+        self._meta_output.parent.mkdir(parents=True, exist_ok=True)
         self._state = SlamWebMapState(
             canonical_frame=args.map_frame,
             permanent_source=args.map_topic,
@@ -71,6 +79,7 @@ class PlainSlamWebBridge(Node):
         self._diagnostics_every = max(1, int(args.diagnostics_every))
         self._diagnostics_counter = 0
         self._last_reject_log = 0.0
+        self._last_preview_reject_log = 0.0
         self._reset_marker_path = (
             Path(args.reset_marker).resolve() if args.reset_marker else None
         )
@@ -118,9 +127,14 @@ class PlainSlamWebBridge(Node):
             wall_time=time.time(),
             source_points=self._relayed_source_points or None,
         )
+        # §16 的两个扫描事件就落在这条路径上：**累积**只发生在永久地图这一层
+        # （revision 整张替换），预览层是被替换的、不累积，所以不在下面 _on_scan
+        # 里发 slam_scan_accumulated；预览被接受的情况由 _diagnostics 的
+        # `preview=N` 覆盖。
         if accepted:
             self.get_logger().info(
-                f"map r{state.map_revision} session {state.session_id}: "
+                f"slam_scan_accumulated map r{state.map_revision} "
+                f"session {state.session_id}: "
                 f"source={state.source_map_points} cached={len(state.cloud)} "
                 f"voxel={state.cloud.effective_voxel_size_m:.3f}m "
                 f"extent={state.cloud.extent_m()}"
@@ -130,20 +144,34 @@ class PlainSlamWebBridge(Node):
         if now - self._last_reject_log >= 5.0:
             self._last_reject_log = now
             self.get_logger().warn(
-                f"map rejected: {state.last_rejected_reason} (frame={frame_id}, "
-                f"points={len(points)}, canonical={state.canonical_frame}, "
-                f"health={state.health})"
+                f"slam_scan_dropped map: {state.last_rejected_reason} "
+                f"(frame={frame_id}, points={len(points)}, "
+                f"canonical={state.canonical_frame}, health={state.health}, "
+                f"count={state.rejected_counts.get(state.last_rejected_reason, 0)})"
             )
 
     def _on_scan(self, message: PointCloud2) -> None:
         """§9.1：最新 scan 只是 debug 预览层，永远不写进永久地图。"""
         now = time.monotonic()
         if now - self._last_preview_monotonic < self._preview_interval:
+            # §16 slam_scan_dropped **不覆盖这一条**：按 --preview-rate 限流是
+            # 设计行为，不是丢帧。10 Hz 全记会把日志淹掉，且它没有诊断价值。
             return
         self._last_preview_monotonic = now
         frame_id = str(message.header.frame_id or "")
         if frame_id != self._preview_frame:
             self._state.reject("preview_frame_mismatch")
+            # §16 slam_scan_dropped。这条路径**此前一处日志都没有**：reject() 只
+            # 累加计数，而计数只出现在 snapshot JSON 里，翻日志查不到。限流 5 s 与
+            # _on_map 的拒收告警同节奏 —— 帧号配错是持续状态，不限流会刷屏；
+            # 限流也不丢信息，累计次数跟在同一行里。
+            if now - self._last_preview_reject_log >= 5.0:
+                self._last_preview_reject_log = now
+                self.get_logger().warn(
+                    f"slam_scan_dropped preview: preview_frame_mismatch "
+                    f"(frame={frame_id}, expected={self._preview_frame}, "
+                    f"count={self._state.rejected_counts.get('preview_frame_mismatch', 0)})"
+                )
             return
         points = extract_xyz_points(message,
                                     max_input_points=self._max_preview_points)
@@ -207,6 +235,13 @@ class PlainSlamWebBridge(Node):
         temporary = self._output.with_suffix(self._output.suffix + f".{os.getpid()}.tmp")
         temporary.write_text(self._state.serialize(payload), encoding="utf-8")
         os.replace(temporary, self._output)
+        # 元数据在地图之后落盘：先写 meta 会让对象生产者读到一张还没上屏的地图的
+        # epoch，于是它投影出的对象要等下一次轮询才对得上。
+        meta = self._meta_output.with_suffix(
+            self._meta_output.suffix + f".{os.getpid()}.tmp")
+        meta.write_text(json.dumps(meta_payload(payload), ensure_ascii=False,
+                                   separators=(",", ":")), encoding="utf-8")
+        os.replace(meta, self._meta_output)
 
     def _reset_marker_stamp(self) -> float:
         if self._reset_marker_path is None:
@@ -233,6 +268,9 @@ class PlainSlamWebBridge(Node):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
+    parser.add_argument("--meta-output", default="",
+                        help="point-cloud-free slam_map_meta.json; defaults to "
+                             "slam_map_meta.json next to --output")
     parser.add_argument("--map-topic", default="/go2w/slam/map_3d",
                         help="authoritative optimized map cloud (permanent history)")
     parser.add_argument("--map-info-topic", default="",

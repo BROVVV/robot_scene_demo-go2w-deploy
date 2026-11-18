@@ -56,7 +56,7 @@ install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  foreach(test_name IN ITEMS angle_utils goal_validation request_matching yaw_controller)
+  foreach(test_name IN ITEMS angle_utils goal_validation request_matching yaw_controller velocity_stream)
     ament_add_gtest(test_${test_name} test/test_${test_name}.cpp)
     target_compile_features(test_${test_name} PRIVATE cxx_std_20)
     target_include_directories(test_${test_name} PRIVATE include)

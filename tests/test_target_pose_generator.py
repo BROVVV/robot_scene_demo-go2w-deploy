@@ -15,6 +15,7 @@ class TargetPoseGeneratorTest(unittest.TestCase):
                 "best_evidence": {"frame_id": 5, "bbox": [0.4, 0.1, 0.6, 0.3], "confidence": 0.9},
             },
             trajectory,
+            allow_fixed_distance_fallback=True,
         )
         goal = generate_observation_goal(localization)
         self.assertIsNotNone(goal)

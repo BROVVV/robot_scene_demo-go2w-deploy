@@ -5,6 +5,17 @@ The store is updated exclusively from SearchEvents so the WebUI (page load,
 F5, WebSocket reconnect) can always recover the full state without replaying
 the whole stream.  All reads take a lock and return deep copies; the store
 never half-updates a snapshot.
+
+计划书 §2.2 的状态形状：``snapshot()`` 返回**小状态加一份图**。
+
+* ``graph`` / ``graph_revision`` —— 唯一图，由 :meth:`set_graph` 安装，只认
+  ``revision`` 递增的那一份。它**不放在** ``self._snapshot`` 里，因此每个普通
+  事件在锁内的 ``deepcopy`` 不带上整张图。
+* ``spatial`` 只保留真正独立的空间数据（RGB-D、位姿、路线、地图健康、PSG 先验、
+  长期/局部目标、关联调试）。``semantic_graph``/``spatial_map``/``place_graph``/
+  ``semantic_objects``/``frontiers`` 都是旧图副本，已删除 —— 对象、Place、
+  Frontier、拓扑一律从 ``graph`` 读。
+* 旧 ``map`` 字段删除。
 """
 
 from __future__ import annotations
@@ -39,6 +50,7 @@ from app.live_robot.search_event import (
     SEARCH_EXHAUSTED,
     SEARCH_FINISHED,
     SEARCH_STATE_CHANGED,
+    STOP_REQUESTED,
     SEMANTIC_OBJECT_LOCALIZED,
     SEMANTIC_REGION_CREATED,
     SESSION_CREATED,
@@ -54,11 +66,22 @@ from app.live_robot.search_event import (
 )
 
 TIMELINE_LIMIT = 500
-# Keep the public state envelope stable for existing WebUI clients.  The
-# graph carried inside it is the unified semantic graph and advertises its
-# own ``semantic_navigation_graph_v1`` schema when produced by the explorer.
-MAP_SCHEMA_VERSION = "live_exploration_graph_v1"
+FAILURE_COMPLETION_RESULTS = frozenset({
+    'FAILED', 'TIMEOUT', 'BACKEND_FAILURE', 'PERCEPTION_FAILURE',
+    'PLANNING_ERROR', 'MAP_UNAVAILABLE',
+})
 
+# 计划书 §2.2：这些事件仍然进时间线、WebSocket 和归档事件日志（原始证据不能
+# 丢），但**不再**往 store 里投影第二份图数据 —— 对象、Place、Frontier 一律从
+# 唯一的 ``graph`` 读。它们必须在这里显式列出，否则会被当成未知事件整条丢掉。
+_RECORD_ONLY_EVENTS = frozenset({
+    MAP_UPDATED,
+    SPATIAL_MAP_UPDATED,
+    FRONTIERS_UPDATED,
+    PLACE_CREATED,
+    PLACE_UPDATED,
+    SEMANTIC_OBJECT_LOCALIZED,
+})
 # Search-session status values (plan book §38).
 STATUS_IDLE = "IDLE"
 STATUS_STARTING = "STARTING"
@@ -117,6 +140,9 @@ def _empty_snapshot() -> dict[str, Any]:
         "reasoner": "semantic",
         "task": {},
         "backend": "",
+        # Effective perception backend reported by the worker.  The Web
+        # service may show the requested value only until this arrives.
+        "detector_backend": "",
         "phase": "",
         "phase_detail": "",
         "phase_started_at": None,
@@ -172,28 +198,10 @@ def _empty_snapshot() -> dict[str, Any]:
             "pose": None,
             "last_motion_result": None,
         },
-        "map": {
-            "schema_version": MAP_SCHEMA_VERSION,
-            "revision": 0,
-            "map_mode": "topological",
-            "graph_mode": "topological",
-            "current_node_id": None,
-            "robot": None,
-            "nodes": [],
-            "edges": [],
-            "observed_sectors": [],
-        },
         "spatial": {
             "rgbd_frame": None,
             "spatial_pose": None,
-            "spatial_map": None,
-            "frontiers": [],
-            "place_graph": None,
-            "semantic_objects": [],
-            "semantic_graph": None,
             "route_plan": None,
-            "map_health": {},
-            "association_debug": [],
             "psg_prior": None,
             "long_term_goal": None,
             "local_goal_progress": None,
@@ -220,10 +228,68 @@ def _empty_snapshot() -> dict[str, Any]:
             "target_approach": None,
         },
         "health": {},
+        # 任务 Agent 面板的状态（计划书 §5.4）。复用 TARGET_MATCH_UPDATED 里
+        # 已经携带的 directive，不新增 AGENT_UPDATED 事件。
+        "agent": _empty_agent(),
         "last_warning": None,
         "timeline": [],
         "error": None,
     }
+
+
+def _empty_agent() -> dict[str, Any]:
+    return {
+        "trace": None,
+        "updated_at": None,
+        "decision_id": None,
+        "downstream_status": "pending",
+        "downstream_reason": None,
+    }
+
+
+def _agent_from_directive(directive: Any, *, updated_at: Any) -> dict[str, Any] | None:
+    """从 directive 里取出任务 Agent 的 trace。
+
+    取不到就返回 `None`，让调用方保留上一份 trace —— 不能用一个空壳把
+    已有面板内容清掉。
+    """
+    if not isinstance(directive, dict):
+        return None
+    trace = directive.get("decision_trace")
+    if not isinstance(trace, dict):
+        return None
+    return {
+        "trace": trace,
+        "updated_at": updated_at,
+        "decision_id": None,
+        "downstream_status": "pending",
+        "downstream_reason": None,
+    }
+
+
+def _downstream_status(trace: dict[str, Any] | None, record: dict[str, Any]) -> str:
+    """Agent 的建议有没有成为最终决定（计划书 §5.3）。
+
+    只在**可核对**时下结论：最终候选带 `directive_id` 且等于本轮 trace_id ⇒
+    采纳；最终候选的来源明确不是语义指令 ⇒ 未采纳（"最终由 local_scan 获胜"
+    这类结论就是这个事实）。其余一律 `pending` —— 绝不猜"被拒绝"。
+
+    具体拒绝原因只取下游真的给了的 `replan_reason`；没有就是 None，
+    由前端显示"下游未提供拒绝原因"。
+    """
+    if not trace:
+        return "pending"
+    ranking = record.get("candidate_ranking") or []
+    if not ranking:
+        return "pending"
+    goal = (ranking[0] or {}).get("goal") or {}
+    provenance = goal.get("provenance") or {}
+    source = str(provenance.get("source") or "")
+    if str(provenance.get("directive_id") or "") == str(trace.get("trace_id") or ""):
+        return "accepted"
+    if source and source != "semantic_navigation_directive":
+        return "rejected"
+    return "pending"
 
 
 class SearchStateStore:
@@ -233,7 +299,10 @@ class SearchStateStore:
                  on_change: Callable[[dict[str, Any], SearchEvent | None], None] | None = None) -> None:
         self._lock = threading.Lock()
         self._snapshot: dict[str, Any] = _empty_snapshot()
-        self._map_revision = 0
+        # 唯一图与它的版本号，刻意放在 _snapshot 之外（见模块 docstring）。
+        # -1 表示本会话还没有任何图，因此 revision 0 也会被接受。
+        self._graph: dict[str, Any] | None = None
+        self._graph_revision = -1
         self._session_seen: Counter[str] = Counter()
         self._current_objects: list[dict[str, Any]] = []
         self._timeline: deque[dict[str, Any]] = deque(maxlen=max(1, int(max_timeline)))
@@ -261,7 +330,8 @@ class SearchStateStore:
             self._snapshot["task"] = copy.deepcopy(task_context or {})
             self._snapshot["status"] = STATUS_STARTING
             self._snapshot["started_at"] = time.time()
-            self._map_revision = 0
+            self._graph = None
+            self._graph_revision = -1
             self._session_seen = Counter()
             self._current_objects = []
             self._timeline = deque(maxlen=self._timeline.maxlen)
@@ -287,14 +357,8 @@ class SearchStateStore:
             ACTION_STARTED: self._on_action_started,
             ACTION_FINISHED: self._on_action_finished,
             REPLAN: self._on_replan,
-            MAP_UPDATED: self._on_map_updated,
             RGBD_FRAME_UPDATED: self._on_rgbd_frame,
             SPATIAL_POSE_UPDATED: self._on_spatial_pose,
-            SPATIAL_MAP_UPDATED: self._on_spatial_map,
-            FRONTIERS_UPDATED: self._on_frontiers,
-            PLACE_CREATED: self._on_place_created,
-            PLACE_UPDATED: self._on_place_updated,
-            SEMANTIC_OBJECT_LOCALIZED: self._on_semantic_object_localized,
             PSG_PRIOR_UPDATED: self._on_psg_prior,
             SEMANTIC_REGION_CREATED: self._on_semantic_region_created,
             LONG_TERM_GOAL_SELECTED: self._on_long_term_goal_selected,
@@ -302,28 +366,72 @@ class SearchStateStore:
             DECISION_RECORDED: self._on_decision_recorded,
             PAUSED: self._on_paused,
             RESUMED: self._on_resumed,
+            STOP_REQUESTED: self._on_stop_requested,
             SEARCH_EXHAUSTED: self._on_search_exhausted,
             OPERATOR_STOP: self._on_operator_stop,
             ERROR: self._on_error,
             SEARCH_FINISHED: self._on_search_finished,
         }.get(event.event_type)
-        if handler is None:
+        if handler is None and event.event_type not in _RECORD_ONLY_EVENTS:
             return
         changed: dict[str, Any] | None = None
         with self._lock:
-            handler(event)
+            # Keep late telemetry and target evidence, but do not let queued
+            # worker progress undo a durable stop request. Only an actual
+            # terminal event can acknowledge completion. reset() starts anew.
+            lifecycle_keys = (
+                "status", "phase", "phase_detail", "phase_started_at",
+                "result", "finish_reason", "finished_at", "summary",
+            )
+            stopped_lifecycle = None
+            if (self._snapshot.get("stop_requested_at") is not None or
+                    self._snapshot.get("status") == STATUS_STOPPING):
+                if event.event_type not in {
+                    OPERATOR_STOP, SEARCH_FINISHED, SEARCH_EXHAUSTED,
+                    ERROR, TASK_REJECTED,
+                }:
+                    stopped_lifecycle = {
+                        key: copy.deepcopy(self._snapshot[key])
+                        for key in lifecycle_keys if key in self._snapshot
+                    }
+            # ``_RECORD_ONLY_EVENTS`` 没有 handler —— 它们只进时间线。
+            if handler is not None:
+                handler(event)
+            if stopped_lifecycle is not None:
+                for key in lifecycle_keys:
+                    if key in stopped_lifecycle:
+                        self._snapshot[key] = stopped_lifecycle[key]
+                    else:
+                        self._snapshot.pop(key, None)
+            elif (self._snapshot.get("stop_requested_at") is not None and
+                    event.event_type in {
+                        OPERATOR_STOP, SEARCH_FINISHED, SEARCH_EXHAUSTED,
+                        ERROR, TASK_REJECTED,
+                    }):
+                self._snapshot["phase"] = self._snapshot["status"]
+                self._snapshot["phase_detail"] = ""
+                self._snapshot["phase_started_at"] = event.timestamp
             self._append_timeline_locked(event)
             changed = copy.deepcopy(self._snapshot)
         if self._on_change is not None and changed is not None:
             self._on_change(changed, event)
 
     def restore(self, snapshot: dict[str, Any]) -> None:
-        """Restore an already materialized snapshot without replaying events."""
+        """Restore an already materialized snapshot without replaying events.
+
+        The snapshot carries the session's single graph (small state + graph),
+        so restoring reads it back into the graph slot rather than the state.
+        """
         with self._lock:
             base = _empty_snapshot()
             base.update(normalize_search_snapshot(snapshot))
+            graph = base.pop("graph", None)
+            base.pop("graph_revision", None)
             self._snapshot = base
-            self._map_revision = int((base.get("map") or {}).get("revision") or 0)
+            self._graph = copy.deepcopy(graph) if isinstance(graph, dict) else None
+            self._graph_revision = (
+                int(self._graph.get("revision") or 0) if self._graph else -1
+            )
             self._timeline = deque(list(base.get("timeline") or [])[-self._timeline.maxlen:],
                                    maxlen=self._timeline.maxlen)
             self._current_objects = list((base.get("objects") or {}).get("current") or [])
@@ -337,25 +445,42 @@ class SearchStateStore:
     # ------------------------------------------------------------------ #
     # snapshots                                                          #
     # ------------------------------------------------------------------ #
+    def lifecycle_snapshot(self) -> dict[str, Any]:
+        """Read lifecycle fields atomically without copying frames or graph.
+
+        Status polling and command gates do not consume the full scene. Keep
+        their lock hold short even when masks and the semantic graph grow.
+        """
+        with self._lock:
+            return copy.deepcopy({key: self._snapshot.get(key) for key in
+                                  ("status", "result", "phase")})
+
     def snapshot(self) -> dict[str, Any]:
+        """Small state + the session's single ``graph`` and ``graph_revision``."""
         with self._lock:
-            return copy.deepcopy(self._snapshot)
+            value = copy.deepcopy(self._snapshot)
+            graph = copy.deepcopy(self._graph)
+            revision = self._graph_revision
+        value["graph"] = graph
+        value["graph_revision"] = revision if graph is not None else 0
+        return value
 
-    def map_snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            return copy.deepcopy(self._snapshot["map"])
+    def set_graph(self, graph: dict[str, Any]) -> bool:
+        """Install the session's single Web graph, newest revision wins.
 
-    def spatial_snapshot(self) -> dict[str, Any]:
+        Only ``revision`` decides; a delayed older graph is dropped rather than
+        regressing the display.  Returns whether the stored graph changed.
+        """
+        if not isinstance(graph, dict):
+            return False
+        revision = int(graph.get("revision") or 0)
+        value = copy.deepcopy(graph)
         with self._lock:
-            return copy.deepcopy(self._snapshot["spatial"])
-
-    def objects_snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            return copy.deepcopy(self._snapshot["objects"])
-
-    def decisions_snapshot(self) -> list[dict[str, Any]]:
-        with self._lock:
-            return copy.deepcopy(self._snapshot["decisions"])
+            if revision <= self._graph_revision:
+                return False
+            self._graph = value
+            self._graph_revision = revision
+        return True
 
     # ------------------------------------------------------------------ #
     # handlers (callers hold the lock)                                   #
@@ -409,6 +534,8 @@ class SearchStateStore:
             health = dict(self._snapshot["health"])
             health.update(payload["health"])
             self._snapshot["health"] = health
+        if payload.get("detector_backend"):
+            self._snapshot["detector_backend"] = str(payload["detector_backend"])
         if payload.get("robot"):
             self._snapshot["robot"].update(payload["robot"])
         if payload.get("startup"):
@@ -467,7 +594,7 @@ class SearchStateStore:
         if payload.get("pose"):
             self._snapshot["robot"]["pose"] = payload["pose"]
             self._snapshot["robot"]["pose_quality"] = (
-                payload.get("pose_quality") or "relative"
+                payload.get("pose_quality") or payload["pose"].get("quality") or "relative"
             )
 
     def _on_objects(self, event: SearchEvent) -> None:
@@ -504,6 +631,11 @@ class SearchStateStore:
             match["anchor_labels"] = anchors
         if payload.get("directive") is not None:
             match["directive"] = payload["directive"]
+            agent = _agent_from_directive(
+                payload["directive"], updated_at=getattr(event, "timestamp", None)
+            )
+            if agent is not None:
+                self._snapshot["agent"] = agent
         if payload.get("graph_match") is not None:
             match["graph_match"] = payload["graph_match"]
         if payload.get("goal_graph") is not None:
@@ -579,6 +711,29 @@ class SearchStateStore:
         if not record:
             return
         decision_id = record.get("decision_id")
+        # 把最近的真实决定与最新 trace 关联（计划书 §5.4 第 4 条）。
+        # 只更新 agent 里下游那三项，不动 trace 本身 —— trace 是决策当时的快照，
+        # 事后改写它就不再是"当时的依据"了。
+        agent = self._snapshot.setdefault("agent", _empty_agent())
+        trace = agent.get("trace") or {}
+        agent["decision_id"] = decision_id
+        agent["downstream_status"] = _downstream_status(trace, record)
+        agent["downstream_reason"] = record.get("replan_reason") or None
+        # §5.4 历史：把这一轮的依据随决定一起留在**已有的** decisions 列表里，
+        # 不新开一份缓冲区，也不改冻结的 DecisionRecord 模型。这里的 record 是
+        # payload 的浅副本，写进去影响不到生产者手里那个对象。
+        if trace:
+            preference = trace.get("selected_preference") or {}
+            record["agent"] = {
+                "trace_id": trace.get("trace_id"),
+                "cycle": event.cycle,
+                "active_subtask": (trace.get("active_subtask") or {}).get("title"),
+                "directive_kind": preference.get("directive_kind"),
+                "relative_heading_deg": preference.get("relative_heading_deg"),
+                "reason_code": preference.get("reason_code"),
+                "evidence_refs": list(preference.get("evidence_refs") or []),
+                "downstream_status": agent["downstream_status"],
+            }
         decisions = [
             item for item in self._snapshot["decisions"]
             if item.get("decision_id") != decision_id
@@ -590,6 +745,12 @@ class SearchStateStore:
 
     def _on_action_started(self, event: SearchEvent) -> None:
         self._snapshot["robot"]["motion_status"] = "EXECUTING"
+        # A result belongs to the goal that just finished.  Keeping it while
+        # the next goal is executing makes the WebUI combine the current
+        # EXECUTING state with the previous goal's reject reason and corridor
+        # decision.  Clear it at the action boundary; ACTION_FINISHED will
+        # publish the result for this goal.
+        self._snapshot["robot"]["last_motion_result"] = None
         self._snapshot["phase"] = "EXECUTE"
         self._snapshot["phase_detail"] = (
             event.payload.get("phase_detail")
@@ -602,15 +763,22 @@ class SearchStateStore:
     def _on_action_finished(self, event: SearchEvent) -> None:
         payload = event.payload
         status = str(payload.get("status") or "")
+        planned_only = (payload.get('dry_run') is True and payload.get('path_checked') is True
+            and (payload.get('candidate_decision') or {}).get('accepted') is True)
         self._snapshot["robot"]["motion_status"] = (
-            "SUCCEEDED" if status == "succeeded" else "FAILED"
+            "PLANNED" if planned_only else ("SUCCEEDED" if status == "succeeded" else "FAILED")
         )
         self._snapshot["robot"]["last_motion_result"] = {
             "status": status,
+            "dry_run": payload.get('dry_run') is True,
+            "path_checked": payload.get('path_checked') is True,
             "message": payload.get("message") or "",
             "elapsed_sec": payload.get("elapsed_sec"),
             "requested_motion": copy.deepcopy(payload.get("requested_motion") or {}),
             "observed_motion": copy.deepcopy(payload.get("observed_motion") or {}),
+            # 计划书 §14：候选决策的结构化记录要能在一个地方读到——走廊判定、
+            # 左右最小侧向净空、速度上限、拒因。现场验收就是照这条查的。
+            "candidate_decision": copy.deepcopy(payload.get("candidate_decision")),
         }
         self._snapshot["phase"] = "WAIT_RESULT"
         self._snapshot["phase_detail"] = payload.get("phase_detail") or (
@@ -641,38 +809,6 @@ class SearchStateStore:
         self._snapshot["spatial"]["spatial_pose"] = payload.get("pose")
         self._snapshot["robot"]["pose_quality"] = payload.get("quality") or self._snapshot["robot"]["pose_quality"]
 
-    def _on_spatial_map(self, event: SearchEvent) -> None:
-        self._snapshot["spatial"]["spatial_map"] = event.payload.get("map")
-
-    def _on_frontiers(self, event: SearchEvent) -> None:
-        self._snapshot["spatial"]["frontiers"] = list(event.payload.get("frontiers") or [])
-
-    def _on_place_created(self, event: SearchEvent) -> None:
-        place_graph = dict(self._snapshot["spatial"]["place_graph"] or {})
-        places = list(place_graph.get("places") or [])
-        places.append(event.payload.get("place") or {})
-        place_graph["places"] = places
-        self._snapshot["spatial"]["place_graph"] = place_graph
-
-    def _on_place_updated(self, event: SearchEvent) -> None:
-        place_graph = dict(self._snapshot["spatial"]["place_graph"] or {})
-        places = list(place_graph.get("places") or [])
-        place = event.payload.get("place") or {}
-        place_id = place.get("place_id")
-        if place_id is not None:
-            places = [p if p.get("place_id") != place_id else place for p in places]
-        place_graph["places"] = places
-        self._snapshot["spatial"]["place_graph"] = place_graph
-
-    def _on_semantic_object_localized(self, event: SearchEvent) -> None:
-        obj = event.payload.get("object") or {}
-        objects = list(self._snapshot["spatial"]["semantic_objects"] or [])
-        object_id = obj.get("object_id")
-        if object_id is not None:
-            objects = [item for item in objects if item.get("object_id") != object_id]
-        objects.append(obj)
-        self._snapshot["spatial"]["semantic_objects"] = objects
-
     def _on_psg_prior(self, event: SearchEvent) -> None:
         self._snapshot["spatial"]["psg_prior"] = event.payload.get("prior")
 
@@ -691,61 +827,6 @@ class SearchStateStore:
     def _on_local_goal_progress(self, event: SearchEvent) -> None:
         self._snapshot["spatial"]["local_goal_progress"] = event.payload.get("progress")
 
-    def _on_map_updated(self, event: SearchEvent) -> None:
-        payload = event.payload
-        graph = payload.get("graph") or {}
-        self._map_revision += 1
-        self._snapshot["map"] = {
-            "schema_version": MAP_SCHEMA_VERSION,
-            "revision": self._map_revision,
-            "map_mode": payload.get("map_mode") or "topological",
-            "graph_mode": payload.get("graph_mode") or payload.get("map_mode") or "topological",
-            "current_node_id": payload.get("current_node_id"),
-            "robot": payload.get("robot"),
-            "nodes": list(graph.get("nodes") or []),
-            "edges": list(graph.get("edges") or []),
-            "observed_sectors": list(graph.get("observed_sectors") or []),
-        }
-        if graph.get("schema_version") in {
-    "semantic_navigation_graph_v1",
-    "semantic_entity_graph_v1",
-}:
-            self._snapshot["map"]["semantic_navigation_graph"] = copy.deepcopy(graph)
-            # Keep the dedicated spatial endpoints as projections of the same
-            # unified graph; they must never become a second source of truth.
-            self._snapshot["spatial"]["spatial_map"] = copy.deepcopy(graph)
-            self._snapshot["spatial"]["place_graph"] = {
-                "places": copy.deepcopy(graph.get("places") or []),
-                "edges": [
-                    edge for edge in graph.get("edges") or []
-                    if edge.get("from", "").startswith("P")
-                    or edge.get("to", "").startswith("P")
-                ],
-                # Keep the dedicated PlaceGraph endpoint a projection of the
-                # same canonical current place as the semantic graph.  Without
-                # this field /api/search/place-graph reported null while the
-                # semantic graph correctly reported P1.
-                "current_place_id": graph.get("current_place_id"),
-            }
-            self._snapshot["spatial"]["semantic_objects"] = copy.deepcopy(
-                graph.get("objects") or []
-            )
-            self._snapshot["spatial"]["frontiers"] = copy.deepcopy(
-                graph.get("frontiers") or []
-            )
-            self._snapshot["spatial"]["semantic_graph"] = copy.deepcopy(graph)
-            self._snapshot["spatial"]["route_plan"] = copy.deepcopy(
-                graph.get("route_plan") or self._snapshot["spatial"].get("route_plan")
-            )
-            self._snapshot["spatial"]["map_health"] = dict(
-                self._snapshot["spatial"].get("map_health") or {}
-            )
-            self._snapshot["spatial"]["association_debug"] = copy.deepcopy(
-                graph.get("association_debug")
-                or self._snapshot["spatial"].get("association_debug")
-                or []
-            )
-
     def _on_paused(self, event: SearchEvent) -> None:
         self._snapshot["status"] = STATUS_PAUSED
         self._snapshot["phase"] = "PAUSED"
@@ -753,6 +834,20 @@ class SearchStateStore:
     def _on_resumed(self, event: SearchEvent) -> None:
         self._snapshot["status"] = STATUS_RUNNING
         self._snapshot["phase"] = "OBSERVE"
+
+    def _on_stop_requested(self, event: SearchEvent) -> None:
+        if self._snapshot["status"] not in {
+            STATUS_STARTING, STATUS_RUNNING, STATUS_PAUSED, STATUS_STOPPING,
+        }:
+            return  # A synchronous terminal acknowledgement already won.
+        if event.session_id != self._snapshot["session_id"]:
+            return
+        if self._snapshot.get("stop_requested_at") is None:
+            self._snapshot["stop_requested_at"] = event.timestamp
+            self._snapshot["phase_started_at"] = event.timestamp
+        self._snapshot["status"] = STATUS_STOPPING
+        self._snapshot["phase"] = STATUS_STOPPING
+        self._snapshot["phase_detail"] = "正在停止任务，等待执行端确认"
 
     def _on_search_exhausted(self, event: SearchEvent) -> None:
         self._snapshot["status"] = STATUS_SEARCH_EXHAUSTED
@@ -810,10 +905,7 @@ class SearchStateStore:
             self._snapshot["status"] = STATUS_FINISHED
             self._snapshot["phase"] = STATUS_FINISHED
             self._snapshot["error"] = None
-        elif result in {
-            "FAILED", "TIMEOUT", "BACKEND_FAILURE",
-            "PERCEPTION_FAILURE",
-        }:
+        elif result in FAILURE_COMPLETION_RESULTS:
             self._snapshot["status"] = STATUS_FAILED
         else:
             self._snapshot["status"] = STATUS_FINISHED

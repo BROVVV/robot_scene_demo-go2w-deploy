@@ -11,6 +11,43 @@ project_root="$(cd -- "${script_dir}/../.." && pwd)"
 runtime_root="${project_root}/outputs/autonomous_search/runtime"
 pidfile="${runtime_root}/web.pid"
 
+# Search has its own capture PID record; never consume the manual demo's record.
+# Exact executable identity and bounded TERM waiting are shared with host stop.
+if [[ -f "${runtime_root}/camera_http_capture.pid" ]]; then
+  /usr/bin/python3 "${script_dir}/stop_owned_host_processes.py" "$project_root" \
+    --camera-pidfile "${runtime_root}/camera_http_capture.pid"
+fi
+
+# ---- 本模式自己的 ROS 地图桥 ---------------------------------------------- #
+# 桥是 setsid 起的**独立进程组**，不在 Web 服务器的进程组里，所以上面那套
+# "停 web.pid 的进程组"碰不到它。不在这里停掉，它会继续用它启动时那个
+# map_epoch 写 slam_map_3d.json —— 看起来 WebUI 停了、地图却还在动；
+# 下次启动自主模式会出现两个写手互相覆盖，正是计划书 §0.3 禁止的。
+#
+# HTTP capture now has a separate per-mode record and is stopped above.
+slam_bridge_pidfile="${runtime_root}/slam_web_bridge.pid"
+if [[ -f "$slam_bridge_pidfile" ]]; then
+  bridge_pid="$(tr -cd '0-9' <"$slam_bridge_pidfile")"
+  bridge_cmd=""
+  if [[ -n "$bridge_pid" && -r "/proc/${bridge_pid}/cmdline" ]]; then
+    bridge_cmd="$(tr '\0' ' ' <"/proc/${bridge_pid}/cmdline" 2>/dev/null || true)"
+  fi
+  if [[ -n "$bridge_pid" ]] && kill -0 "$bridge_pid" 2>/dev/null \
+    && [[ "$bridge_cmd" == *"scripts/go2w/plain_slam_web_bridge.py"* || "$bridge_cmd" == *"scripts/go2w/nav2_web_map_bridge.py"* || "$bridge_cmd" == *"scripts/go2w/map_epoch_meta_bridge.py"* ]]; then
+    printf 'Stopping SLAM web bridge (pid %s)...\n' "$bridge_pid" >&2
+    kill -TERM "$bridge_pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$bridge_pid" 2>/dev/null || break
+      sleep 0.25
+    done
+    kill -0 "$bridge_pid" 2>/dev/null && kill -KILL "$bridge_pid" 2>/dev/null || true
+  elif [[ -n "$bridge_pid" ]] && kill -0 "$bridge_pid" 2>/dev/null; then
+    printf 'WARNING: refusing to stop pid %s; it is not the project SLAM bridge.\n' \
+      "$bridge_pid" >&2
+  fi
+  rm -f "$slam_bridge_pidfile"
+fi
+
 if [[ ! -f "$pidfile" ]]; then
   printf 'No web.pid at %s; nothing to stop.\n' "$pidfile" >&2
   exit 0

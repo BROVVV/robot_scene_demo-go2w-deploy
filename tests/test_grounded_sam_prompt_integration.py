@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -45,6 +44,54 @@ def _room_task() -> tuple[ParsedTask, NavigationTask]:
     return parsed_task, nav_task
 
 
+class _FakeStdin:
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+        self.closed = False
+
+    def write(self, text: str) -> None:
+        self.requests.append(json.loads(text))
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeWorker:
+    """Persistent JSONL worker：stdin 记录请求，readline 按序返回预置响应。"""
+
+    def __init__(self, response_lines: list[str]) -> None:
+        self._lines = list(response_lines)
+        self.stdin = _FakeStdin()
+
+    @property
+    def stdout(self) -> "_FakeWorker":
+        return self
+
+    def readline(self) -> str:
+        if not self._lines:
+            return ""
+        return self._lines.pop(0)
+
+    def poll(self) -> None:
+        return None
+
+    def terminate(self) -> None:
+        pass
+
+    def wait(self, timeout=None) -> int:
+        return 0
+
+    def kill(self) -> None:
+        pass
+
+
+def _response(objects: list[dict]) -> str:
+    return json.dumps({"objects": objects}) + "\n"
+
+
 class GroundedSAMPromptIntegrationTest(unittest.TestCase):
     def test_detector_passes_grounding_prompt_plan_to_worker(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -82,36 +129,28 @@ class GroundedSAMPromptIntegrationTest(unittest.TestCase):
                     }
                 ),
             )
-            commands: list[list[str]] = []
-
-            def fake_run(command, **kwargs):
-                commands.append(command)
-                output = Path(command[command.index("--output") + 1])
-                output.write_text(
-                    json.dumps(
-                        {
-                            "objects": [
-                                {
-                                    "label": "bed",
-                                    "score": 0.9,
-                                    "bbox_2d": [0.1, 0.2, 0.5, 0.7],
-                                }
-                            ]
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-                return SimpleNamespace(returncode=0, stdout="", stderr="")
-
+            worker = _FakeWorker(
+                [
+                    _response(
+                        [
+                            {
+                                "label": "bed",
+                                "score": 0.9,
+                                "bbox_2d": [0.1, 0.2, 0.5, 0.7],
+                            }
+                        ]
+                    )
+                ]
+            )
             image = Path(tmpdir) / "image.jpg"
             image.write_bytes(b"mock")
             with patch(
-                "app.detectors.grounded_sam_subprocess.subprocess.run",
-                side_effect=fake_run,
+                "app.detectors.grounded_sam_subprocess.subprocess.Popen",
+                return_value=worker,
             ):
                 objects = detector.detect(str(image), "卧室")
 
-            prompt = commands[0][commands[0].index("--text-prompt") + 1]
+            prompt = worker.stdin.requests[0]["text_prompt"]
             self.assertIn("bed", prompt)
             self.assertIn("doorway", prompt)
             self.assertNotIn("office chair", prompt)
@@ -154,30 +193,30 @@ class GroundedSAMPromptIntegrationTest(unittest.TestCase):
                     },
                 ),
             )
-            commands: list[list[str]] = []
-
-            def fake_run(command, **kwargs):
-                commands.append(command)
-                output = Path(command[command.index("--output") + 1])
-                objects = [] if len(commands) == 1 else [
-                    {
-                        "label": "doorway",
-                        "score": 0.8,
-                        "bbox_2d": [0.2, 0.1, 0.8, 0.9],
-                    }
+            # 第一次请求返回空（触发 LLM prompt 扩展重试），第二次返回 doorway。
+            worker = _FakeWorker(
+                [
+                    _response([]),
+                    _response(
+                        [
+                            {
+                                "label": "doorway",
+                                "score": 0.8,
+                                "bbox_2d": [0.2, 0.1, 0.8, 0.9],
+                            }
+                        ]
+                    ),
                 ]
-                output.write_text(json.dumps({"objects": objects}), encoding="utf-8")
-                return SimpleNamespace(returncode=0, stdout="", stderr="")
-
+            )
             image = Path(tmpdir) / "image.jpg"
             image.write_bytes(b"mock")
             with patch(
-                "app.detectors.grounded_sam_subprocess.subprocess.run",
-                side_effect=fake_run,
+                "app.detectors.grounded_sam_subprocess.subprocess.Popen",
+                return_value=worker,
             ):
                 objects = detector.detect(str(image), "卧室")
 
-            retry_prompt = commands[1][commands[1].index("--text-prompt") + 1]
+            retry_prompt = worker.stdin.requests[1]["text_prompt"]
             self.assertIn("curtain", retry_prompt)
             self.assertIn("doorway", retry_prompt)
             self.assertEqual(objects[0].label, "doorway")

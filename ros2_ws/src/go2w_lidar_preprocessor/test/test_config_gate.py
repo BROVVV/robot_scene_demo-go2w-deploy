@@ -22,7 +22,14 @@ def test_validated_stationary_config_accepts_pinned_official_geometry():
         root / "configs/go2w/lidar_preprocess.yaml",
         root / "configs/go2w/official_reference.yaml",
     )
-    assert config["revalidation_required"] is False
+    # 2026-08-14（79b093a）把 YAML 的 revalidation_required 由 false 改成 true，
+    # 并配了 revalidation_note 说明原因：自掩膜按新装的 PandarXT-16 保护框扩到
+    # |y|=0.42，且侧向旋转净空尚未独立验证（同文件 rotation_clearance_validation
+    # .valid 也是 false）。那次提交只改了 YAML，没同步这条断言，于是本用例自
+    # 79b093a 起一直红着。这里对齐到 YAML 的保守取值——**不是放宽**：断言 true
+    # 意味着"仍需复验、旋转未获授权"，比 false 更严。
+    # 注意 load_safety_ready_config 返回的就是原始 YAML dict，标志不经代码改写。
+    assert config["revalidation_required"] is True
     assert parameters.minimum_height == -0.588
     assert parameters.maximum_height == 0.972
     assert parameters.ground_height == -0.448
@@ -33,6 +40,17 @@ def test_validated_stationary_config_accepts_pinned_official_geometry():
     assert parameters.rotation_envelope_radius == 0.511
     assert (-0.36, -0.08, 0.255, 0.56, -0.19, 0.06) in parameters.self_regions
     assert (0.12, 0.36, 0.255, 0.52, -0.19, 0.06) in parameters.self_regions
+
+
+def test_recorded_profile_keeps_reviewed_fixed_self_regions():
+    root = Path(__file__).parents[4]
+    _, parameters = load_safety_ready_config(
+        root / "configs/go2w/lidar_preprocess.yaml",
+        root / "configs/go2w/official_reference.yaml",
+        root / "configs/go2w/navigation_sensor_profile.yaml",
+    )
+    assert (-0.36, -0.08, -0.56, -0.255, -0.19, 0.06) in parameters.self_regions
+    assert (0.12, 0.36, -0.52, -0.255, -0.19, 0.06) in parameters.self_regions
 
 
 def test_rotation_clearance_cannot_be_enabled_by_boolean_alone(tmp_path):

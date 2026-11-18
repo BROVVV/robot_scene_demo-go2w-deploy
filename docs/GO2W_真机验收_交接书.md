@@ -237,7 +237,21 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && export CYCLONEDDS_URI=file:///tm
   --operator-supervised-experiment --session-dir outputs/live_runs \
   --output outputs/live_sessions/acceptance_b.jsonl
 ```
-**通过标准**：`place_graph.json` 的 `P1.heading_coverage` 含 ≥{0,1,2,3}（绝不是 `{"0":N}`）；日志 `motion_sector_reached`（requested/observed/sector_before/sector_reached）；`local_scan_selected` 左右交替或配额耗尽退出。
+**通过标准**：`place_graph.json` 的 `P1.heading_coverage` 覆盖 **≥3 个不同扇区**（绝不是 `{"0":N}`，即必须实际转离初始朝向）；日志 `motion_sector_reached`（requested/observed/sector_before/sector_reached）；`local_scan_selected` 左右交替或配额耗尽退出。
+
+> **2026-09-16 修订**：本条原写作"含 ≥{0,1,2,3}"，已改。原写法的 `⊇{0,1,2,3}`
+> 隐含"3 次**同向** 30°"，而代码的设计恰恰相反 ——
+> `app/navigation/local_scan.py:77-83` 对同向旋转罚 −0.6，连续同向 ≥2 且无新信息再罚 −2.0；
+> `:90` 注释为"同分时优先选择与上次相反的方向（避免无限单向旋转）"。
+> **两条要求互斥，重跑只会得到同样结果**，故改判据文字而非改代码
+> （沿用本仓库既定的"计划-代码不一致时改文字"原则）。
+> 修订后保留原判据的核心意图 —— 证明狗真的转出去了、不是原地不动 ——
+> 只是不再要求扇区号连续：左右交替时扇区号**必然**跳跃。
+> 2026-09-16 实测：3 次决策（+30°/−60°/−30°）产生扇区轨迹 0→1→11→10，覆盖 4 个扇区，
+> 单段误差 <2.4°、wheel Δxy ≤0.037 m。
+>
+> **注意本条的边界**：修订判据**不等于** §22 已通过。§22 还要看 pslam Δxy（见下），
+> 而 2026-09-16 的两次运行都没能在段间独立采到 pslam，该项仍缺数据。
 
 ### 6.6 验收 C（3D 旋转建图）
 1. 真机 18：`bash scripts/go2w/start_plain_slam_mapping.sh`（Pandar 驱动 + LIO/SLAM；无 --no-start-hesai 参数时自动起驱动）。

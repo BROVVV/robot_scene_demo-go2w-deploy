@@ -5,13 +5,13 @@ remote_override_verified: false
 remote_override_default_active: true
 selected_command_timeout_sec: 0.3
 action_slice_duration_sec: 0.25
-maximum_linear_x_mps: 0.15
+maximum_linear_x_mps: 0.30
 maximum_angular_z_radps: 0.20
 maximum_linear_acceleration_mps2: 0.20
 maximum_angular_acceleration_radps2: 0.40
 linear_y_forced_zero: true
 require_lidar_fresh: true
-require_lio_fresh_for_nav2: true
+require_navigation_localization_fresh_for_nav2: true
 require_lease_alive: true
 require_robot_error_zero: true
 require_explicit_operator_arm: true

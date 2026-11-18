@@ -28,6 +28,12 @@ from app.live_robot.step_search_runner import StepSearchConfig
 from app.reasoning.semantic_navigation.models import SearchReasoningContext
 from app.reasoning.semantic_navigation.router import SemanticSearchController
 from app.reasoning.semantic_navigation.semantic_memory import SemanticSearchMemory
+from app.reasoning.semantic_navigation.task_agent import (
+    attach_trace,
+    enrich_context,
+    retrieve_knowledge,
+    summarize_topology,
+)
 from app.video.schemas import SceneGraph, SceneGraphEdge, SceneGraphNode
 from app.reasoning.target_profile import TargetProfile, TargetProfileResolver
 
@@ -43,6 +49,14 @@ def _parse_args(argv=None):
         default="",
         help="optional runner JSONL used for executed-step metrics",
     )
+    parser.add_argument(
+        "--node-index",
+        type=int,
+        default=-1,
+        help="当会话没有 scene_graph.json 时，从 exploration_graph.json 的"
+             "第几个可回放观测节点取图（默认 -1 = 最后一个，即搜索结束时"
+             "看到的最全的一帧；按时间顺序，0 是最早那次观测）",
+    )
     return parser.parse_args(argv)
 
 
@@ -50,12 +64,136 @@ def _session_root(path: Path) -> Path:
     return path if path.is_dir() else path.parent
 
 
-def _load_graph(path: Path) -> SceneGraph:
+def _exploration_view(root: Path, node_index: int) -> tuple[dict[str, Any], float, list[int]]:
+    """从真机会话的 exploration_graph.json 取一次观测 —— 连当时的机器人朝向和
+    已观测扇区一起取。
+
+    `run_semantic_exploration.py`（§22 验收走的就是它）**不写**独立的
+    scene_graph.json —— 每次观测的 SceneGraph 嵌在 exploration_graph.json 的
+    `nodes[i].scene_graph` 里，schema 与 SceneGraphNode/SceneGraphEdge 逐字段一致。
+    2026-09-16 实测：outputs/live_runs 下 128 个真机会话里有 102 个可这样回放，
+    而带独立 scene_graph.json 的是 **0 个**。没有这条回退，本评估器就只能吃
+    手工构造的 fixture，吃不到任何一次真机跑批。
+
+    后两个返回值不是装饰：真机调用点 `run_semantic_exploration.py:2318-2322`
+    会传 `robot_yaw_deg` 与 `observed_heading_sectors`，而
+    `search_reasoner.py:_rank_candidate_headings` 的候选打分里 `visited_cost` 依赖
+    后者。回放时若不传（空集），六个候选方向全部平局、退化成恒选 −30 ——
+    那会造出一个**看起来像发现**的假结论。node 的 `heading` 就是当时的机器人
+    yaw：用 §22 那次核对过，三个观测的 heading −3.48/28.93/−31.83 与
+    `heading_sector` 0/1/11 自洽，且正好对上 +30/−60 两次转向。
+    """
+    path = root / "exploration_graph.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    observations = [
+        node for node in (payload.get("nodes") or [])
+        if (node.get("scene_graph") or {}).get("nodes")
+    ]
+    if not observations:
+        raise ValueError(f"{path} 里没有带 scene_graph 的观测节点，无法离线回放")
+    try:
+        chosen = observations[node_index]
+    except IndexError:
+        raise ValueError(
+            f"--node-index {node_index} 越界：{path} 只有 "
+            f"{len(observations)} 个可回放观测节点"
+        ) from None
+    # 扇区取"到这次观测为止"，不取整场结束后的终值 —— 否则早期观测会被
+    # 喂进它当时还看不到的扇区。
+    upto = observations[: node_index + 1] if node_index >= 0 else observations
+    sectors = sorted({
+        int(node["heading_sector"]) for node in upto
+        if isinstance(node.get("heading_sector"), int)
+    })
+    heading = chosen.get("heading")
+    yaw = float(heading) if isinstance(heading, (int, float)) else 0.0
+    return chosen["scene_graph"], yaw, sectors
+
+
+def _load_session(
+    path: Path, node_index: int = -1
+) -> tuple[SceneGraph, float, list[int], str]:
+    """返回 (图, robot_yaw_deg, observed_heading_sectors, 图是从哪读的)。"""
     graph_path = path / "scene_graph.json" if path.is_dir() else path
-    payload = json.loads(graph_path.read_text(encoding="utf-8"))
-    return SceneGraph(
-        nodes=[SceneGraphNode(**item) for item in payload.get("nodes", [])],
-        edges=[SceneGraphEdge(**item) for item in payload.get("edges", [])],
+    if graph_path.is_file():
+        source = str(graph_path)
+        payload = json.loads(graph_path.read_text(encoding="utf-8"))
+        # 视频管线只落图，不落当时的朝向与扇区 —— 报 0.0/[] 并在报告里
+        # 用 replay_context 挑明，不假装知道。
+        yaw, sectors = 0.0, []
+    else:
+        source = str(_session_root(path) / "exploration_graph.json")
+        payload, yaw, sectors = _exploration_view(_session_root(path), node_index)
+    try:
+        graph = SceneGraph(
+            nodes=[SceneGraphNode(**item) for item in payload.get("nodes", [])],
+            edges=[SceneGraphEdge(**item) for item in payload.get("edges", [])],
+        )
+    except TypeError as exc:
+        # 实测 outputs/live_runs 的 102 个可回放会话里有 45 个是 mock/早期会话，
+        # 内嵌 scene_graph 只写了 node_id/label/label_zh/attributes 四个键，装不下
+        # SceneGraphNode。直接抛 TypeError 会看起来像评估器自己的 bug，所以说清
+        # 是**这份录制本身**不是真机感知产物。
+        raise ValueError(
+            f"{source} 的 SceneGraph 字段不全（{exc}）—— 多半是 mock 或早期会话，"
+            f"不是真机感知产物，无法回放"
+        ) from None
+    return graph, yaw, sectors, source
+
+
+def _scene_graph_source(source: str) -> str:
+    """报告里标明这张图是从哪读来的 —— 免得把回退读到的图当成独立工件。"""
+    if source.endswith("/scene_graph.json"):
+        return "scene_graph.json"
+    if source.endswith("/exploration_graph.json"):
+        return "exploration_graph.json:nodes[].scene_graph"
+    return "unknown"
+
+
+def _load_task_context(root: Path) -> dict[str, Any] | None:
+    """会话里落盘的 `SearchTaskContext`。
+
+    这是**任务输入**，在搜索开始之前就存在，不是录制结束后的产物 ——
+    回放把它喂给推理器不构成未来信息泄漏（计划书 §4.2）。没有就返回 None，
+    不补一个空壳冒充"任务已解析"。
+    """
+    payload = _read_json(root / "task.json", None)
+    return payload if isinstance(payload, dict) else None
+
+
+def _load_topology_summary(root: Path) -> dict[str, Any] | None:
+    payload = _read_json(root / "place_graph.json", None)
+    return summarize_topology(payload)
+
+
+def _frozen_consumer_accepts(directive, config, graph) -> bool:
+    """冻结的 `generate_live_exploration_candidates` 是否真的会采纳这条 directive。
+
+    §4.3 要求同时验证两件事：reasoner 输出改变且可解释，**以及**新 directive
+    能通过冻结消费者契约。只做前者不算交付。这里直接调冻结消费者，不复制它的
+    判定逻辑（复制出来的那份迟早和它不一致）。
+    """
+    from app.navigation.candidate_goal_generator import generate_live_exploration_candidates
+    from app.navigation.exploration_graph import ExplorationGraph
+    from app.navigation.models import LiveObservation
+
+    observation = LiveObservation(
+        bundle_id="offline_replay", timestamp=0.0, scene_objects=[],
+        scene_graph={"nodes": [], "edges": []},
+        target_match={"target_present": False},
+        pose={"x": 0.0, "y": 0.0, "yaw_deg": 0.0},
+        heading_sector=0, provenance={"source": "offline_replay"},
+    )
+    # 传空图：只考验 directive 这一条入口，不让未访问扇区/图节点候选把
+    # "消费者接受了 directive"这个判断混掉。
+    goals = generate_live_exploration_candidates(
+        observation=observation,
+        graph=graph if isinstance(graph, ExplorationGraph) else ExplorationGraph(session_id="replay"),
+        directive=directive,
+        current_yaw_deg=0.0,
+    )
+    return any(
+        goal.provenance.get("directive_id") == directive.directive_id for goal in goals
     )
 
 
@@ -201,10 +339,13 @@ def evaluate(
     output_dir: str,
     scan_index: int = 0,
     event_log: str = "",
+    node_index: int = -1,
 ) -> dict:
     session_path = Path(session)
     root = _session_root(session_path)
-    graph = _load_graph(session_path)
+    graph, robot_yaw_deg, observed_sectors, graph_source = _load_session(
+        session_path, node_index
+    )
     profile = _load_profile(root, target)
     config = StepSearchConfig(target=target)
     legacy = plan_scan_step(
@@ -216,16 +357,32 @@ def evaluate(
         forward_estimate_m=config.forward_estimate_m,
     )
     rows = []
+    task_context = _load_task_context(root)
+    topology_summary = _load_topology_summary(root)
+    knowledge_items = retrieve_knowledge(str(task_context.get("canonical_target") or target)) \
+        if task_context else retrieve_knowledge(target)
     for backend in ("legacy", "semantic_navigation", "hybrid"):
         controller = SemanticSearchController(profile, backend=backend)
+        # target_profile / goal_graph 由 controller.propose 填（router.py:49-50），
+        # 与真机调用点一致，这里不重复。
         context = SearchReasoningContext(
             scene_graph=graph,
             negative_memory=SemanticSearchMemory(),
             scan_index=scan_index,
             legacy_scan_candidate=legacy,
+            robot_yaw_deg=robot_yaw_deg,
+            observed_heading_sectors=observed_sectors,
             safety_context={"allow_forward": False, "offline_replay": True},
         )
-        directive = controller.propose(context)
+        # 与生产路径共用同一个装配函数，避免评估器比生产掌握更多信息。
+        enrich_context(
+            context,
+            task_context=task_context,
+            knowledge_items=knowledge_items,
+            topology_summary=topology_summary,
+            run_mode="offline_replay",
+        )
+        directive = attach_trace(context, controller.propose(context))
         proposed_plan = directive_to_step_plan(
             directive,
             scan_index=scan_index,
@@ -238,6 +395,7 @@ def evaluate(
         dangerous_forward_request = bool(
             directive.allow_forward or directive.preferred_distance_m is not None
         )
+        trace = directive.decision_trace or {}
         rows.append({
             "backend": backend,
             "directive": directive.to_dict(),
@@ -248,10 +406,39 @@ def evaluate(
             "shadow_matches_legacy": True,
             "disagrees_with_legacy": proposed_plan.step != legacy.step,
             "dangerous_forward_request": dangerous_forward_request,
+            # §4.2 要求的逐会话审计字段：trace 里已经算好的量在这里透出来，
+            # 不在评估器里另算一套。
+            "trace_reason_code": trace.get("selected_preference", {}).get("reason_code"),
+            "trace_mode": trace.get("mode"),
+            "frozen_consumer_accepted": _frozen_consumer_accepts(directive, config, graph),
+            "safety_invariants_hold": (
+                not dangerous_forward_request
+                and not directive.allow_forward
+                and trace.get("safety", {}).get("can_authorize_motion") is False
+                and trace.get("safety", {}).get("can_confirm_target") is False
+            ),
         })
 
     event_path = Path(event_log) if event_log else None
     recorded = _recorded_metrics(root, event_path)
+    limitations = [
+        "offline graph-policy replay only; no claim of real-robot success",
+        "success_proxy is candidate evidence, never target confirmation",
+        "repeat/revisit metrics require event traces when physical steps exist",
+        "recorded LLM calls are inferred from persisted frame/profile/crop artifacts",
+    ]
+    if not (root / "frame_observations.json").is_file():
+        # 真机会话（run_semantic_exploration.py）不产视频管线的这几份产物。
+        # 不说清楚的话，报告里 detector_calls=0 / success_proxy=false /
+        # target_confirmed=false 会被读成"实测为 0 / 没找到目标"，
+        # 而真相是**这几个量在本会话里根本没有被测过**。
+        limitations.append(
+            "本会话缺视频管线产物（frame_observations / target_search / "
+            "evidence_gating_report / crop_verify_results / search_directive）："
+            "detector_calls、semantic_observer_calls、time_to_candidate_s、"
+            "time_to_target_s、verify_reject_count、success_proxy、target_confirmed "
+            "是**缺席**，不是实测为 0/False —— 不要拿它们做结论"
+        )
     fallback_count = sum(bool(row["directive"]["fallback_to_legacy"]) for row in rows)
     disagreement_count = sum(bool(row["disagrees_with_legacy"]) for row in rows)
     dangerous_forward_count = sum(bool(row["dangerous_forward_request"]) for row in rows)
@@ -261,8 +448,18 @@ def evaluate(
         "target": target,
         "source_session": str(session_path),
         "source_event_log": str(event_path) if event_path else None,
+        "scene_graph_source": _scene_graph_source(graph_source),
+        "scene_node_index": node_index,
         "scene_nodes": len(graph.nodes),
         "scene_edges": len(graph.edges),
+        # 回放喂给推理器的输入，明写出来 —— 「语义词条方向是常量」这类结论
+        # 高度依赖这两个量，不写出来读者没法判断回放是不是空手跑。
+        "replay_context": {
+            "robot_yaw_deg": robot_yaw_deg,
+            "observed_heading_sectors": observed_sectors,
+            "scan_index": scan_index,
+            "note": "视频管线会话（scene_graph.json）不落这两项，报 0.0/[] 表示未知",
+        },
         "detector_calls": recorded["detector_calls"],
         "semantic_observer_calls": recorded["semantic_observer_calls"],
         "reasoner_calls": len(rows),
@@ -287,12 +484,7 @@ def evaluate(
         ),
         "recorded_metrics": recorded,
         "results": rows,
-        "limitations": [
-            "offline graph-policy replay only; no claim of real-robot success",
-            "success_proxy is candidate evidence, never target confirmation",
-            "repeat/revisit metrics require event traces when physical steps exist",
-            "recorded LLM calls are inferred from persisted frame/profile/crop artifacts",
-        ],
+        "limitations": limitations,
     }
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -354,6 +546,7 @@ def main(argv=None) -> int:
         output_dir=args.output_dir,
         scan_index=args.scan_index,
         event_log=args.event_log,
+        node_index=args.node_index,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False))
     return 0

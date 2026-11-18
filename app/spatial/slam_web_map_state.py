@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import uuid
 from typing import Any, Iterable
 
 from app.spatial.pointcloud_web_codec import GlobalVoxelCloud
@@ -132,6 +133,11 @@ class SlamWebMapState:
         self.max_web_points = max(1_000, int(max_web_points))
         self.gate = gate or MotionEpisodeGate()
         self.session_id = 1
+        # §2.3：进程启动时的一段随机前缀 + 本地图会话计数。桥重启就换前缀，
+        # 地图 reset 就换计数 —— 两种"这不是同一张图了"都因此改变 epoch，
+        # 不需要再造第二套 reset 状态。
+        self.epoch_prefix = uuid.uuid4().hex[:8]
+        self.map_epoch = self._epoch()
         self.session_start_stamp = 0.0
         self.health = WAITING_FOR_MAP
         self.health_reason = "等待 plain_slam 发布第一张地图"
@@ -155,6 +161,9 @@ class SlamWebMapState:
         self._web_info: dict[str, Any] = {"mode": "empty", "voxel_size_m": 0.0,
                                           "limit": self.max_web_points,
                                           "truncated": False}
+
+    def _epoch(self) -> str:
+        return f"{self.epoch_prefix}-{self.session_id}"
 
     def reject(self, reason: str) -> bool:
         self.rejected_counts[reason] = self.rejected_counts.get(reason, 0) + 1
@@ -204,19 +213,24 @@ class SlamWebMapState:
         self.wheel_pose = (float(x), float(y), float(yaw))
         event = self.gate.note_wheel(x, y, yaw, speed=speed,
                                      yaw_rate=yaw_rate, now=now)
-        if event == "finished" and self.health != DEGRADED_LIO_DRIFT:
+        if event == "finished":
             reason = drift_reason(self.gate.wheel_delta, self.gate.lio_delta)
             if reason:
-                # §10.2：冻结即锁定。安静的 scan 不能让它自己恢复，只有一次
-                # 真正的 LIO reset / 重定位（新 mapping session）才允许恢复。
+                # 这段运动的 LIO 平移对不上轮式里程计：冻结，拒收这段的地图。
                 self.health = DEGRADED_LIO_DRIFT
                 self.health_reason = reason
                 return "degraded"
+            if self.health == DEGRADED_LIO_DRIFT:
+                # 下一段真实运动里两者重新一致，说明前端已恢复：解冻继续建图。
+                # 仍然只在 finished 时判，安静的 scan 自己不能解冻。
+                self.health = HEALTHY if self.accepted_maps else WAITING_FOR_MAP
+                self.health_reason = ""
         return event
 
     def reset_session(self, *, stamp: float, reason: str = "operator_reset") -> None:
         """§9.4：新 mapping session：清空缓存、丢弃旧 session 的迟到消息。"""
         self.session_id += 1
+        self.map_epoch = self._epoch()
         self.session_start_stamp = float(stamp)
         self.cloud.clear()
         self.map_revision += 1
@@ -265,6 +279,7 @@ class SlamWebMapState:
             "permanent_source": self.permanent_source,
             "canonical_frame": self.canonical_frame,
             "frame_id": self.canonical_frame,
+            "map_epoch": self.map_epoch,
             "target_map_frame": self.canonical_frame,
             "mapping_session_id": self.session_id,
             "map_revision": self.map_revision,

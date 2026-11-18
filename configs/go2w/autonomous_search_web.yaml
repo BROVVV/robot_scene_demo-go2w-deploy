@@ -10,8 +10,31 @@ web:
   search_event_buffer: 500
 
 search:
-  reasoner: semantic_navigation
-  backend: go2w_experimental     # go2w_experimental | mock | mock_metric
+  # 本段只保留**真的被读**的键（load_search_defaults 的白名单）。
+  # 2026-10-08 §3-C 删掉的一批死键（reasoner / max_search_seconds /
+  # max_planning_cycles / max_motion_steps / verify_min_confidence /
+  # llm_model）改这里都不改变真机行为，已从文件里移除，免得再被当成旋钮。
+  # 现在生效的取值是：搜索预算走请求体，没带就落到
+  # 正常 Nav2 启动器选择 field_large：距会话起点最多 5 m、单目标最多 3 m，
+  # 总时长/规划轮数/步数默认均为 0（不限）。显式请求可缩小预算；传感器与
+  # 单动作超时仍有效。
+  # 直接运行 CLI 才使用 argparse 默认值（600 s / 100 轮 / 50 步，
+  # --verify-min-confidence 0.6，--llm-model 空 = 用 SILICONFLOW_VISION_MODEL）；
+  # reasoner 由 Web 侧固定传 semantic_navigation。
+  # 计划书 §6.6：真机自主搜索只允许 nav2。mock / mock_metric 仅供离线测试，
+  # 由测试直接构造请求，不走这个文件。
+  backend: nav2                  # nav2 | mock | mock_metric
+
+  # 物体识别后端，透传到 run_semantic_exploration.py 的 --detector：
+  #   grounded_sam —— 本地 GroundingDINO + SAM2 出真实 mask，每个物体因而带 3D
+  #                   box（box_size），WebUI 三维视图画的是线框而不是红点；
+  #                   目标的复核仍由 VLM 做（_verify_target，走 verify 模式）。
+  #                   首次调用要加载模型（本机实测 24.7 s），常驻后单帧 0.4 s。
+  #   llm          —— 云端 VLM 出全场景文本 + 关系，产不出 mask ⇒ box_size 恒为
+  #                   None（见 run_semantic_exploration.py:982），物体只有红点。
+  #   yoloe_seg    —— 本地 YOLOE 开放词汇实例分割；动态 target/anchor/scene 词槽，
+  #                   真实 mask，依赖独立 .yoloe_env，不可用时显式失败。
+  detector: grounded_sam
   # 计划书 §18.2/§19：视觉确认只是接近的开始。真实 Go2W 必须走完
   # target approach + 最终确认才算 TARGET_FOUND，所以这里是 false。
   finish_on_visual_confirmation: false
@@ -35,18 +58,6 @@ search:
   # has camera-local fallback and remains mapping-assist only; it does not
   # replace /go2w/odom/fused or authorize motion.
   spatial_provider: plain_slam
-
-  # Use RTAB-Map ROS2 topics when the D435 bridge + rtabmap_slam are running.
-  # ``auto`` resolves to rtabmap when its topics are healthy, else degrades to
-  # the camera-local relative provider (never blocks the search).
-  rtabmap: false
-
-  max_search_seconds: 600
-  max_planning_cycles: 100
-  max_motion_steps: 50
-  verify_min_confidence: 0.6
-  # Optional visual override; empty means use SILICONFLOW_VISION_MODEL.
-  llm_model: ""
 
 map:
   mode: auto                     # topological (current Go2-W) / metric (future)

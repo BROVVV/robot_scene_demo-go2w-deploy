@@ -329,10 +329,14 @@ class PlainSlamSpatialProvider:
     def transform_provenance(self) -> dict[str, Any]:
         pose = self.get_pose()
         return {
+            "map_odom_pose": (
+                list(self._map_bridge._map_odom[-1][1])
+                if self._map_bridge is not None and self._map_bridge._map_odom else None
+            ),
             "source_frame": self.camera_frame,
             "target_frame": (
-                self._map.provenance.get("frame_id", self.map_frame)
-                if self._map is not None
+                self._map_bridge.map_frame
+                if self._map_bridge is not None
                 else self.map_frame
             ),
             "transform_source": self._transform_source,

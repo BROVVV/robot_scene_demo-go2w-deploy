@@ -10,7 +10,7 @@
 namespace go2w_motion_control {
 
 struct GoalLimits {
-  double max_abs_vx{0.20};
+  double max_abs_vx{0.30};
   double max_abs_vy{0.0};
   double max_abs_yaw_rate_timed{0.20};
   double max_duration_sec{10.0};
@@ -79,15 +79,23 @@ inline ValidationResult ValidateGoal(
                   "all goal fields must be finite");
     }
   }
-  if (goal.mode == Action::Goal::MODE_TIMED_VELOCITY) {
+  if (goal.mode == Action::Goal::MODE_TIMED_VELOCITY ||
+      goal.mode == Action::Goal::MODE_STREAMING_VELOCITY) {
     if (goal.duration_sec <= 0.0 ||
         goal.duration_sec > limits.max_duration_sec ||
-        std::abs(goal.vx) > limits.max_abs_vx ||
+        std::abs(goal.vx) > limits.max_abs_vx + 1e-6 ||
         std::abs(goal.vy) > limits.max_abs_vy ||
         std::abs(goal.yaw_rate) > limits.max_abs_yaw_rate_timed ||
         (goal.vx == 0.0 && goal.vy == 0.0 && goal.yaw_rate == 0.0)) {
       return fail(Action::Result::ERROR_INVALID_GOAL,
                   "timed velocity goal violates configured limits");
+    }
+    if (goal.mode == Action::Goal::MODE_STREAMING_VELOCITY &&
+        (goal.duration_sec>.25 || goal.timeout_sec<=0 || goal.timeout_sec>30 ||
+         goal.velocity_stream_token.size()!=32 ||
+         goal.velocity_stream_token.find_first_not_of("0123456789abcdef")!=std::string::npos ||
+         std::abs(goal.vx)>.300001 || goal.vy!=0 || std::abs(goal.yaw_rate)>.200001)) {
+      return fail(Action::Result::ERROR_INVALID_GOAL,"invalid bounded velocity stream");
     }
   } else if (goal.mode == Action::Goal::MODE_RELATIVE_YAW) {
     if (std::abs(goal.relative_yaw_deg) <= 2.0 ||

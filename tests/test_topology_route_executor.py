@@ -72,6 +72,23 @@ class TestTopologyRoutePlanner(unittest.TestCase):
 
 
 class TestTopologyRouteExecutor(unittest.TestCase):
+    def test_same_place_range_is_capped_and_unknown_range_stays_short(self) -> None:
+        graph = _graph()
+        current = graph.current_place().place_id
+        route = TopologicalRoute(route_id="bounded", place_path=[current],
+                                 edge_path=[], target_frontier_id="F01")
+        for distance, expected in [(0.45, 0.45), (2.0, 2.0), (8.0, 3.0), (None, 0.3)]:
+            with self.subTest(distance=distance):
+                frontier = TopologicalFrontier(
+                    frontier_id="F01", parent_place_id=current, bearing_deg=0,
+                    local_distance_hint_m=distance,
+                )
+                goal = TopologyRouteExecutor(forward_step_m=3.0).next_goal(
+                    route=route, current_place_id=current, place_graph=graph,
+                    current_yaw_deg=0, frontier=frontier,
+                )
+                self.assertEqual(goal.relative_dx, expected)
+
     def test_executor_only_first_edge(self) -> None:
         graph = _graph()
         pids = list(graph.places.keys())
@@ -162,3 +179,17 @@ class TestTopologyRouteExecutor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_metric_same_place_frontier_defers_to_real_map_target_instead_of_pre_turn():
+    from app.navigation.robot_backend import RobotCapabilities
+    graph=_graph();current=graph.current_place().place_id
+    for bearing in (0.,30.,90.,-65.,180.):
+        frontier=TopologicalFrontier(frontier_id='metric_F',parent_place_id=current,
+            bearing_deg=bearing,local_distance_hint_m=2.)
+        route=TopologicalRoute(route_id='metric_route',place_path=[current],edge_path=[],target_frontier_id='metric_F')
+        goal=TopologyRouteExecutor(max_metric_step_m=3.).next_goal(route=route,
+            current_place_id=current,place_graph=graph,current_position=(0.,0.),
+            current_yaw_deg=0.,frontier=frontier,
+            capabilities=RobotCapabilities(supports_metric_navigation=True))
+        assert goal is None, 'runner must use LocalGoalExecutor with the observed map position'

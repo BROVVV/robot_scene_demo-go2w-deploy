@@ -79,7 +79,10 @@ def test_lio_runtime_config_namespace(
     )
     params = config["lio_3d_node"]["ros__parameters"]
     assert params["lidar_type"] == "hesai_pandarxt16"
-    assert params["pointcloud_topic"] == "/go2w/slam/pandar_points"
+    # 2026-09-10 起 LIO 的输入改为经 lidar_delay_buffer 延迟 0.12 s 的话题：
+    # LiDAR 帧窗口 0.1 s 而 IMU 比点云晚到 ≈89 ms，直连时每帧只覆盖 3 个 IMU
+    # (8.7%)、deskew 残差 2.7 cm。见 configs/go2w/plain_slam.yaml:33-37。
+    assert params["pointcloud_topic"] == "/go2w/slam/pandar_points_buffered"
     assert params["imu_topic"] == "/go2w/slam/imu"
     assert params["odom_frame"] == "pslam_odom"
     assert params["imu_frame"] == "pslam_imu"
@@ -114,7 +117,8 @@ def test_lio_runtime_params_extrinsics_and_tuning(
     ):
         assert abs(float(value) - reference) < 1e-3
     assert len(extrinsic["rotation_matrix"]) == 9
-    assert params["imu_params"]["acc_scale"] == 1.0
+    # 实测静止重力模长 10.2795 m/s²（偏高 4.82%），9.80665/10.2795 = 0.954。
+    assert params["imu_params"]["acc_scale"] == 0.954
     assert params["estimator"]["use_loose_coupling"] is True
     assert params["scan_cloud_preprocess"]["clip_range"] == 0.35
 

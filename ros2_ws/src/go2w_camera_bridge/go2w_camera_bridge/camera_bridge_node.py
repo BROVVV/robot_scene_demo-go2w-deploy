@@ -140,7 +140,7 @@ class CameraBridge(Node):
         try:
             return load_calibration(value)
         except Exception as exc:  # diagnostic instead of guessed intrinsics
-            self.get_logger().error("Camera calibration rejected: %s", exc)
+            self.get_logger().error(f"Camera calibration rejected: {exc}")
             return None
 
     def _on_topic(self, message: Go2FrontVideoData) -> None:
@@ -407,11 +407,9 @@ class CameraBridge(Node):
         if calibration and calibration.calibrated:
             if (width, height) != (calibration.width, calibration.height):
                 self.get_logger().error(
-                    "Calibration resolution %dx%d does not match frame %dx%d",
-                    calibration.width,
-                    calibration.height,
-                    width,
-                    height,
+                    f"Calibration resolution "
+                    f"{calibration.width}x{calibration.height} does not "
+                    f"match frame {width}x{height}"
                 )
                 return info
             info.distortion_model = calibration.distortion_model

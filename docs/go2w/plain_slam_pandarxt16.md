@@ -3,6 +3,19 @@
 > Status: implemented per
 > `GO2W_PANDAR_PLAIN_SLAM_IMPLEMENTATION_PLAN.md` (mapping-assist first version).
 >
+> ⚠ **「implemented」指的是本文件描述的这条 mapping-assist 管线，不等于计划书
+> 每一节都做完**（2026-09-16 逐节核对后补）。已核对的差异：
+>
+> - **§17「自动质量判断，不要求人工专门操控」整节未实现** —— 没有
+>   `runtime/go2w/plain_slam/quality.json`，没有
+>   `GOOD / USABLE_MAPPING_ONLY / DEGRADED / FAILED` 四级评级。
+>   现在有的两处建图健康信号都不是 §17 那套：C++ `plain_slam_health_monitor`
+>   报的是**话题级** flag（`IMU_DEGRADED` / `LIO_STALE` / `TIMESTAMP_SYNTHETIC`），
+>   `app/spatial/lio_nofix_judge.py` 判的是 **LIO 停摆发散**。§17.1 那四项
+>   LIO 检查（pose NaN / 位移爆发 / z 发散 / quaternion 归一化）**无人做**。
+> - §18 点名的 5 个测试文件、§19 构建脚本、§21 地图保存脚本：**均在**。
+> - 其余各节**未逐节核对**，不要按上面那行 Status 推断。
+>
 > **安全边界（第一版不变）**：本管线是 `MAPPING_ASSIST`——它产生 3D 地图、
 > shadow odometry 与 2D OccupancyGrid 供探索/空间理解使用，但**不是运动权威**。
 > `/go2w/odom/fused` 与现有运动/安全链保持完全不受影响；Pandar 外参保持

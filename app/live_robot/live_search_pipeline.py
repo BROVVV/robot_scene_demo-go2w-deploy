@@ -17,6 +17,7 @@ from app.live_robot.search_state_machine import (
 from app.reasoning.semantic_navigation.goal_graph_builder import GoalGraphBuilder
 from app.reasoning.semantic_navigation.graph_matcher import SemanticNavigationGraphMatcher
 from app.reasoning.semantic_navigation.models import GraphMatchState, SearchReasoningContext
+from app.reasoning.semantic_navigation.task_agent import attach_trace
 from app.reasoning.semantic_navigation.router import SemanticSearchController
 from app.reasoning.semantic_navigation.semantic_memory import SemanticSearchMemory
 from app.reasoning.semantic_navigation.auxiliary_hints import build_psg_auxiliary_hints
@@ -246,7 +247,7 @@ def _run_after_sensor_snapshot(
                 "reasoner_mode": search_reasoner_mode,
             },
         )
-        directive = controller.propose(context)
+        directive = attach_trace(context, controller.propose(context))
         write_json(controller.goal_graph.to_dict(), output / "goal_graph.json")
         write_json(
             context.graph_match.to_dict() if context.graph_match else {},

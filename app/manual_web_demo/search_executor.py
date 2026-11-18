@@ -101,6 +101,12 @@ class SubprocessSearchExecutor:
             stderr_target = self._log_path.open("ab")
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
+        # 交互式 shell 若设了 PYTHONNOUSERSITE=1（本机在 ~/.bashrc），WebUI 会继承下来，
+        # 而上面选中的 ROS 解释器（/usr/bin/python3）的 pydantic / openai 只在
+        # ``~/.local/lib/python3.10/site-packages``。该变量会把它屏蔽掉，worker 收到 start
+        # 后才在懒加载 ``app.schemas`` 时炸成 WORKER_DEPENDENCY_MISSING——
+        # 而启动探测只 import 到模块层，照样放行。选这个解释器本来就是要它的 user site。
+        env.pop("PYTHONNOUSERSITE", None)
         self._proc = subprocess.Popen(
             self._cmd,
             cwd=self._cwd,
@@ -195,12 +201,13 @@ class SubprocessSearchExecutor:
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return
+        # Encode outside the I/O handler so malformed command data is not
+        # mistaken for a concurrently closed pipe during terminal retirement.
+        message = json.dumps(command, ensure_ascii=False, separators=(",", ":")) + "\n"
         try:
-            proc.stdin.write(
-                json.dumps(command, ensure_ascii=False, separators=(",", ":")) + "\n"
-            )
+            proc.stdin.write(message)
             proc.stdin.flush()
-        except (BrokenPipeError, OSError):
+        except (BrokenPipeError, OSError, ValueError):
             with self._lock:
                 self._status["state"] = "broken"
 
@@ -226,6 +233,10 @@ class SubprocessSearchExecutor:
         msg_type = str(payload.get("type") or "")
         if msg_type == "event" and isinstance(payload.get("event"), dict):
             self._notify({"type": "event", "event": payload["event"]})
+        elif msg_type == "graph_snapshot" and isinstance(payload.get("graph"), dict):
+            # 计划书 §2.1：整图走独立消息，不是普通事件。原样透传（含 worker
+            # 身份字段），由 service 侧的身份门判定归属。
+            self._notify(payload)
         elif msg_type == "session_result":
             with self._lock:
                 self._status["state"] = "finished"
@@ -440,13 +451,28 @@ class InProcessMockExecutor:
             }
 
             events: list[dict[str, Any]] = []
+            graph_state: dict[str, Any] = {"revision": None}
+
+            def emit_graph() -> None:
+                # 计划书 §2.1：mock 替身必须产出与真 worker 同形的 IPC ——
+                # 整图单独一条 graph_snapshot，普通事件不带图。
+                explorer = self._holder.get("explorer")
+                if explorer is None:
+                    return
+                graph = explorer.semantic_graph
+                revision = int(graph.revision or 0)
+                if revision == graph_state["revision"]:
+                    return
+                graph_state["revision"] = revision
+                self._notify({
+                    "type": "graph_snapshot",
+                    **self._envelope,
+                    "revision": revision,
+                    "graph": graph.web_snapshot(),
+                })
 
             def on_event(event: dict[str, Any]) -> None:
-                explorer = self._holder.get("explorer")
-                if explorer is not None and event.get("event") in (
-                    "observation", "memory_update", "navigation_result",
-                ):
-                    event = {**event, "graph": explorer.graph.to_dict()}
+                emit_graph()
                 events.append(event)
                 self._notify({"type": "event", "event": event})
 
@@ -479,6 +505,8 @@ class InProcessMockExecutor:
                 }}
             )
             result = explorer.run()
+            # 收尾兜底：最后一次 revision 变化（例如目标确认）可能没有跟任何事件。
+            emit_graph()
             _write_mock_artifacts(params, explorer, result, events)
             self._notify({"type": "session_result", "result": result.to_dict()})
             with self._lock:

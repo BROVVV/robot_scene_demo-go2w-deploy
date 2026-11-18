@@ -17,7 +17,7 @@ def main() -> int:
     parser.add_argument("--map-frame", default=os.getenv("NAV2_MAP_FRAME", "map"))
     parser.add_argument("--base-frame", default=os.getenv("NAV2_BASE_FRAME", "base_link"))
     parser.add_argument("--scan-topic", default="/go2w/lidar/scan")
-    parser.add_argument("--odom-topic", default="/lio/odom")
+    parser.add_argument("--odom-topic", default="/go2w/odom/fused")
     parser.add_argument("--nav2-cmd-topic", default="/go2w/nav2_cmd_vel")
     args = parser.parse_args()
     checks: list[dict] = []
@@ -62,6 +62,15 @@ def main() -> int:
     except ImportError as exc:
         add("commander_import", False, exc, plan=True, execute=True)
 
+    # A publisher name alone does not prove that any current data is arriving.
+    audit_path = Path(__file__).parent / "go2w/audit_navigation_runtime.py"
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="go2w_nav_audit_") as directory:
+        result = subprocess.run(["/usr/bin/python3", str(audit_path), "--duration", "3",
+                                 "--json", str(Path(directory)/"audit.json")],
+                                capture_output=True, text=True, timeout=15)
+        add("live_2d_localization_and_lifecycle", result.returncode == 0,
+            result.stdout or result.stderr, plan=True, execute=True)
     prefix = args.namespace.rstrip("/")
     has_server = lambda message: "Action servers: 0" not in message
     has_publisher = lambda message: "Publisher count: 0" not in message

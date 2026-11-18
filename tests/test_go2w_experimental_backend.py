@@ -56,6 +56,39 @@ def _backend(motion: _FakeMotion, **config) -> Go2WExperimentalBackend:
 
 
 class TestGo2WExperimentalBackend(unittest.TestCase):
+    def test_physical_command_cap_includes_segmented_turns_and_next_goal(self) -> None:
+        motion = _FakeMotion()
+        backend = _backend(motion, max_motion_commands=3,
+                           max_turn_deg_per_action=15.0)
+        first = backend.execute_goal(ExplorationGoal(
+            goal_id="split", goal_type=GOAL_ROTATE_VIEW, relative_dyaw=30.0,
+        )).result
+        self.assertTrue(first.succeeded)
+        # The second logical goal would require two more primitives.
+        second = backend.execute_goal(ExplorationGoal(
+            goal_id="capped", goal_type=GOAL_ROTATE_VIEW, relative_dyaw=30.0,
+        )).result
+        self.assertFalse(second.succeeded)
+        self.assertEqual(second.message, "MOTION_COMMAND_LIMIT_REACHED")
+        self.assertEqual(motion.steps, ["l15", "l15", "l15"])
+        # stop/cancel or a failed command must not replenish this session cap.
+        backend.cancel()
+        backend.execute_goal(ExplorationGoal(
+            goal_id="after_stop", goal_type=GOAL_RELATIVE_MOVE, relative_dx=0.1,
+        ))
+        self.assertEqual(len(motion.steps), 3)
+
+    def test_failed_physical_attempt_consumes_budget(self) -> None:
+        motion = _FakeMotion()
+        motion.fail_steps.add("l15")
+        backend = _backend(motion, max_motion_commands=1)
+        goal = ExplorationGoal(goal_id="failure", goal_type=GOAL_ROTATE_VIEW,
+                               relative_dyaw=15.0)
+        self.assertFalse(backend.execute_goal(goal).result.succeeded)
+        motion.fail_steps.clear()
+        self.assertFalse(backend.execute_goal(goal).result.succeeded)
+        self.assertEqual(motion.steps, ["l15"])
+
     def test_capabilities_relative(self) -> None:
         backend = _backend(_FakeMotion())
         caps = backend.capabilities()
@@ -211,6 +244,43 @@ class TestGo2WExperimentalBackend(unittest.TestCase):
         self.assertEqual(motion.steps, ["f0.300"] * 5)
         self.assertEqual(result.requested_motion["segment_count"], 5)
         self.assertAlmostEqual(result.observed_motion["displacement_m"], 1.5)
+
+    def test_three_metre_cap_does_not_force_shorter_goal_to_three_metres(self) -> None:
+        motion = _FakeMotion()
+        backend = _backend(motion, forward_step_m=0.30, max_forward_step_m=3.0)
+        result = backend.execute_goal(ExplorationGoal(
+            goal_id="short-under-cap", goal_type=GOAL_RELATIVE_MOVE, relative_dx=0.45,
+        )).result
+        self.assertTrue(result.succeeded)
+        self.assertEqual(motion.steps, ["f0.300", "f0.150"])
+        self.assertEqual(result.requested_motion["distance_m"], 0.45)
+
+    def test_trial_overshoot_fails_and_stops_before_next_segment(self) -> None:
+        motion = _FakeMotion()
+        stopped = []
+
+        def overshooting_step(step: str) -> tuple[bool, str, dict]:
+            motion.steps.append(step)
+            motion.odom[0] += float(step[1:]) * 1.5
+            return True, "ok", {"step": step}
+
+        backend = Go2WExperimentalBackend(
+            execute_step=overshooting_step,
+            odometry=motion.odometry,
+            stop=lambda: stopped.append(True),
+            config=Go2WBackendConfig(
+                forward_step_m=0.15, max_forward_step_m=0.30,
+                max_observed_forward_m=0.20,
+            ),
+        )
+        result = backend.execute_goal(ExplorationGoal(
+            goal_id="trial-overshoot", goal_type=GOAL_RELATIVE_MOVE,
+            relative_dx=0.30,
+        )).result
+        self.assertEqual(result.status, NavigationStatus.FAILED)
+        self.assertIn("FORWARD_OVERSHOOT", result.message)
+        self.assertEqual(motion.steps, ["f0.150"])
+        self.assertEqual(stopped, [True])
 
     def test_segmented_forward_stops_at_first_failed_segment(self) -> None:
         motion = _FakeMotion()

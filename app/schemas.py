@@ -18,6 +18,7 @@ class StrictBaseModel(BaseModel):
 class EvidenceSource(str, Enum):
     LLM_VISION = "llm_vision"
     GROUNDED_SAM = "grounded_sam"
+    YOLOE_SEG = "yoloe_seg"
     SAM2_MASK = "sam2_mask"
     CROP_VERIFY = "crop_verify"
     GEOMETRIC_RELATION = "geometric_relation"
@@ -182,6 +183,8 @@ class SceneObject(StrictBaseModel):
     detector_score: Confidence | None = Field(default=None, ge=0.0, le=1.0)
     text_score: Confidence | None = Field(default=None, ge=0.0, le=1.0)
     mask_area_ratio: Confidence | None = Field(default=None, ge=0.0, le=1.0)
+    mask_rle: list[list[int]] | None = None
+    mask_size: tuple[int, int] | None = None
     crop_path: str | None = None
     crop_verify: dict[str, Any] | None = None
     final_score: Confidence | None = Field(default=None, ge=0.0, le=1.0)
@@ -650,7 +653,12 @@ class KnowledgeItem(StrictBaseModel):
     content_zh: str
     source: str
     confidence: Confidence = Field(ge=0.0, le=1.0)
-    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    # 取值放宽到 list[str]：knowledge 条目需要把 `related_objects` 这类
+    # 多值元数据透出（计划书 §3.3 "最小向后兼容扩展"）。只是放宽、不收紧，
+    # 现有标量取值一个都不受影响，且仍可 JSON 序列化。
+    metadata: dict[str, str | int | float | bool | None | list[str]] = Field(
+        default_factory=dict
+    )
 
 
 class RobotTask(StrictBaseModel):

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Read-only dual-LiDAR calibration capture for the Go2-W + PandarXT-16.
 
-For one named scene, capture a time-paired set of built-in L2 clouds (already
-in base_link) and Pandar raw clouds plus their header stamps, host receive
+For one named stationary scene, capture independently stamped built-in L2
+clouds (transformed into base_link) and Pandar raw clouds plus their header stamps, host receive
 stamps, frame ids and the current candidate transform/config hash. The raw
 data is preserved so an offline multi-scene calibration
 (``calibrate_pandarxt16_extrinsics.py``) can be reproduced later.
@@ -31,6 +31,9 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
+from tf2_ros import Buffer, TransformException, TransformListener
+from rclpy.duration import Duration
+from rclpy.time import Time
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -51,62 +54,109 @@ class DualLidarCapture(Node):
         pandar_topic: str,
     ) -> None:
         super().__init__("dual_lidar_calibration_capture")
-        qos = QoSProfile(
+        pandar_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=20,
             reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        builtin_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=20,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
         self.frames = frames
         self.scene = scene
         self.builtin: list[dict] = []
         self.pandar: list[dict] = []
-        self.create_subscription(PointCloud2, builtin_topic, self._on_builtin, qos)
-        self.create_subscription(PointCloud2, pandar_topic, self._on_pandar, qos)
+        self.builtin_transform: dict | None = None
+        self.tf_buffer = Buffer(cache_time=Duration(seconds=10.0))
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.create_subscription(
+            PointCloud2, builtin_topic, self._on_builtin, builtin_qos
+        )
+        self.create_subscription(
+            PointCloud2, pandar_topic, self._on_pandar, pandar_qos
+        )
 
     def _on_builtin(self, message: PointCloud2) -> None:
         if len(self.builtin) >= self.frames:
             return
-        records = point_cloud2.read_points(
-            message, field_names=("x", "y", "z"), skip_nans=False
-        )
+        xyz = _read_fields(message, ("x", "y", "z"))
+        if message.header.frame_id != "base_link":
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    "base_link",
+                    message.header.frame_id,
+                    Time.from_msg(message.header.stamp),
+                    timeout=Duration(seconds=0.05),
+                )
+            except TransformException as exc:
+                self.get_logger().warning(f"built-in cloud TF unavailable: {exc}")
+                return
+            xyz = _transform_xyz(xyz, transform.transform)
+            if self.builtin_transform is None:
+                t, q = transform.transform.translation, transform.transform.rotation
+                self.builtin_transform = {
+                    "source_frame": message.header.frame_id,
+                    "target_frame": "base_link",
+                    "translation_xyz_m": [t.x, t.y, t.z],
+                    "rotation_xyzw": [q.x, q.y, q.z, q.w],
+                }
+        elif self.builtin_transform is None:
+            self.builtin_transform = {
+                "source_frame": "base_link", "target_frame": "base_link",
+                "translation_xyz_m": [0.0, 0.0, 0.0],
+                "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+            }
         self.builtin.append(
             {
                 "stamp": message.header.stamp.sec + message.header.stamp.nanosec * 1e-9,
                 "arrival_s": self.get_clock().now().nanoseconds / 1e9,
-                "frame_id": message.header.frame_id,
+                "frame_id": "base_link",
                 "points": int(message.width * message.height),
-                "xyz": np.column_stack(
-                    tuple(
-                        np.asarray(records[name], dtype=np.float64)
-                        for name in ("x", "y", "z")
-                    )
-                ),
+                "xyz": xyz,
             }
         )
 
     def _on_pandar(self, message: PointCloud2) -> None:
         if len(self.pandar) >= self.frames:
             return
-        records = point_cloud2.read_points(
-            message, field_names=("x", "y", "z", "ring", "timestamp"), skip_nans=False
-        )
+        values = _read_fields(message, ("x", "y", "z", "ring", "timestamp"))
         self.pandar.append(
             {
                 "stamp": message.header.stamp.sec + message.header.stamp.nanosec * 1e-9,
                 "arrival_s": self.get_clock().now().nanoseconds / 1e9,
                 "frame_id": message.header.frame_id,
                 "points": int(message.width * message.height),
-                "xyz": np.column_stack(
-                    tuple(
-                        np.asarray(records[name], dtype=np.float64)
-                        for name in ("x", "y", "z")
-                    )
-                ),
-                "ring": np.asarray(records["ring"], dtype=np.int64),
-                "point_time": np.asarray(records["timestamp"], dtype=np.float64),
+                "xyz": values[:, :3],
+                "ring": values[:, 3].astype(np.int64),
+                "point_time": values[:, 4],
             }
         )
+
+
+def _read_fields(message: PointCloud2, fields: tuple[str, ...]) -> np.ndarray:
+    records = point_cloud2.read_points(message, field_names=fields, skip_nans=False)
+    if getattr(getattr(records, "dtype", None), "names", None):
+        return np.column_stack(
+            tuple(np.asarray(records[name], dtype=np.float64) for name in fields)
+        )
+    return np.asarray(list(records), dtype=np.float64).reshape(-1, len(fields))
+
+
+def _transform_xyz(xyz: np.ndarray, transform) -> np.ndarray:
+    t, q = transform.translation, transform.rotation
+    quaternion = np.array([q.x, q.y, q.z, q.w], dtype=np.float64)
+    quaternion /= np.linalg.norm(quaternion)
+    x, y, z, w = quaternion
+    rotation = np.array([
+        [1 - 2 * (y*y + z*z), 2 * (x*y - z*w), 2 * (x*z + y*w)],
+        [2 * (x*y + z*w), 1 - 2 * (x*x + z*z), 2 * (y*z - x*w)],
+        [2 * (x*z - y*w), 2 * (y*z + x*w), 1 - 2 * (x*x + y*y)],
+    ])
+    return xyz @ rotation.T + np.array([t.x, t.y, t.z])
 
 
 def _sha256_file(path: Path) -> str:
@@ -128,7 +178,7 @@ def main() -> int:
     parser.add_argument("--frames", type=int, default=8)
     parser.add_argument("--timeout-seconds", type=float, default=15.0)
     parser.add_argument(
-        "--builtin-topic", default="/go2w/lidar/cloud_filtered"
+        "--builtin-topic", default="/go2w/sensors/cloud"
     )
     parser.add_argument("--pandar-topic", default="/hesai/pandarxt16/points_raw")
     parser.add_argument(
@@ -144,6 +194,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.frames < 2:
         parser.error("--frames must be at least 2")
+    scene_dir = args.output / args.scene
+    if scene_dir.exists() and any(scene_dir.iterdir()):
+        parser.error(f"refusing to overwrite existing capture: {scene_dir}")
 
     rclpy.init()
     node = DualLidarCapture(
@@ -172,7 +225,6 @@ def main() -> int:
         )
         return 2
 
-    scene_dir = args.output / f"{args.scene}"
     scene_dir.mkdir(parents=True, exist_ok=True)
     builtin_path = scene_dir / "builtin_clouds.npz"
     pandar_path = scene_dir / "pandar_clouds.npz"
@@ -196,6 +248,7 @@ def main() -> int:
         "builtin": {
             "topic": args.builtin_topic,
             "frame_id": node.builtin[0]["frame_id"] if node.builtin else None,
+            "transform_to_base_link": node.builtin_transform,
             "points_per_frame": node.builtin[0]["points"] if node.builtin else None,
             "clouds_file": "builtin_clouds.npz",
             "clouds_sha256": _sha256_file(builtin_path),

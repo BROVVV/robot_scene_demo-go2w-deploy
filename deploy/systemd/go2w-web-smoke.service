@@ -1,0 +1,16 @@
+[Unit]
+Description=GO2-W read-only Jetson Web candidate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=unitree
+WorkingDirectory=/home/unitree/robotscene_releases/20261103_01
+Environment=PYTHONNOUSERSITE=1
+ExecStart=/bin/bash /home/unitree/robotscene_releases/20261103_01/scripts/go2w/start_jetson_web_readonly.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

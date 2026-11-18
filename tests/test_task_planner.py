@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from app.knowledge.retrieval import retrieve_relevant_knowledge
 from app.planning.task_planner import plan_task
@@ -10,12 +11,32 @@ from app.reasoning.scene_reasoner import reason_about_scene
 from app.reasoning.task_parser import parse_robot_task
 from app.schemas import KnowledgeAwareSceneResult, SceneAnalysisResult
 from app.services.psg_builder import build_predictive_scene_graph
+from app.task_understanding import llm_task_interpreter as _llm_interpreter
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class TaskPlannerTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # §14-10 离线桩。`parse_robot_task` 走 `run_task_understanding_pipeline`
+        # 时不带 llm_client，而 `llm_task_interpreter.py:161` 是
+        # `client = llm_client or _default_openai_client()` ⇒ 每条用例都去建真实
+        # SiliconFlow client 打网络（实测 10~18 秒/条），结果随 LLM 输出漂移：
+        # 本文件的 `test_plan_count_objects_has_count_state` 就会因为 LLM 把
+        # 「数数这个房间里有几个椅子」判成 `inspect_area` 而红。
+        # 桩把出口钉死在「不可用」，链路落到 `app/reasoning/task_parser.py:124`
+        # 的 `_offline_compat_task`（确定性关键词匹配），用例因此可复现。
+        # 本文件断言的是**规划层**行为（plan_type / steps），与 LLM 解析质量无关，
+        # 所以钉死出口不损失任何分辨力。
+        patcher = mock.patch.object(
+            _llm_interpreter,
+            "_default_openai_client",
+            side_effect=RuntimeError("offline stub: real LLM disabled in tests"),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_plan_visible_find_object(self) -> None:
         scene = _base_mock()
         task = parse_robot_task(scene.target_decision.target_text)

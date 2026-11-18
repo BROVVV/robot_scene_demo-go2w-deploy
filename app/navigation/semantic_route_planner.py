@@ -203,11 +203,18 @@ class SemanticRoutePlanner:
         if path is None:
             return None
         waypoints = [self._to_world(cell, origin, res) for cell in path]
-        waypoints = waypoints[:: max(1, len(waypoints) // max(1, self.max_waypoints))]
         path_length = sum(
             math.dist(waypoints[i], waypoints[i + 1])
             for i in range(len(waypoints) - 1)
         )
+        # Uniform slicing used to drop the goal when len(path)-1 was not a
+        # multiple of its stride. On long routes that lost over a metre and
+        # made the checked prefix reject the route as belonging to a different
+        # target. Preserve both endpoints and measure cost before sampling.
+        limit = max(2, self.max_waypoints)
+        if len(waypoints) > limit:
+            waypoints = [waypoints[i * (len(waypoints) - 1) // (limit - 1)]
+                         for i in range(limit)]
         return RoutePlan(
             route_id=route_id,
             frame_id=frame_id,

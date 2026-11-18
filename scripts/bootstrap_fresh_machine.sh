@@ -179,6 +179,23 @@ if [[ "$profile" == full ]]; then
   [[ -s "$grounded_root/gdino_checkpoints/groundingdino_swint_ogc.pth" ]] || \
     curl -fL --retry 3 -o "$grounded_root/gdino_checkpoints/groundingdino_swint_ogc.pth" \
       https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/groundingdino_swint_ogc.pth
+
+  # RAM++（recognize-anything）—— 不在 PyPI，必须 clone。
+  # 权重 3.01 GB，只下到 external/（.gitignore 内），不进 Git。
+  step 'Provisioning RAM++ (recognize-anything) source and checkpoint'
+  ram_root="${external_root}/recognize-anything"
+  ensure_repo_at_commit \
+    https://github.com/xinyu1205/recognize-anything.git \
+    "$ram_root" \
+    7cb804a8609e9f4b1a50b7f31436d2df40bb9481
+  # 推理路径只需要 timm/transformers/torchvision，但 ram/models/vit.py 在模块级
+  # import fairscale，所以 fairscale 也是推理依赖（实测）。
+  pip_install install fairscale
+  mkdir -p "${external_root}/ram_plus_ckpt"
+  ram_ckpt="${external_root}/ram_plus_ckpt/ram_plus_swin_large_14m.pth"
+  [[ -s "$ram_ckpt" ]] || \
+    curl -fL -C - --retry 5 --retry-delay 5 -o "$ram_ckpt" \
+      https://huggingface.co/xinyu1205/recognize-anything-plus-model/resolve/main/ram_plus_swin_large_14m.pth
 fi
 
 step 'Running deployment verification'

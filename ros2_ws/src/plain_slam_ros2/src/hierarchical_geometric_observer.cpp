@@ -30,9 +30,14 @@ namespace pslam {
 HierarchicalGeometricObserver::HierarchicalGeometricObserver() {
   gamma1_ = 4.0f; // k_q
   gamma2_ = 1.0f; // k_gb
-  gamma3_ = 4.5f; // k_p
+  // k_p: dt * k_p was 0.45, i.e. only 45% of the scan-matching correction was
+  // adopted per frame. The remaining 55% accumulated during pure rotation.
+  gamma3_ = 9.0f; // k_p
   gamma4_ = 11.25f; // k_v
-  gamma5_ = 2.25f; // k_ab
+  // k_ab: dt * k_ab was 0.225, letting the accelerometer bias absorb the
+  // position residual of a rotation (measured: |ab| reached 1.0 m/s^2).
+  // A MEMS bias drifts far slower than that.
+  gamma5_ = 0.05f; // k_ab
 
   huber_delta_ = 0.5f;
 }
@@ -96,9 +101,15 @@ bool HierarchicalGeometricObserver::Estimate(
       }
 
       corresp_num++;
-      if (corresp_num >= num_max_matching_points) {
-        break;
-      }
+      // [GO2W-FIX-R11] 删除上游的 corresp_num >= num_max_matching_points 提前
+      // break。理由（20260904 实测）：scan_step = scan_n / num_max_matching_points
+      // 已把采样点数压到 ~num_max_matching_points，该 break 是第二道冗余限流，且
+      // 因 active_points_rate < 1 每帧必然提前触发：scan_n=61774 / num_max=8000
+      // → scan_step=7、采样 8825 点，rate 0.937 时在第 8538 个采样点（原始索引
+      // 59766/61774）就退出，末尾 3.3% 的点从不参与配准（旋转帧 rate 0.97 时
+      // 达 6.5%）。雷达点按方位角顺序排列，被丢弃的恒是雷达系同一段扇区，经常量
+      // 外参映射后即机体系固定方向 —— 与实测「漂移方向恒为 yaw+43°」同源。缺失
+      // 扇区让点到面 ICP 的法向约束出现固定空洞，配准最优解沿该方向系统性偏移。
     }
 
     active_points_rate_ = static_cast<float>(corresp_num)
@@ -107,7 +118,8 @@ bool HierarchicalGeometricObserver::Estimate(
     const Eigen::Matrix<float, 6, 1> d = solver.solve(-b);
     pose = Sophus::SE3f::exp(d) * pose;
     const float epsilon = d.norm();
-    // std::cout << "iteration = " << iter_num + 1 << ", epsilon = " << epsilon << std::endl;
+    last_iter_num_ = iter_num + 1;
+    last_epsilon_ = epsilon;
     if (epsilon < convergence_th) {
       has_converged = true;
       break;

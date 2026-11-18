@@ -71,15 +71,15 @@ def test_navigation_heading_sector_uses_current_pose_not_stale_semantic():
     """§17.4（最重要回归）：语义永远返回 sector=0，导航 coverage 仍记录
     0,1,2,...，绝不能仍为 {"0": N}。"""
     yaws_deg = [0.0, 30.0, 60.0, 90.0, 120.0, 150.0]
-    index = [0]
+    calls = [0]
 
     def pose_provider():
-        value = yaws_deg[min(index[0], len(yaws_deg) - 1)]
-        index[0] += 1
+        # 姿态按「帧」推进而不是按调用次数推进：一个 cycle 内 OBSERVE 与
+        # EXECUTE 之后的 pose 读取必须是同一个物理姿态。
+        value = yaws_deg[min(max(calls[0] - 1, 0), len(yaws_deg) - 1)]
         return (0.0, 0.0, math.radians(value))
 
     backend = create_backend("mock", pose_provider=pose_provider)
-    calls = [0]
 
     def observer() -> LiveObservation:
         calls[0] += 1

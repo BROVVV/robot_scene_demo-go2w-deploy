@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
+import io
 import subprocess
+from typing import Any
 
 import pytest
 
@@ -60,12 +62,12 @@ def test_subprocess_executor_uses_resolved_python(monkeypatch):
     assert exe._cmd == ["/usr/bin/python3", "scripts/go2w/autonomous_search_worker.py"]
 
 
-def test_session_result_failure_reason_surfaces_to_webui(monkeypatch):
+def test_session_result_failure_reason_surfaces_to_webui(monkeypatch, tmp_path):
     """worker 返回 exit_code=4 + error -> SEARCH_FINISHED 携带 reason。"""
     service = SearchSessionService(
         owner=ControlOwner(),
         executor_factory=lambda: None if False else object(),
-        session_dir="outputs/live_runs",
+        session_dir=str(tmp_path / "sessions"),
     )
     service._session_id = "s_fail"
     service._info = type("I", (), {
@@ -87,3 +89,37 @@ def test_session_result_failure_reason_surfaces_to_webui(monkeypatch):
     payload = finished[0].get("payload") or {}
     assert payload.get("result") == "FAILED"
     assert "ModuleNotFoundError" in (payload.get("error") or "")
+
+
+def test_worker_env_drops_pythonnousersite(monkeypatch):
+    """交互式 shell 的 ``PYTHONNOUSERSITE=1`` 不能传给 worker。
+
+    它屏蔽 ``~/.local``，而 ROS 解释器（/usr/bin/python3）的 pydantic / openai
+    只在那里 —— 真机实测：worker 先报 WORKER_READY，收到 start 后在懒加载
+    ``app.schemas`` 时才炸成 ``WORKER_DEPENDENCY_MISSING``（exit_code=4），
+    而启动探测只 import 到模块层，照样放行。
+    """
+    monkeypatch.setattr(
+        "app.manual_web_demo.search_executor._resolve_worker_python",
+        lambda: "/usr/bin/python3",
+    )
+    captured: dict[str, Any] = {}
+
+    class _FakePopen:
+        def __init__(self, cmd, **kwargs):
+            captured.update(kwargs)
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO()
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.manual_web_demo.search_executor.subprocess.Popen", _FakePopen
+    )
+    monkeypatch.setenv("PYTHONNOUSERSITE", "1")
+    SubprocessSearchExecutor().start({"target": "x"})
+
+    env = captured["env"]
+    assert "PYTHONNOUSERSITE" not in env, "会挡住 ROS python 的 ~/.local"
+    assert env["PYTHONUNBUFFERED"] == "1"

@@ -54,8 +54,22 @@ def _isolate_archives(tmp_path):
     _TEST_SESSION_DIR = str(tmp_path / "sessions")
 
 
+@pytest.fixture(autouse=True)
+def _authorize_nav2_motion(monkeypatch):
+    """本文件测的是**会话回收**，不是运动授权门。
+
+    `start_search` 在 `backend=nav2` 且非 mock 工厂且非 dry-run 时会先过一道
+    `GO2W_NAV2_EXECUTION_AUTHORIZED == "1"` 的授权门（见 search_session_service
+    的 start_search）。那道门会在这个文件关心的回收逻辑**之前**直接返回
+    forbidden，于是本文件的 11 个用例全部变成"僵尸会话没被回收"的假红 ——
+    实际红的是环境变量没设。这里显式把授权前置条件摆出来，用例才测得到
+    STARTING/TASK_REJECTED 的回收路径。默认路径不受影响：这只作用于本文件。
+    """
+    monkeypatch.setenv("GO2W_NAV2_EXECUTION_AUTHORIZED", "1")
+
+
 def _make_service(executor=None) -> SearchSessionService:
-    # backend=go2w_experimental（非 mock）会真正走 executor_factory，因此这里的
+    # backend=nav2（非 mock）会真正走 executor_factory，因此这里的
     # Dead/Alive executor 才会生效；task 理解用本地 mock_fallback，避免调用网络 LLM。
     return SearchSessionService(
         owner=ControlOwner(),
@@ -69,7 +83,9 @@ def _req(text: str = "测试目标") -> SearchStartRequest:
     return SearchStartRequest.from_dict({
         "task_text": text,
         "target": text,
-        "backend": "go2w_experimental",
+        # §6.6 / §12.4：真机后端只有 nav2，旧的 go2w_experimental 已经不被
+        # 请求校验接受（validate() 会返回 "unsupported backend"）。
+        "backend": "nav2",
     })
 
 
@@ -196,3 +212,23 @@ def test_running_alive_worker_not_reaped():
     blocked = svc.start_search(_req())
     assert blocked["ok"] is False
     assert "already active" in blocked["error"]
+
+
+def test_stop_after_long_running_search_has_its_own_timeout(monkeypatch):
+    svc = _make_service(_AliveExecutor())
+    _zombie_running(svc, _AliveExecutor())
+    svc._started_at = time.time() - 3600
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    assert svc.stop_search()["status"] == "STOPPING"
+    assert not svc.reap_stale_session(), "运行时长不能算作停止等待时长"
+    # A late running heartbeat must not undo a pending stop.
+    svc._mark_status("RUNNING")
+    assert svc._status == "STOPPING"
+    now[0] += 60
+    svc.stop_search()
+    assert svc._stopping_at == 1000.0, "重复停止不能无限延长截止时间"
+    now[0] += 61
+    assert svc.reap_stale_session(), "真正的停止超时仍须回收"
+    assert svc._status == "FAILED"
+    assert "停止超过" in svc.state_snapshot()["error"]["message"]

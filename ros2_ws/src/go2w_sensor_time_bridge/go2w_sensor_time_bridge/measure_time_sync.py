@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
+import socket
 import tempfile
 import time
 from pathlib import Path
@@ -192,7 +193,14 @@ def main(args=None) -> int:
                 cloud_fit.duration_sec, imu_fit.duration_sec
             ),
             "measured_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "timestamp_semantics": "host ROS receive time fit; not hardware exposure time",
+            # 基准是**跑这个工具的机器**的 receive time（见 Collector._cloud 里的
+            # self.get_clock().now()）。原来写死成 "host ..."，在机器狗上跑就会生成
+            # 一份自称是宿主时钟、实则是机器狗时钟的配置——正是那种事后看配置无法
+            # 判断真伪的假记录。写清楚是谁测的。
+            "timestamp_semantics": (
+                f"ROS receive time fit measured on {socket.gethostname()}; "
+                "not hardware exposure time"
+            ),
             "cloud": cloud_fit.__dict__,
             "imu": imu_fit.__dict__,
             "cloud_imu_relative_clock": relative_fit.__dict__,

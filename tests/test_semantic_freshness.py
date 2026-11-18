@@ -105,6 +105,29 @@ def test_first_frame_submits_to_background_single_flight():
     assert latest.semantic_source_frame_id == "1"
 
 
+def test_background_semantic_preserves_image_timestamp_quality():
+    def analyze(*args, **kwargs):
+        return {"scene_objects": [], "scene_relations": []}
+
+    manager = AsyncSemanticObservationManager(analyze, enabled=True, now=time.time)
+    assert manager.submit_if_needed(
+        image_path="f1.jpg",
+        frame_id="1",
+        capture_timestamp=12345.678,
+        timestamp_quality="receive_time",
+        robot_pose=None,
+        target_profile=object(),
+    ) is True
+    deadline = time.time() + 3.0
+    while manager.has_inflight() and time.time() < deadline:
+        time.sleep(0.02)
+
+    latest = manager.get_latest_completed()
+    assert latest is not None
+    assert latest.semantic_capture_timestamp == 12345.678
+    assert latest.timestamp_quality == "receive_time"
+
+
 def test_quick_scene_fallback_payload_is_fresh_quick():
     """§17.2：Quick 显式无目标 + 有物体 -> fresh_quick_scene 轻量语义。"""
     payload = semantic_payload_from_quick_target_absence(

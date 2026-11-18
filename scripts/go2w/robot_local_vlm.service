@@ -1,0 +1,27 @@
+[Unit]
+Description=LFM2.5-VL-3B local VLM server (llama.cpp + CUDA) for RobotScene verify
+Documentation=file:///home/unitree/local_vlm/start_local_vlm.sh
+After=network.target
+# 不依赖 nv*.service：这台机上那些单元全是 inactive/dead，GPU 由内核驱动更早就绪。
+# 且 llama-server 拿不到 CUDA 时是**直接退出**，不会静默留在 CPU 上还报成功。
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/unitree/local_vlm
+# 先写 pidfile 再 exec：exec 之后进程号不变，所以这份 pidfile 与 MainPID 一致。
+# 必须写对 —— /home/unitree/local_vlm/start_local_vlm.sh 正是靠它判断"已经在跑"，
+# 写错或写晚（例如放到 ExecStartPost 里）会让那个脚本再起一个实例去撞 18081。
+#
+# 这里必须写 4 个 $：systemd 会把 `$$` 折叠成一个**字面** `$`（它自己的转义），
+# 于是 sh 收到的是 `echo $ > pidfile` —— pidfile 里只有一个 `$`，pidfile 判重彻底失效。
+# 2026-10-12 实测踩到：装好后 od 出来正是 `$ \n`。要传给 sh 一个 `$$`，单元文件里得写 `$$$$`。
+ExecStart=/bin/sh -c 'echo $$$$ > /home/unitree/local_vlm/server.pid; exec /home/unitree/local_vlm/build/bin/llama-server --model /home/unitree/local_vlm/models/LFM2.5-VL-3B-Q4_K_M.gguf --mmproj /home/unitree/local_vlm/models/mmproj-LFM2.5-VL-3B-Q8_0.gguf --alias lfm-local --host 127.0.0.1 --port 18081 --ctx-size 4096 --parallel 1 --gpu-layers 99 --threads 2 --threads-batch 2 --no-ui'
+ExecStopPost=/bin/rm -f /home/unitree/local_vlm/server.pid
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/unitree/local_vlm/server.log
+StandardError=append:/home/unitree/local_vlm/server.log
+
+[Install]
+WantedBy=multi-user.target

@@ -30,6 +30,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
+#include <algorithm>
 #include <chrono>
 
 #include <plain_slam/lio_3d_interface.hpp>
@@ -212,7 +213,15 @@ class LIO3DNode : public rclcpp::Node {
       dt = 1.0 / 200.0;
       is_first = false;
     } else {
-      dt = stamp - prev_stamp;
+      // IMU 断流时相邻两帧的戳差可以是数秒，而 dt 一路无钳位地进预积分
+      // （imu_preintegrator.cpp:164 `t += v_prev*dt`）。实测 2026-09-11：宿主机
+      // 时钟阶跃 4.673 s（imu_timestamp_aligner 按新 offset 重锁），重锁窗口
+      // 停发 500 帧 = 2.016 s（/go2w/slam/imu 实测 248 Hz，不是 500 Hz），
+      // 重锁后第一帧 dt = 6.689 s；v 实测 p50 0.454 m/s，先验一次偏 3 m，
+      // 而 max_correspondence_dist 只有 0.5 m，配准不收敛也照样写关键帧 ——
+      // 一帧错位墙进地图，就是 WebUI 上的重影。正常相邻间隔实测 p50 4.482 ms
+      // / p99 6.375 / max 8.994 ms，0.1 s 上限有 11 倍余量，只会裁掉真断流。
+      dt = std::clamp(stamp - prev_stamp, 0.0, 0.1);
       prev_stamp = stamp;
     }
 

@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>go2w_nav2_spin_compat</name><version>1.1.20</version>
+  <description>Pinned Nav2 duration-bounded Spin adapted to native Foxy Recovery.</description>
+  <maintainer email="maintainer@example.com">RobotScene</maintainer><license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>go2w_nav2_compat</depend><depend>rclcpp</depend><depend>nav2_recoveries</depend><depend>nav2_core</depend>
+  <depend>go2w_nav2_compat_msgs</depend><depend>pluginlib</depend><depend>tf2_geometry_msgs</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

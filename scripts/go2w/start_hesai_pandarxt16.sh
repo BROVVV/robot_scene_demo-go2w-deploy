@@ -5,7 +5,6 @@ set -euo pipefail
 # a motion Action, a lease holder, Nav2, or any project safety publisher.
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd -- "${script_dir}/../.." && pwd)"
-workspace="${project_root}/ros2_ws"
 
 set +u
 # shellcheck disable=SC1091
@@ -46,8 +45,8 @@ if ! ip route get "${device_address}" \
     "${device_address}" "${interface}" "${host_address}" >&2
   exit 2
 fi
-if [[ ! -r "${workspace}/install/setup.bash" ]]; then
-  printf 'ERROR: ROS workspace is not built: %s\n' "${workspace}" >&2
+if [[ ! -r "${GO2W_WORKSPACE_SETUP}" ]]; then
+  printf 'ERROR: ROS workspace is not built: %s\n' "${GO2W_WORKSPACE_SETUP}" >&2
   exit 2
 fi
 

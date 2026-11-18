@@ -71,6 +71,22 @@ rotation_clearance_validation:
     physical 360-degree cross-check metadata, evidence paths, matching posture,
     horizontal-yaw validation, blind-zone mitigation, and self-filter tests.
 self_regions:
+  - name: rear_mounted_equipment_body_fixed_20261015
+    note: >
+      Elevated rear cluster cross-checked before/after operator teleoperation:
+      wheel odometry moved 0.35574 m forward with 0.01257 rad yaw change;
+      99.63 percent of the old cluster matches the new body-frame cloud within
+      0.02 m, versus zero percent under the fixed-environment hypothesis.
+      Evidence: artifacts/go2w_round4_20261015/rear_cluster_motion_crosscheck.json.
+      Restricted to the measured elevated cluster; z_min is above the existing
+      collision top 0.052 m, so collision scans/clearance are unaffected.
+      Revalidate if mounted equipment or sensor calibration changes.
+    x_min: -0.57
+    x_max: -0.37
+    y_min: -0.255
+    y_max: 0.255
+    z_min: 0.07
+    z_max: 0.30
   - name: head_and_camera
     note: >
       Dense points at base x 0.28..0.58 / y +-0.31 / z 0.30..0.82 are the

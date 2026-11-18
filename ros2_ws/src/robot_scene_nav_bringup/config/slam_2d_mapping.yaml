@@ -1,0 +1,80 @@
+# Independent 2D SLAM: wheel odometry + Unitree obstacle scan.
+slam_toolbox:
+  ros__parameters:
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+    odom_frame: odom_fused
+    map_frame: map
+    base_frame: base_link
+    # Direct scan mapping remains active while stationary, but scan matching is
+    # deliberately capped at 4 Hz.  Accepting the measured ~17 Hz input
+    # saturated a core and made /map plus map->odom_fused trail real time by
+    # 1--12 s.  A live 2 Hz trial used only ~9% CPU but let the TF source stamp
+    # cross the 0.3 s localization limit at the end of each admission period;
+    # 4 Hz keeps margin on both compute and freshness.  The high-rate raw/
+    # mapping scans and all LiDAR safety topics are unaffected by this
+    # frontend-only admission interval.  The adapter additionally keeps the
+    # TF source stamp fresh on skipped scans and adds graph nodes only after
+    # 5 cm translation or 0.05 rad yaw, so stationary runtime is bounded.
+    # Set mapping_use_keyframes=true and scan_topic to mapping_keyframe_scan to
+    # restore the translation/yaw-gated mode.
+    scan_topic: /go2w/lidar/mapping_scan
+    continuous_scan_topic: /go2w/lidar/mapping_scan
+    mapping_use_keyframes: false
+    direct_scan_minimum_interval_s: 0.25
+    mapping_keyframe_minimum_translation_m: 0.05
+    mapping_keyframe_minimum_rotation_rad: 0.05
+    use_map_saver: true
+    mode: mapping
+    debug_logging: false
+    # Keep upstream throttling at one: the source stream stays lossless for
+    # other consumers and the adapter's explicit wall-clock/source-stamp gate
+    # is the single scan-matching rate limit.
+    throttle_scans: 1
+    transform_publish_period: 0.05
+    # Publish after each admitted match at most; 0.2 s remains below the 0.25 s
+    # frontend interval and does not add another cadence bottleneck.
+    map_update_interval: 0.2
+    resolution: 0.05
+    min_laser_range: 0.37
+    max_laser_range: 6.2
+    minimum_time_interval: 0.0
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000
+    enable_interactive_mode: true
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.0
+    minimum_travel_heading: 0.1
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
+    min_pass_through: 2
+    occupancy_threshold: 0.1
+    use_sim_time: false

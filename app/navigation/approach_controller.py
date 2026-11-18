@@ -164,7 +164,11 @@ def _forward_block_reason(
     clearance: ClearanceNavigationConfig,
     capabilities: RobotCapabilities | None,
 ) -> str:
-    if capabilities is not None and capabilities.allowed_motion_primitives:
+    # 计划书 §6.7：这条门管的是「相对前进原语」。metric 后端（nav2）走的是
+    # NAVIGATE_POSE + 路径规划，同一个位移由 Nav2 负责，本来就不会用 FORWARD
+    # 原语，所以对它不适用——否则 nav2 模式下接近永远停在 BLOCKED。
+    metric = bool(getattr(capabilities, "supports_metric_navigation", False))
+    if not metric and capabilities is not None and capabilities.allowed_motion_primitives:
         if "FORWARD" not in capabilities.allowed_motion_primitives:
             return "FORWARD_PRIMITIVE_NOT_ALLOWED: 平台未开放前进原语"
     if not (safety.lidar_fresh and safety.geometry_validated):

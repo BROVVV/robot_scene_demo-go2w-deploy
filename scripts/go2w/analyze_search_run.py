@@ -130,6 +130,17 @@ def analyse_events(
                     "local_scan_place_id": scan_place,
                     "goal_id": goal.get("goal_id") if isinstance(goal, dict) else None,
                 })
+        elif name == "place_identity_mismatch":
+            # 上面 selected_goal 那条派生分支是**死代码**：全仓 877 条真机
+            # selected_goal 里顶层从不带 current_place_id/place_id（实测 0 次），
+            # 所以 decision_place 恒 None，永远进不去。这里直接读新事件
+            # （autonomous_explorer.py 的 _emit("place_identity_mismatch", ...)），
+            # 字段与上面完全一致，别把两条都点亮 —— 会重复计数。
+            current_place_mismatches.append({
+                "decision_place_id": event.get("decision_place_id"),
+                "local_scan_place_id": event.get("local_scan_place_id"),
+                "goal_id": event.get("goal_id"),
+            })
         elif name in {"observation", "match", "target_state_changed", "target_possible_verify"}:
             state = _target_state(event)
             if state != "UNKNOWN":

@@ -1,0 +1,16 @@
+[Unit]
+Description=GO2W own-address Wi-Fi ARP announcement recovery
+After=NetworkManager.service
+Wants=NetworkManager.service
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/go2w-announce-wifi-ipv4.py --interface wlan0 --interval 5
+Restart=on-failure
+RestartSec=3
+Nice=10
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_RAW
+ProtectSystem=strict
+ProtectHome=yes
+[Install]
+WantedBy=multi-user.target

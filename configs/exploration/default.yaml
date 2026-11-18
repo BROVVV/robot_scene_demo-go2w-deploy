@@ -7,7 +7,7 @@ profile: exploration_default
 exploration:
   # ---- search budget ------------------------------------------------------
   budget:
-    max_search_seconds: 600
+    max_search_seconds: 600    # 0 = 不限会话总时长，动作/感知超时独立生效
     max_planning_cycles: 100
     max_motion_steps: 50
     max_replans: 100
@@ -73,17 +73,11 @@ exploration:
     save_graph_every_cycle: true
 
 backend:
-  type: go2w_experimental
-  go2w_experimental:
-    max_turn_deg_per_action: 30
-    forward_step_m: 1.5
-    max_forward_step_m: 1.5
-    allow_lateral: false
-    motion_timeout_sec: 60.0
-    relative_pose_source: auto
-    odom_candidates:
-      - /go2w/odom/fused
-      - /go2w/odom/wheel
+  # 计划书 §4.3：默认配置里不得再出现 go2w_experimental。真实自主搜索只走 nav2
+  # （搜索入口的 --backend 默认值也是 nav2）。本块是声明性的 —— 真正选择后端的
+  # 是命令行参数；原来挂在它下面的 go2w_experimental 调参子块没有任何读取方，
+  # 已随 §6.6-1 一并删除。
+  type: nav2
 
 # ---------------------------------------------------------------------------
 # VLM-only low-latency runtime (read via app.config Settings / .env)

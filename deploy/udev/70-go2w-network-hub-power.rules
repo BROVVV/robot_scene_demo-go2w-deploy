@@ -1,0 +1,5 @@
+# GO2W network dock: keep the observed Genesys 05e3:0610 hub awake.
+# This excludes its runtime autosuspend as a possible disconnect trigger.
+# It does not repair a loose cable, inadequate supply, or a driver teardown bug.
+# No rule is applied to the directly connected D435 or unrelated USB models.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="05e3", ATTR{idProduct}=="0610", TEST=="power/control", ATTR{power/control}="on"

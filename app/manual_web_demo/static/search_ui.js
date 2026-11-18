@@ -20,7 +20,9 @@
     nextMotionCommand: null,
     turnProgress: null,
     candidates: [],
-    map: {},
+    spatial: {},
+    // 唯一一张图（state.graph），由服务端 web_snapshot() 投影。
+    graph: null,
     events: [],
     health: {},
   };
@@ -31,7 +33,7 @@
     "WORKER_READY": "工作进程就绪",
     "LOAD_PIPELINE": "正在初始化 SemanticNavigation",
     "WAIT_RGBD": "正在等待 D435 RGB-D",
-    "WAIT_SPATIAL_PROVIDER": "正在连接 RTAB-Map",
+    "WAIT_SPATIAL_PROVIDER": "正在连接地图与定位",
     "START_EXPLORER": "正在启动探索器",
     "RUNNING": "运行中",
     "FAILED": "启动异常",
@@ -46,6 +48,17 @@
   var timelineCount = 0;
   var viewingHistoryId = null;
   var currentLiveState = null;
+  var mappingMode = false;
+  var mappingState = null;
+  var mappingSoundEnabled = false;
+  var mappingAudio = null;
+  var mappingLiveCamera = false;
+  var lastSoundByEvent = {};
+  // 回放面板状态：会话 id、当前选中倍速、轮询定时器、最近一次状态。
+  var replaySessionId = null;
+  var replaySpeed = null;
+  var replayPollTimer = null;
+  var replayLastStatus = null;
 
   var els = {
     // taskbar
@@ -56,6 +69,7 @@
     btnStop: document.getElementById("btn-search-stop"),
     btnEstop: document.getElementById("btn-search-estop"),
     chkDebug: document.getElementById("chk-debug"),
+    detector: document.getElementById("search-detector"),
     chkMotion: document.getElementById("chk-motion"),
     sessionInfo: document.getElementById("search-session-info"),
     banner: document.getElementById("search-banner"),
@@ -63,6 +77,19 @@
     activeControls: document.getElementById("search-active-controls"),
     btnHistoryCurrent: document.getElementById("btn-history-current"),
     history: document.getElementById("search-history"),
+    // replay panel (history detail)
+    replayPanel: document.getElementById("replay-panel"),
+    replayStatus: document.getElementById("replay-status"),
+    replayProgress: document.getElementById("replay-progress"),
+    replayVideo: document.getElementById("replay-video"),
+    replayPlaceholder: document.getElementById("replay-placeholder"),
+    replayReasons: document.getElementById("replay-reasons"),
+    replayDownload: document.getElementById("replay-download"),
+    replayFinalMap: document.getElementById("replay-final-map"),
+    replayCover: document.getElementById("replay-cover"),
+    replayRegenerate: document.getElementById("replay-regenerate"),
+    replayClose: document.getElementById("replay-close"),
+    replaySpeeds: document.getElementById("replay-speeds"),
     // camera
     cam: document.getElementById("search-camera"),
     overlay: document.getElementById("search-overlay"),
@@ -97,11 +124,21 @@
     decCandidates: document.getElementById("dec-candidates"),
     decMotion: document.getElementById("dec-motion"),
     decHistory: document.getElementById("dec-history"),
+    // task agent panel (plan §5.1) — explanation layer, never replaces the
+    // candidate / map / safety areas below it.
+    agentMode: document.getElementById("agent-mode"),
+    agentSafety: document.getElementById("agent-safety"),
+    agentPlan: document.getElementById("agent-plan"),
+    agentChoice: document.getElementById("agent-choice"),
+    agentDownstream: document.getElementById("agent-downstream"),
+    agentCandidates: document.getElementById("agent-candidates"),
+    agentKnowledge: document.getElementById("agent-knowledge"),
+    agentInputs: document.getElementById("agent-inputs"),
+    agentUncertainties: document.getElementById("agent-uncertainties"),
     // map
     mapMeta: document.getElementById("map-meta"),
     mapNodeDetail: document.getElementById("map-node-detail"),
-    mapViewToggle: document.getElementById("map-view-toggle"),
-    mapLegend: document.getElementById("map-legend"),
+    topologyViewToggle: document.getElementById("topology-view-toggle"),
     // timeline
     timeline: document.getElementById("search-timeline"),
     tlWsState: document.getElementById("tl-ws-state"),
@@ -181,17 +218,6 @@
         currentLiveState = message.state;
         if (!viewingHistoryId) applyStateSnapshot(message.state);
       }
-    } else if (type === "events") {
-      if (!viewingHistoryId) {
-        // The snapshot is authoritative.  Replaying SESSION_CREATED and old
-        // deltas after it would clear accumulated decisions/topology on every
-        // F5.  Historical events only seed the timeline; new live events are
-        // still applied normally through the singular "event" message.
-        appState.events = (message.events || []).map(function (event) {
-          return { event_type: event.event_type, timestamp: event.timestamp, cycle: event.cycle };
-        });
-        renderTimeline();
-      }
     } else if (type === "event") {
       if (!viewingHistoryId) applySearchEvent(message.event);
     } else if (type === "heartbeat") {
@@ -202,24 +228,24 @@
   // ------------------------------------------------------------------ //
   // State application                                                   //
   // ------------------------------------------------------------------ //
-  // 合并后端 spatial：只要出现了非空 object_topology 就用新的；否则保留上一次
-  // 非空图形（搜索结束 IDLE 也不清空），仅当 sessionId 变化时清空。
-  function mergeSpatialGraph(freshSpatial, sessionChanged) {
-    var out = Object.assign({}, freshSpatial || {});
-    if (sessionChanged) return out;
-    var ot = (out.semantic_graph || {}).object_topology;
-    var oldGraph = appState._lastSemanticGraph ||
-      (appState.spatial && appState.spatial.semantic_graph) || null;
-    var keep = null;
-    if (ot && Array.isArray(ot.nodes) && ot.nodes.length) keep = out.semantic_graph;
-    else if (oldGraph && oldGraph.object_topology &&
-             Array.isArray(oldGraph.object_topology.nodes) &&
-             oldGraph.object_topology.nodes.length) keep = oldGraph;
-    if (keep) {
-      out = Object.assign({}, out, { semantic_graph: keep });
-      appState._lastSemanticGraph = keep;
-    }
-    return out;
+  // 计划书 §2.1：图只有一个来源 —— `GET /api/search/state` 的 `state.graph`。
+  // 客户端不再本地拼第二张图、不再做“保留上一次非空图”的补丁（保留由服务端
+  // 的 store 负责）。`MAP_UPDATED` 只带 revision，收到后拉一次 state。
+  var graphPullPending = false;
+  function pullGraphState() {
+    if (mappingMode) return;
+    if (graphPullPending) return;
+    graphPullPending = true;
+    fetch("/api/search/state", { method: "GET", headers: { "Accept": "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (state) {
+        if (!state || !state.session_id) return;
+        currentLiveState = state;
+        if (viewingHistoryId) return;
+        applyStateSnapshot(state);
+      })
+      .catch(function () { /* 后端暂时不可达时忽略，保持上次画面 */ })
+      .then(function () { graphPullPending = false; });
   }
 
   // 兜底轮询：每 2.5s 拉一次后端 state，保证拓扑图/物体列表“从第一次识别就开始
@@ -228,17 +254,19 @@
   function startStatePolling() {
     if (statePollTimer) return;
     statePollTimer = window.setInterval(function () {
+      if (mappingMode) return;
       fetch("/api/search/state", { method: "GET", headers: { "Accept": "application/json" } })
         .then(function (r) { return r.json(); })
         .then(function (state) {
           if (!state || !state.session_id) return;
           currentLiveState = state;
           if (viewingHistoryId) return;
-          var sessionChanged = !!(appState.search.session_id &&
-            state.session_id !== appState.search.session_id);
           if (!appState.search.session_id) appState.search.session_id = state.session_id;
-          appState.spatial = mergeSpatialGraph(state.spatial || {}, sessionChanged);
+          appState.spatial = state.spatial || {};
+          appState.graph = state.graph || null;
           if (state.embodiment) appState.embodiment = state.embodiment;
+          // 兜底轮询也要带上 Agent trace，否则 WS 掉线时面板会停在旧结论上。
+          if (state.agent) appState.search.agent = state.agent;
           renderAll();
         })
         .catch(function () { /* 后端暂时不可达时忽略，保持上次画面 */ });
@@ -255,12 +283,18 @@
       state.error = null;
       state.last_error = "";
     }
+    // A poll started before STOP can arrive after the request event. Retain
+    // the intent for this session while still accepting all new telemetry.
+    if (state.session_id === appState.search.session_id &&
+        ["TARGET_FOUND", "SEARCH_EXHAUSTED", "OPERATOR_STOP", "FINISHED",
+          "FAILED", "TASK_REJECTED"].indexOf(state.status) < 0) {
+      restoreStopLifecycle(state, captureStopLifecycle(appState.search));
+    }
     if (state.status === "FINISHED" && !state.error &&
         els.banner && els.banner.classList.contains("error")) {
       els.banner.textContent = "";
       els.banner.className = "search-banner hidden";
     }
-    var sessionChanged = !!(appState.search.session_id && state.session_id !== appState.search.session_id);
     appState.search = state;
     appState.observation = state.observation || {};
     appState.objects = state.objects || {};
@@ -270,11 +304,11 @@
     appState.decisions = state.decisions || [];
     appState.nextMotionCommand = state.next_motion_command || null;
     appState.candidates = state.candidates || [];
-    appState.map = state.map || {};
     appState.embodiment = state.embodiment || {};
-    appState.spatial = mergeSpatialGraph(state.spatial || {}, sessionChanged);
-    if (sessionChanged) appState._lastSemanticGraph = null;
+    appState.spatial = state.spatial || {};
+    appState.graph = state.graph || null;
     state.timeline = state.timeline || [];
+    appState.events = state.timeline.slice();
     renderAll();
   }
 
@@ -287,6 +321,9 @@
     }
     var type = event.event_type;
     var payload = event.payload || {};
+    var terminalEvent = ["OPERATOR_STOP", "SEARCH_FINISHED", "SEARCH_EXHAUSTED",
+      "ERROR", "TASK_REJECTED"].indexOf(type) >= 0;
+    var stopLifecycle = terminalEvent ? null : captureStopLifecycle(appState.search);
     timelineCount += 1;
 
     switch (type) {
@@ -303,7 +340,7 @@
         appState.targetMatch = {};
         appState.selectedGoal = null;
         appState.candidates = [];
-        appState.map = {};
+        appState.graph = null;
         break;
       case "TASK_UNDERSTANDING":
         appState.task = payload.task || {};
@@ -382,7 +419,7 @@
       case "TARGET_CONFIRMED":
         appState.search.status = "TARGET_FOUND";
         appState.search.phase = "TARGET_FOUND";
-        showBanner("✓ TARGET FOUND", "found");
+        if (!stopLifecycle) showBanner("✓ TARGET FOUND", "found");
         break;
       case "MEMORY_UPDATED":
         appState.search.phase = payload.phase || "UPDATE_MEMORY";
@@ -417,7 +454,9 @@
         appState.decisions.push(decision);
         break;
       case "ACTION_FINISHED":
-        appState.robotAction = payload.status === "succeeded" ? "SUCCEEDED" : "FAILED";
+        appState.robotAction = payload.dry_run && payload.path_checked &&
+          payload.candidate_decision && payload.candidate_decision.accepted ? "PLANNED" :
+          (payload.status === "succeeded" ? "SUCCEEDED" : "FAILED");
         appState.search.phase = "WAIT_RESULT";
         appState.search.phase_detail = payload.phase_detail || payload.message || "动作已结束";
         appState.turnProgress = turnProgressText(payload) || null;
@@ -439,6 +478,18 @@
         appState.search.status = "RUNNING";
         appState.search.phase = "OBSERVE";
         break;
+      case "STOP_REQUESTED":
+        if (["STARTING", "RUNNING", "PAUSED", "STOPPING"].indexOf(
+            appState.search.status) >= 0) {
+          if (appState.search.stop_requested_at == null) {
+            appState.search.stop_requested_at = event.timestamp;
+            appState.search.phase_started_at = event.timestamp;
+          }
+          appState.search.status = "STOPPING";
+          appState.search.phase = "STOPPING";
+          appState.search.phase_detail = "正在停止任务，等待执行端确认";
+        }
+        break;
       case "SEARCH_EXHAUSTED":
         appState.search.status = "SEARCH_EXHAUSTED";
         showBanner("搜索空间已穷尽（SEARCH_EXHAUSTED）", "exhausted");
@@ -453,25 +504,8 @@
         showBanner("错误: " + (payload.message || payload.error_type || "unknown"), "error");
         break;
       case "MAP_UPDATED":
-        appState.map = {
-          revision: payload.revision,
-          map_mode: payload.map_mode || "topological",
-          current_node_id: payload.current_node_id,
-          robot: payload.robot,
-          nodes: (payload.graph || {}).nodes || [],
-          edges: (payload.graph || {}).edges || [],
-        };
-        // Semantic topology view reads state.spatial.semantic_graph.object_topology.
-        // Prefer semantic_navigation_graph; otherwise accept a graph that itself
-        // carries object_topology.  Exploration-only graphs stay ignored so the
-        // topology list never flips to empty.
-        appState.spatial = appState.spatial || {};
-        var topoGraph = payload.semantic_navigation_graph ||
-          ((payload.graph && payload.graph.object_topology) ? payload.graph : null);
-        if (topoGraph) {
-          appState.spatial.semantic_graph = topoGraph;
-          appState._lastSemanticGraph = topoGraph;
-        }
+        // 计划书 §2.1：MAP_UPDATED 只带 revision，不携带图；拉一次 state 拿新图。
+        pullGraphState();
         break;
       case "RGBD_FRAME_UPDATED":
         appState.spatial = appState.spatial || {};
@@ -481,32 +515,9 @@
         appState.spatial = appState.spatial || {};
         appState.spatial.spatial_pose = payload.pose || null;
         break;
-      case "SPATIAL_MAP_UPDATED":
-        appState.spatial = appState.spatial || {};
-        appState.spatial.spatial_map = payload.map || null;
-        break;
-      case "FRONTIERS_UPDATED":
-        appState.spatial = appState.spatial || {};
-        appState.spatial.frontiers = payload.frontiers || [];
-        break;
-      case "PLACE_CREATED":
-      case "PLACE_UPDATED":
-        appState.spatial = appState.spatial || {};
-        appState.spatial.place_graph = appState.spatial.place_graph || { places: [], edges: [] };
-        var place = payload.place || {};
-        var places = appState.spatial.place_graph.places || [];
-        var idx = places.findIndex(function (p) { return p.place_id === place.place_id; });
-        if (idx >= 0) { places[idx] = place; } else { places.push(place); }
-        appState.spatial.place_graph.places = places;
-        break;
-      case "SEMANTIC_OBJECT_LOCALIZED":
-        appState.spatial = appState.spatial || {};
-        appState.spatial.semantic_objects = appState.spatial.semantic_objects || [];
-        var obj = payload.object || {};
-        var objs = appState.spatial.semantic_objects;
-        var oidx = objs.findIndex(function (o) { return o.object_id === obj.object_id; });
-        if (oidx >= 0) { objs[oidx] = obj; } else { objs.push(obj); }
-        break;
+      // SPATIAL_MAP_UPDATED / FRONTIERS_UPDATED / PLACE_CREATED / PLACE_UPDATED /
+      // SEMANTIC_OBJECT_LOCALIZED 曾各自在客户端拼一份图；计划书 §2.2 起它们只
+      // 记录时间线，图统一由 state.graph 提供，这里不再有分支。
       case "PSG_PRIOR_UPDATED":
         appState.spatial = appState.spatial || {};
         appState.spatial.psg_prior = payload.prior || null;
@@ -556,8 +567,34 @@
       default:
         break;
     }
+    if (stopLifecycle) {
+      restoreStopLifecycle(appState.search, stopLifecycle);
+    } else if (terminalEvent && appState.search.stop_requested_at != null) {
+      appState.search.phase = appState.search.status;
+      appState.search.phase_detail = "";
+      appState.search.phase_started_at = event.timestamp;
+    }
     pushTimeline(event);
     renderAll();
+  }
+
+  function captureStopLifecycle(state) {
+    if (state.status !== "STOPPING" && state.stop_requested_at == null) return null;
+    var value = {};
+    ["status", "phase", "phase_detail", "phase_started_at", "result",
+      "finish_reason", "finished_at", "summary", "stop_requested_at"].forEach(function (key) {
+      if (Object.prototype.hasOwnProperty.call(state, key)) value[key] = state[key];
+    });
+    return value;
+  }
+
+  function restoreStopLifecycle(state, value) {
+    if (!value) return;
+    ["status", "phase", "phase_detail", "phase_started_at", "result",
+      "finish_reason", "finished_at", "summary", "stop_requested_at"].forEach(function (key) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) state[key] = value[key];
+      else delete state[key];
+    });
   }
 
   // ------------------------------------------------------------------ //
@@ -581,6 +618,7 @@
     if (!target) { showBanner("请输入搜索目标", "error"); return; }
     api("/api/search/start", {
       task_text: target,
+      detector: (els.detector && els.detector.value) || "grounded_sam",
       // One-release compatibility alias for an already-running old worker.
       target: target
     }).then(function (data) {
@@ -657,48 +695,69 @@
     }).catch(function () {});
   });
 
-  // Map view toggle: 语义拓扑 (default) / 空间地图 (plan §17).
-  if (els.mapViewToggle) {
-    els.mapViewToggle.addEventListener("click", function (event) {
+  // 语义拓扑页的投影视图：物体拓扑（默认）/ 导航拓扑。
+  // 计划1 §7.3 要"只有物体"，计划3 步骤 2.1 要保留 PLACE 中转站才连得成一张图，
+  // 计划2 §11.2 给过出路（"或至少提供 toggle"）——这里就是那个 toggle。
+  if (els.topologyViewToggle) {
+    els.topologyViewToggle.addEventListener("click", function (event) {
       var btn = event.target.closest ? event.target.closest("button") : null;
-      if (!btn || !btn.dataset || !btn.dataset.mode) return;
-      var mode = btn.dataset.mode === "spatial_map" ? "spatial_map" : "semantic_topology";
-      Array.prototype.forEach.call(els.mapViewToggle.querySelectorAll(".vtab"), function (b) {
-        b.classList.toggle("active", b.dataset.mode === mode);
-      });
-      mapRenderer.setMode(mode);
-      if (els.mapLegend) {
-        els.mapLegend.style.display = mode === "spatial_map" ? "" : "none";
-      }
+      if (!btn || !btn.dataset || !btn.dataset.topologyView) return;
+      var view = btn.dataset.topologyView === "navigation" ? "navigation" : "objects";
+      Array.prototype.forEach.call(
+        els.topologyViewToggle.querySelectorAll(".vtab"), function (b) {
+          b.classList.toggle("active", b.dataset.topologyView === view);
+        });
+      mapRenderer.setTopologyView(view);
       renderAll();
     });
   }
-  // Default: semantic topology; hide the metric legend by default.
-  if (els.mapLegend) els.mapLegend.style.display = "none";
 
   // ------------------------------------------------------------------ //
   // Rendering                                                           //
   // ------------------------------------------------------------------ //
-  // 计划书 §7.3：物体列表、计数和拓扑图共用同一个"只有对象"的投影，
+  // 计划书 §7.3：物体列表、计数和拓扑图共用同一个投影，
   // 保证界面上的节点数就是画出来的节点数，绝不退回导航图。
-  function objectTopology(spatial) {
-    var graph = (spatial || {}).semantic_graph || null;
-    var raw = graph && graph.object_topology ? graph.object_topology : null;
-    if (window.TopologyLayout && window.TopologyLayout.objectOnly) {
-      return window.TopologyLayout.objectOnly(raw);
+  // 投影跟着当前视图走：物体拓扑下 P1 不计入"N 个物体"。
+  function objectTopology(graph) {
+    var view = mapRenderer && mapRenderer.getTopologyView
+      ? mapRenderer.getTopologyView() : "objects";
+    var raw = graph
+      ? (view === "navigation"
+        ? (graph.integrated_topology || graph.object_topology || null)
+        : (graph.object_topology || null))
+      : null;
+    if (window.TopologyLayout) {
+      var project = view === "navigation"
+        ? window.TopologyLayout.objectOnly
+        : window.TopologyLayout.objectStrict;
+      if (project) return project(raw);
     }
     return raw;
   }
 
   function renderObjects() {
-    // 识别物体列表：与语义拓扑同源（spatial.semantic_graph.object_topology），
+    // 识别物体列表：与语义拓扑同源（state.graph.object_topology），
     // 从第一次识别到物体就开始显示，并随每次 memory_update 实时刷新。
-    var ot = objectTopology(appState.spatial);
+    var ot = objectTopology(appState.graph);
     var nodes = ot && Array.isArray(ot.nodes) ? ot.nodes : [];
     if (els.obsObjectsMeta) {
       els.obsObjectsMeta.textContent = nodes.length ? nodes.length + " 个" : "";
     }
     if (!els.obsObjects) return;
+    if (mappingMode) {
+      var detections = (mappingState && mappingState.current_detections) || [];
+      var currentEl = document.getElementById("obs-current");
+      if (currentEl) currentEl.innerHTML = detections.length ? detections.map(function (d) {
+        var cls = d.mobility_class === "fixed" ? "固定地标" :
+          (d.mobility_class === "semi_static" ? "暂时静止" :
+            (d.mobility_class === "dynamic" ? "动态" : "待判定"));
+        return '<div class="obj-item' + (d.is_hazard ? ' mapping-hazard' : '') + '">' +
+          esc(d.label_zh || d.label || "物体") + ' · ' + cls +
+          (d.is_hazard ? ' ⚠ ' + esc(d.hazard_label || "危险") : '') +
+          (d.hazard_position_status ? ' · ' + esc(d.hazard_position_status) :
+            (d.has_position ? '' : ' · 位置待确认')) + '</div>';
+      }).join("") : '<div class="empty">当前帧未检出物体</div>';
+    }
     if (!nodes.length) {
       els.obsObjects.innerHTML =
         '<div class="empty">等待首次识别…（识别到第一个物体后自动开始建物体列表 / 拓扑图）</div>';
@@ -708,9 +767,12 @@
     var html = nodes.slice().sort(function (a, b) {
       return String(a.node_id).localeCompare(String(b.node_id));
     }).map(function (n) {
-      var color = statusColor[n.status] || "#8b95a3";
+      var color = n.is_hazard ? "#f87171" : (n.mobility_class === "fixed" ? "#38bdf8" :
+        (n.mobility_class === "semi_static" ? "#fb923c" : (statusColor[n.status] || "#8b95a3")));
       var star = n.is_target_confirmed ? "★ " : (n.is_target_candidate ? "◎ " : "");
-      var meta = String(n.status || "TENTATIVE");
+      var meta = (n.mobility_class === "fixed" ? "固定地标" :
+        (n.mobility_class === "semi_static" ? "暂时静止" : "待复核"));
+      if (n.is_hazard) meta += " ⚠ 危险";
       if (n.observation_count != null) meta += " ×" + n.observation_count;
       var label = esc(n.label || "");
       return '<div class="obj-item">' +
@@ -728,39 +790,25 @@
     renderEmbodiment();
     renderObservation();
     renderObjects();
+    renderAgentPanel();
     renderDecision();
     renderCandidates();
     renderTimeline();
     renderButtons();
     renderDebug();
     renderErrorDetail();
-    var spatial = appState.spatial || null;
-    var hasOldMap = appState.map && Array.isArray(appState.map.nodes) && appState.map.nodes.length;
-    var hasPlaces = spatial && spatial.place_graph &&
-      Array.isArray(spatial.place_graph.places) && spatial.place_graph.places.length;
-    var mode = mapRenderer.getMode();
-    if (mode === "semantic_topology") {
-      // Semantic topology projection: show only topology stats, never metric
-      // map / place metrics (they belong to the spatial map view).
-      var hasGraph = !!(spatial && spatial.semantic_graph && spatial.semantic_graph.object_topology);
-      var topology = objectTopology(spatial);
-      var nodes = (topology && topology.nodes) || [];
-      var edges = (topology && topology.edges) || [];
-      var empty = (nodes.length === 0);
-      els.mapMeta.textContent = empty
-        ? (hasGraph ? "已建图 0 节点 · 等待识别到物体" : "等待首次物体识别…识别后自动开始建拓扑")
-        : "拓扑节点 " + nodes.length + " · 关系 " + edges.length +
-          " · rev " + ((topology && topology.revision) || 0);
-      mapRenderer.render(appState.map || {}, spatial);
-    } else {
-      if (hasOldMap || hasPlaces) {
-        mapRenderer.render(appState.map || {}, spatial);
-        var placeCount = hasPlaces ? spatial.place_graph.places.length : 0;
-        els.mapMeta.textContent = "Map revision " + ((appState.map || {}).revision || 0) +
-          " · Place " + placeCount +
-          " · Frontier " + ((spatial && spatial.frontiers) || []).length;
-      }
-    }
+    // Semantic topology projection: show only topology stats, never metric
+    // map / place metrics. 计量"空间地图"视图已于 2026-08-26 移除，
+    // 2026-09-15 起连入口按钮和模式开关也一并删掉，这里不再分支。
+    var topology = objectTopology(appState.graph);
+    var nodes = (topology && topology.nodes) || [];
+    var edges = (topology && topology.edges) || [];
+    var empty = (nodes.length === 0);
+    els.mapMeta.textContent = empty
+      ? (appState.graph ? "已建图 0 节点 · 等待识别到物体" : "等待首次物体识别…识别后自动开始建拓扑")
+      : "拓扑节点 " + nodes.length + " · 关系 " + edges.length +
+        " · rev " + ((topology && topology.revision) || 0);
+    mapRenderer.render(appState.graph, appState.spatial || null);
     drawOverlay();
   }
 
@@ -771,6 +819,8 @@
     if (appState.turnProgress) phaseText += " · " + appState.turnProgress;
     if (s.phase_detail) phaseText += " · " + s.phase_detail;
     els.stPhase.textContent = phaseText;
+    var detectorEl = document.getElementById("st-detector");
+    if (detectorEl) detectorEl.textContent = s.detector_backend || "--";
     els.stCycle.textContent = String(s.cycle || 0);
     els.stElapsed.textContent = fmtDuration(s.elapsed_seconds);
 
@@ -797,12 +847,16 @@
       var activeStates = ["STARTING", "RUNNING", "PAUSED", "STOPPING"];
       startBtn.disabled = activeStates.indexOf(s.status || "IDLE") >= 0;
     }
+    if (els.detector) {
+      els.detector.disabled = ["STARTING", "RUNNING", "PAUSED", "STOPPING"].indexOf(s.status || "IDLE") >= 0;
+      if (s.detector_backend && !els.detector.disabled) els.detector.value = s.detector_backend;
+    }
     var m = appState.targetMatch || {};
     els.stMatch.textContent = m.target_state && m.target_state !== "ABSENT"
       ? m.target_state : (m.level || "none");
     els.stAnchor.textContent = (m.anchor_labels || []).length
       ? m.anchor_labels.join(", ") : (m.explicit_anchor_found ? "(found)" : "--");
-    els.stAction.textContent = appState.robotAction || "IDLE";
+    els.stAction.textContent = appState.robotAction === "PLANNED" ? "规划通过（只读）" : (appState.robotAction || "IDLE");
     var obs = appState.observation || {};
     els.stPose.textContent = obs.pose ? "relative" : "--";
     // 计划书 §13：语义健康状态（Quick VLM / Full Semantic / frame / age）。
@@ -988,6 +1042,24 @@
     }
   }
 
+  // ---- 任务 Agent 解释层（计划书 §5） ------------------------------------
+  // 展示规则与所有文案都在 agent_trace.js 里（可被 headless node 钉住），
+  // 这里只负责把 HTML 挂到 DOM 上，不重复实现任何判断。
+  function renderAgentPanel() {
+    var agent = (appState.search || {}).agent || null;
+    var html = window.AgentTrace.render(agent && agent.trace, agent);
+    els.agentMode.textContent = "";
+    els.agentMode.innerHTML = html.mode;
+    els.agentSafety.innerHTML = html.safety;
+    els.agentPlan.innerHTML = html.plan;
+    els.agentChoice.innerHTML = html.choice;
+    els.agentDownstream.innerHTML = html.downstream;
+    els.agentCandidates.innerHTML = html.candidates;
+    els.agentKnowledge.innerHTML = html.knowledge;
+    els.agentInputs.innerHTML = html.inputs;
+    els.agentUncertainties.innerHTML = html.uncertainties;
+  }
+
   function renderDecision() {
     var goal = appState.selectedGoal;
     var command = appState.nextMotionCommand ||
@@ -1090,9 +1162,13 @@
       var command = item.next_motion_command || {};
       var text = command.instruction_zh || command.instruction || item.decision_id || "决策";
       var result = item.execution_status ? " · " + item.execution_status : "";
+      // §5.4：每轮历史带上 Agent 依据 —— trace ID、扫描序号、当前子任务、
+      // 选中偏好、reason code、关键证据引用、后续 decision ID 与结果。
+      // 这些字段随决定一起存在已有的 decisions 列表里，没有第二份缓冲区。
+      var agentLine = window.AgentTrace.renderHistoryLine(item.agent);
       return '<div class="decision-history-row"><span>' + esc(text) +
         '</span><span class="cnt">' + esc(String(item.decision_id || "")) +
-        esc(result) + '</span></div>';
+        esc(result) + '</span>' + agentLine + '</div>';
     }).join("");
   }
 
@@ -1258,16 +1334,26 @@
     detections.forEach(function (item) {
       var bbox = item.bbox_2d || item.bbox;
       if (!Array.isArray(bbox) || bbox.length < 4) return;
-      var x1 = bbox[0] * canvas.width;
-      var y1 = bbox[1] * canvas.height;
-      var x2 = bbox[2] * canvas.width;
-      var y2 = bbox[3] * canvas.height;
-      ctx.strokeStyle = "#38bdf8";
+      var normalized = Math.max.apply(null, bbox.map(Math.abs)) <= 1.5;
+      var sourceW = normalized ? 1 : (els.cam.naturalWidth || canvas.width);
+      var sourceH = normalized ? 1 : (els.cam.naturalHeight || canvas.height);
+      var x1 = bbox[0] / sourceW * canvas.width;
+      var y1 = bbox[1] / sourceH * canvas.height;
+      var x2 = bbox[2] / sourceW * canvas.width;
+      var y2 = bbox[3] / sourceH * canvas.height;
+      ctx.strokeStyle = item.target_watch_status === "CONFIRMED" ? "#22c55e" :
+        (item.target_watch_status === "VERIFYING" ? "#3b82f6" :
+          (item.is_target_candidate ? "#eab308" :
+            (item.is_hazard ? "#f87171" :
+              (item.mobility_class === "fixed" ? "#38bdf8" :
+                (item.mobility_class === "semi_static" ? "#fb923c" : "#a78bfa")))));
       ctx.lineWidth = 2;
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-      var label = String(item.label || item.name || "object");
+      var label = String(item.label_zh || item.label || item.name || "object") +
+        (item.is_hazard ? " ⚠" : "") +
+        (item.is_target_candidate ? " · " + (item.target_watch_status || "候选") : "");
       var score = item.score == null ? "" : " " + Number(item.score).toFixed(2);
-      ctx.fillStyle = "rgba(56, 189, 248, 0.9)";
+      ctx.fillStyle = item.is_hazard ? "rgba(248, 113, 113, 0.9)" : "rgba(56, 189, 248, 0.9)";
       ctx.font = "bold 13px sans-serif";
       var text = label + score;
       var tw = ctx.measureText(text).width;
@@ -1352,6 +1438,11 @@
   var lastFrameAt = null;
   var fps = 0;
   els.cam.addEventListener("load", function () {
+    if (mappingMode && !mappingLiveCamera) {
+      els.scamFps.textContent = "已分析帧";
+      drawOverlay();
+      return;
+    }
     var now = performance.now();
     if (lastFrameAt !== null) {
       var dt = (now - lastFrameAt) / 1000;
@@ -1367,6 +1458,19 @@
   function pollStatus() {
     fetch("/api/status").then(function (response) { return response.json(); })
       .then(function (status) {
+        if (status.control && status.control.display_only) {
+          mappingMode = true;
+          document.body.classList.add("mapping-mode");
+          var searchTab = document.querySelector('[data-tab="search"]');
+          if (searchTab) searchTab.textContent = "遥控建图";
+          var brand = document.querySelector(".brand");
+          if (brand) brand.textContent = "Go2-W 实体遥控建图";
+          document.title = "Go2-W 实体遥控建图";
+          var toolsEl = document.getElementById("mapping-tools");
+          if (toolsEl) toolsEl.classList.remove("hidden");
+          var watchEl = document.getElementById("mapping-target-watch");
+          if (watchEl) watchEl.classList.remove("hidden");
+        }
         var camera = status.camera || {};
         els.scamAge.textContent = "帧年龄 " + fmtAge(camera.age_seconds);
         els.camStale.classList.toggle("hidden", camera.fresh !== false || !camera.available);
@@ -1384,6 +1488,7 @@
   }
 
   function pollSearchState() {
+    if (mappingMode) return;
     fetch("/api/search/state").then(function (response) { return response.json(); })
       .then(function (state) {
         if (state && state.session_id) currentLiveState = state;
@@ -1394,7 +1499,7 @@
             appState.search = {};
             appState.search.session_id = state.session_id;
             applyStateSnapshot(state);
-            if (fresh) mapRenderer.render(appState.map, appState.spatial);
+            if (fresh) mapRenderer.render(appState.graph, appState.spatial);
           }
         } else if (appState.search.session_id && !ws) {
           appState.search = {};
@@ -1403,6 +1508,171 @@
       })
       .catch(function () {});
   }
+
+  function playMappingAlert() {
+    if (!mappingSoundEnabled) return;
+    if (!mappingAudio) mappingAudio = new (window.AudioContext || window.webkitAudioContext)();
+    var oscillator = mappingAudio.createOscillator();
+    var gain = mappingAudio.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, mappingAudio.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.12, mappingAudio.currentTime + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.0001, mappingAudio.currentTime + 0.35);
+    oscillator.connect(gain); gain.connect(mappingAudio.destination);
+    oscillator.start(); oscillator.stop(mappingAudio.currentTime + 0.36);
+  }
+
+  function pollMappingState() {
+    if (!mappingMode) return;
+    fetch("/api/mapping/state", { cache: "no-store" }).then(function (r) { return r.json(); })
+      .then(function (state) {
+        if (viewingHistoryId) return;
+        if (!state || !state.session_id) return;
+        var changed = !mappingState || mappingState.session_id !== state.session_id || mappingState.revision !== state.revision ||
+          ((mappingState.target_watch || {}).revision !== (state.target_watch || {}).revision);
+        mappingState = state;
+        var age = Math.max(0, Date.now() / 1000 - (state.generated_at || 0));
+        var runtimeEl = document.getElementById("mapping-runtime");
+        if (runtimeEl) runtimeEl.textContent = "处理 " + (state.processing_latency_seconds == null ? "--" : state.processing_latency_seconds.toFixed(1) + " s") +
+          " · 待处理 " + (state.queue_depth || 0) + " 帧 · 快照 " + (age < 60 ? Math.round(age) + " 秒前" : "较早前") +
+          " · 检测帧 " + (state.last_detection_at ? Math.round(Math.max(0, Date.now()/1000-state.last_detection_at)) + " 秒前" : "未产生");
+        if (runtimeEl && state.last_error) runtimeEl.textContent += " · 识别失败：" + state.last_error;
+        renderTargetWatch(state.target_watch || {});
+        if (changed) {
+          appState.search = { session_id: state.session_id, status: "RUNNING", phase: "实体遥控建图" };
+          appState.graph = state.graph || null;
+          lastDetectionFrame = mappingLiveCamera ? [] : (state.current_detections || []);
+          if (!mappingLiveCamera && state.frame_available) {
+            els.cam.src = "/api/mapping/frame?revision=" + state.revision;
+            els.scamLabel.textContent = "识别帧 · " + new Date(state.last_detection_at * 1000).toLocaleTimeString();
+          } else if (!mappingLiveCamera) {
+            els.cam.src = "/api/camera.mjpeg";
+            els.scamLabel.textContent = "实时画面（暂无对应识别帧）";
+            lastDetectionFrame = [];
+          }
+          renderAll();
+        }
+        var events = state.hazard_events || [];
+        var active = events.filter(function (event) { return Date.now() / 1000 - event.last_seen < 30; });
+        var alertEl = document.getElementById("mapping-alert");
+        if (alertEl) {
+          alertEl.classList.toggle("hidden", !active.length);
+          alertEl.textContent = active.length ? "⚠ " + active.map(function (event) {
+            return (event.status === "confirmed" ? "模拟泄漏危险信号" :
+              (event.status === "review_pending" ? "模拟异常待复查" : "疑似模拟泄漏信号")) + "：" +
+              event.hazard_label + "（" + event.position_status + "）";
+          }).join("；") : "";
+        }
+        var list = document.getElementById("mapping-hazards");
+        if (list) list.innerHTML = events.length ? events.map(function (event) {
+          return '<div class="obj-item mapping-hazard">' + esc(event.status === "confirmed" ? "⚠ 模拟泄漏危险信号" :
+            (event.status === "review_pending" ? "模拟异常待复查" : "疑似模拟泄漏信号")) +
+            ' · ' + esc(event.hazard_label) + ' · ' + esc(event.position_status) +
+            ' · 最近观测 ' + new Date(event.last_seen * 1000).toLocaleTimeString() + '</div>';
+        }).join("") : "暂无告警";
+        active.forEach(function (event) {
+          if (event.status !== "confirmed") return;
+          var previous = lastSoundByEvent[event.hazard_event_id] || 0;
+          if (Date.now() / 1000 - previous >= (state.sound_cooldown_s || 30) && changed) {
+            playMappingAlert();
+            lastSoundByEvent[event.hazard_event_id] = Date.now() / 1000;
+          }
+        });
+      }).catch(function () {});
+  }
+
+  var soundButton = document.getElementById("mapping-sound");
+  if (soundButton) soundButton.addEventListener("click", function () {
+    mappingSoundEnabled = !mappingSoundEnabled;
+    if (mappingSoundEnabled && !mappingAudio) mappingAudio = new (window.AudioContext || window.webkitAudioContext)();
+    soundButton.textContent = mappingSoundEnabled ? "静音" : "启用声音";
+  });
+  var cameraModeButton = document.getElementById("mapping-camera-mode");
+  if (cameraModeButton) cameraModeButton.addEventListener("click", function () {
+    mappingLiveCamera = !mappingLiveCamera;
+    cameraModeButton.textContent = mappingLiveCamera ? "切到识别帧" : "切到实时画面";
+    if (mappingLiveCamera) {
+      els.cam.src = "/api/camera.mjpeg";
+      els.scamLabel.textContent = "实时画面（检测框已隐藏）";
+      lastDetectionFrame = [];
+      drawOverlay();
+    } else if (mappingState && mappingState.frame_available) {
+      els.cam.src = "/api/mapping/frame?revision=" + mappingState.revision;
+      els.scamLabel.textContent = "识别帧 · " + new Date(mappingState.last_detection_at * 1000).toLocaleTimeString();
+      lastDetectionFrame = mappingState.current_detections || [];
+      drawOverlay();
+    }
+  });
+  var resetButton = document.getElementById("mapping-layout-reset");
+  if (resetButton) resetButton.addEventListener("click", function () { mapRenderer.resetTopologyLayout(); });
+
+  function targetWatchStateLabel(state) {
+    return ({IDLE:"未启用", PARSING:"解析中", ARMED:"等待候选", CANDIDATE:"候选待复核",
+      VERIFYING:"VLM 复核中", CONFIRMED:"已确认", REJECTED:"最近候选已排除",
+      UNKNOWN:"复核未知", DEGRADED:"VLM 降级"})[state] || state || "未启用";
+  }
+
+  function renderTargetWatch(watch) {
+    var badge = document.getElementById("target-watch-state");
+    var summary = document.getElementById("target-watch-summary");
+    var evidence = document.getElementById("target-watch-evidence");
+    if (!badge || !summary || !evidence) return;
+    badge.textContent = (watch.automatic_hazard_enabled && (watch.state || "IDLE") === "IDLE") ?
+      "自动危险源监看中" : targetWatchStateLabel(watch.state);
+    badge.dataset.state = watch.state || "IDLE";
+    var profile = watch.profile || {};
+    var candidate = watch.last_candidate || {};
+    var verify = watch.verification || {};
+    var stats = watch.statistics || {};
+    var parts = [];
+    if (watch.automatic_hazard_enabled) {
+      parts.push("自动危险源：已启用（史莱姆泥 / 管道模拟泄漏，识别候选后自动 VLM 复核）");
+    }
+    parts.push("人工目标：" + esc(watch.raw_query || "未设置"));
+    if (watch.enabled) parts.push("标准化：" + esc(profile.canonical_name_zh || "--"));
+    if (profile.resolver_source) parts.push("解析：" + esc(profile.resolver_source) + (profile.resolver_error ? "（已回退）" : ""));
+    if (profile.target_terms_en) parts.push("目标词：" + esc(profile.target_terms_en.join(", ")));
+    if (profile.anchor_terms_en && profile.anchor_terms_en.length) parts.push("锚点词：" + esc(profile.anchor_terms_en.join(", ")));
+    if (profile.relation_constraints && profile.relation_constraints.length) parts.push("关系：" + esc(profile.relation_constraints.join("；")));
+    if (candidate.candidate_id) parts.push((candidate.automatic_hazard ? "自动危险候选：" : "最近候选：") + esc(candidate.matched_term || candidate.label || "object") + " / " + Number(candidate.detector_score || 0).toFixed(2) + " / frame " + esc(candidate.frame_id || "--"));
+    if (verify.status) parts.push("复核：" + esc(verify.status) + (verify.confidence == null ? "" : " / " + Number(verify.confidence).toFixed(2)) + (verify.reason_zh ? " / " + esc(verify.reason_zh) : ""));
+    if (verify.latency_ms != null) parts.push("耗时：" + Math.round(verify.latency_ms) + " ms");
+    if (candidate.camera_xyz) parts.push("camera_xyz：" + candidate.camera_xyz.map(Number).map(function(v){ return v.toFixed(2); }).join(", "));
+    parts.push("map_xyz：" + (candidate.map_xyz ? candidate.map_xyz.map(Number).map(function(v){ return v.toFixed(2); }).join(", ") : "无可靠地图位置"));
+    parts.push("统计：帧 " + (stats.frames_evaluated || 0) + " / 候选 " + (stats.candidates_generated || 0) + " / VLM " + (stats.verify_started || 0));
+    if (watch.last_error) parts.push("错误：" + esc(watch.last_error));
+    summary.innerHTML = parts.join("<br>");
+    var verificationId = verify.verification_id || candidate.verification_id;
+    if (verificationId) {
+      evidence.src = "/api/mapping/target-watch/evidence/" + encodeURIComponent(verificationId) + "?sequence=" + (verify.sequence || 0);
+      evidence.classList.remove("hidden");
+    } else {
+      evidence.classList.add("hidden");
+      evidence.removeAttribute("src");
+    }
+  }
+
+  function setTargetWatch() {
+    var input = document.getElementById("target-watch-input");
+    var target = input ? input.value.trim() : "";
+    if (!target) { showBanner("请输入监看目标", "error"); return; }
+    fetch("/api/mapping/target-watch", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({target:target})})
+      .then(function(response){ return response.json().then(function(body){ return {ok:response.ok, body:body}; }); })
+      .then(function(result){ if (!result.ok) throw new Error(result.body.error || "设置失败"); showBanner("目标监看已提交，等待检测候选", "info"); pollMappingState(); })
+      .catch(function(error){ showBanner("目标监看设置失败：" + error.message, "error"); });
+  }
+  var targetWatchSet = document.getElementById("target-watch-set");
+  var targetWatchInput = document.getElementById("target-watch-input");
+  var targetWatchClear = document.getElementById("target-watch-clear");
+  if (targetWatchSet) targetWatchSet.addEventListener("click", setTargetWatch);
+  if (targetWatchInput) targetWatchInput.addEventListener("keydown", function(event){ if (event.key === "Enter") { event.preventDefault(); setTargetWatch(); } });
+  if (targetWatchClear) targetWatchClear.addEventListener("click", function(){
+    fetch("/api/mapping/target-watch", {method:"DELETE"})
+      .then(function(response){ return response.json().then(function(body){ return {ok:response.ok, body:body}; }); })
+      .then(function(result){ if (!result.ok) throw new Error(result.body.error || "清除失败"); showBanner("人工目标已清除；自动危险源监看继续运行", "info"); pollMappingState(); })
+      .catch(function(error){ showBanner("目标监看清除失败：" + error.message, "error"); });
+  });
 
   function pollHistory() {
     fetch("/api/search/history?limit=10").then(function (response) { return response.json(); })
@@ -1449,11 +1719,278 @@
         showBanner("正在回看完整搜索记录；实时任务仍在后端保持运行。", "exhausted");
         renderAll();
         pollHistory();
+        loadReplay(sessionId);
       }).catch(function (err) {
         showErrorRetry(String(err || "history request failed"));
       });
   }
 
+  // ------------------------------------------------------------------ //
+  // replay panel (history detail)                                      //
+  // ------------------------------------------------------------------ //
+  var REPLAY_ACTIVE = {
+    STARTING: 1, RECORDING: 1, FINALIZING: 1, QUEUED: 1, RENDERING: 1,
+  };
+  var REPLAY_LABELS = {
+    DISABLED: "回放未启用",
+    STARTING: "准备录制",
+    RECORDING: "录制中",
+    FINALIZING: "收尾中",
+    QUEUED: "排队等待生成",
+    RENDERING: "正在生成",
+    READY: "可播放",
+    PARTIAL: "可播放（有降级说明）",
+    FAILED: "生成失败",
+  };
+
+  function replayApiBase(sessionId) {
+    return "/api/search/history/" + encodeURIComponent(sessionId) + "/replay";
+  }
+
+  function stopReplayPoll() {
+    if (replayPollTimer) {
+      clearTimeout(replayPollTimer);
+      replayPollTimer = null;
+    }
+  }
+
+  function showReplayPanel(sessionId) {
+    if (!els.replayPanel) return;
+    els.replayPanel.classList.remove("hidden");
+    if (els.replayStatus) els.replayStatus.textContent = "读取中…";
+    if (replaySessionId !== sessionId && els.replayVideo) {
+      els.replayVideo.pause();
+      els.replayVideo.classList.add("hidden");
+      els.replayVideo.removeAttribute("src");
+      // data-src 是"已经加载过哪个地址"的标记，必须一起清掉。只清 src 的话
+      // 切回同一个会话时 attachReplayVideo 会认为地址没变、拒绝重新加载，
+      // 播放器就永远停在无源状态。
+      els.replayVideo.removeAttribute("data-src");
+      els.replayVideo.load();
+    }
+    replaySessionId = sessionId;
+  }
+
+  function hideReplay() {
+    stopReplayPoll();
+    replaySessionId = null;
+    replayLastStatus = null;
+    if (els.replayVideo) {
+      els.replayVideo.pause();
+      els.replayVideo.classList.add("hidden");
+    }
+    if (els.replayPanel) els.replayPanel.classList.add("hidden");
+  }
+
+  function loadReplay(sessionId) {
+    if (!sessionId) return;
+    showReplayPanel(sessionId);
+    fetch(replayApiBase(sessionId))
+      .then(function (response) { return response.json(); })
+      .then(function (status) {
+        if (replaySessionId !== sessionId) return;
+        renderReplayStatus(status);
+      })
+      .catch(function () {
+        if (replaySessionId !== sessionId) return;
+        if (els.replayStatus) els.replayStatus.textContent = "回放状态读取失败";
+        renderReplayPlaceholder("回放接口暂时不可用，稍后会自动重试。");
+        scheduleReplayPoll(sessionId);
+      });
+  }
+
+  function renderReplayStatus(status) {
+    replayLastStatus = status;
+    var state = (status && status.status) || "DISABLED";
+    var label = REPLAY_LABELS[state] || state;
+    if (els.replayStatus) {
+      els.replayStatus.textContent = label +
+        (status && status.speed ? " · " + status.speed + "×" : "");
+    }
+    updateReplaySpeedButtons(status);
+    if (els.replayProgress) {
+      if (REPLAY_ACTIVE[state] && state === "RENDERING") {
+        els.replayProgress.textContent =
+          Math.round((status.progress || 0) * 100) + "%";
+      } else if (REPLAY_ACTIVE[state]) {
+        els.replayProgress.textContent = "请稍候";
+      } else {
+        els.replayProgress.textContent = "";
+      }
+    }
+    var playable = !!(status && status.playable && status.urls && status.urls.video);
+    if (playable) {
+      attachReplayVideo(status);
+      if (els.replayPlaceholder) els.replayPlaceholder.classList.add("hidden");
+    } else {
+      if (els.replayVideo) els.replayVideo.classList.add("hidden");
+      renderReplayPlaceholder(replayPlaceholderText(status, state, label));
+    }
+    renderReplayLinks(status, playable);
+    renderReplayReasons(status);
+    if (REPLAY_ACTIVE[state] || (!playable && status && status.status === "QUEUED")) {
+      scheduleReplayPoll(replaySessionId);
+    } else {
+      stopReplayPoll();
+    }
+  }
+
+  function replayPlaceholderText(status, state, label) {
+    if (!status) return "回放状态不可用。";
+    if (status.status === "FAILED") {
+      return "回放生成失败：" + ((status.reasons || [])[0] || "未知原因");
+    }
+    if (status.status === "DISABLED") {
+      return "本次会话没有回放记录（可能是回放未启用或采集器未启动）。";
+    }
+    if (REPLAY_ACTIVE[state]) {
+      return label + "：后台正在处理，完成后这里会自动出现播放器。";
+    }
+    return label + "。可以点「生成 / 重新生成」重试。";
+  }
+
+  function renderReplayPlaceholder(text) {
+    if (!els.replayPlaceholder) return;
+    els.replayPlaceholder.textContent = text;
+    els.replayPlaceholder.classList.remove("hidden");
+  }
+
+  function attachReplayVideo(status) {
+    if (!els.replayVideo) return;
+    var base = status.urls.video;
+    var version = [
+      status.recording_id || "", status.speed || "",
+      status.size_bytes || "", status.duration || "",
+    ].join("-");
+    var src = base + "?v=" + encodeURIComponent(version);
+    // 没有 src 时即便 data-src 相同也必须重新加载（面板切换会清掉 src）。
+    var needsLoad = !els.replayVideo.getAttribute("src")
+      || els.replayVideo.getAttribute("data-src") !== src;
+    if (needsLoad) {
+      els.replayVideo.setAttribute("data-src", src);
+      els.replayVideo.src = src;
+      els.replayVideo.load();
+    }
+    els.replayVideo.classList.remove("hidden");
+  }
+
+  function renderReplayLinks(status, playable) {
+    var artifacts = (status && status.artifacts) || {};
+    if (els.replayDownload) {
+      if (playable) {
+        els.replayDownload.href = status.urls.download;
+        els.replayDownload.classList.remove("hidden");
+      } else {
+        els.replayDownload.classList.add("hidden");
+      }
+    }
+    if (els.replayFinalMap) {
+      if (artifacts["final_map.png"]) {
+        els.replayFinalMap.href = status.urls.final_map;
+        els.replayFinalMap.classList.remove("hidden");
+      } else {
+        els.replayFinalMap.classList.add("hidden");
+      }
+    }
+    if (els.replayCover) {
+      if (artifacts["cover.jpg"]) {
+        els.replayCover.href = status.urls.cover;
+        els.replayCover.classList.remove("hidden");
+      } else {
+        els.replayCover.classList.add("hidden");
+      }
+    }
+    if (els.replayRegenerate) {
+      els.replayRegenerate.disabled = false;
+    }
+  }
+
+  function renderReplayReasons(status) {
+    if (!els.replayReasons) return;
+    var items = ((status && status.reasons) || []).concat((status && status.notes) || []);
+    if (!items.length) {
+      els.replayReasons.classList.add("hidden");
+      els.replayReasons.textContent = "";
+      return;
+    }
+    els.replayReasons.classList.remove("hidden");
+    els.replayReasons.innerHTML = items.map(function (item) {
+      return "<div>· " + esc(item) + "</div>";
+    }).join("");
+  }
+
+  function updateReplaySpeedButtons(status) {
+    if (!els.replaySpeeds) return;
+    var current = replaySpeed || (status && status.speed) || 10;
+    var buttons = els.replaySpeeds.querySelectorAll("[data-replay-speed]");
+    for (var i = 0; i < buttons.length; i += 1) {
+      var value = parseInt(buttons[i].getAttribute("data-replay-speed"), 10);
+      buttons[i].classList.toggle("active", value === current);
+    }
+  }
+
+  function scheduleReplayPoll(sessionId) {
+    stopReplayPoll();
+    replayPollTimer = setTimeout(function () {
+      replayPollTimer = null;
+      if (replaySessionId === sessionId) loadReplay(sessionId);
+    }, 2000);
+  }
+
+  function requestReplayRender(speed, force) {
+    var sessionId = replaySessionId;
+    if (!sessionId) return;
+    replaySpeed = speed;
+    updateReplaySpeedButtons(replayLastStatus);
+    if (els.replayStatus) els.replayStatus.textContent = "提交生成请求…";
+    fetch(replayApiBase(sessionId) + "/render", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ speed: speed, force: !!force }),
+    }).then(function (response) { return response.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          renderReplayPlaceholder("无法生成：" + (data.error || "未知原因"));
+          stopReplayPoll();
+          return;
+        }
+        scheduleReplayPoll(sessionId);
+        setTimeout(function () {
+          if (replaySessionId === sessionId) loadReplay(sessionId);
+        }, 400);
+      })
+      .catch(function () {
+        renderReplayPlaceholder("生成请求失败，稍后重试。");
+      });
+  }
+
+  if (els.replaySpeeds) {
+    els.replaySpeeds.addEventListener("click", function (event) {
+      var button = event.target.closest
+        ? event.target.closest("[data-replay-speed]") : null;
+      if (!button || !replaySessionId) return;
+      var speed = parseInt(button.getAttribute("data-replay-speed"), 10);
+      var status = replayLastStatus;
+      if (status && status.playable && status.speed === speed
+          && els.replayVideo && !els.replayVideo.classList.contains("hidden")) {
+        replaySpeed = speed;
+        updateReplaySpeedButtons(status);
+        return;
+      }
+      requestReplayRender(speed, false);
+    });
+  }
+  if (els.replayRegenerate) {
+    els.replayRegenerate.addEventListener("click", function () {
+      var status = replayLastStatus;
+      var speed = replaySpeed || (status && status.speed) || 10;
+      var force = !!(status && status.playable && status.speed === speed);
+      requestReplayRender(speed, force);
+    });
+  }
+  if (els.replayClose) {
+    els.replayClose.addEventListener("click", function () { hideReplay(); });
+  }
   if (els.history) {
     els.history.addEventListener("click", function (event) {
       var button = event.target.closest ? event.target.closest("[data-session-id]") : null;
@@ -1463,6 +2000,13 @@
   if (els.btnHistoryCurrent) {
     els.btnHistoryCurrent.addEventListener("click", function () {
       viewingHistoryId = null;
+      hideReplay();
+      if (mappingMode) {
+        mappingState = null;
+        pollMappingState();
+        pollHistory();
+        return;
+      }
       if (currentLiveState && currentLiveState.session_id) {
         applyStateSnapshot(currentLiveState);
       } else {
@@ -1509,6 +2053,7 @@
   pollSearchState();
   pollHistory();
   setInterval(pollStatus, 1000);
+  setInterval(pollMappingState, 1000);
   setInterval(pollSearchState, 3000);
   setInterval(pollHistory, 5000);
   connect();

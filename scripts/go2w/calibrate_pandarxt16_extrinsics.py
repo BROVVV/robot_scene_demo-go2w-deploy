@@ -83,12 +83,12 @@ def icp(
     translation = np.array(init_translation, dtype=np.float64).copy()
     rotation = np.array(init_rotation, dtype=np.float64).copy()
     source_home = source.copy()
+    tree = _kd_tree(target)
     iterations_used = 0
     for iterations_used in range(1, max_iterations + 1):
         moved = transform_points(source_home, translation, rotation)
-        # NN association via KDTree (build once per iteration is fine for
-        # 64k-point clouds, but we subsample for speed).
-        tree = _kd_tree(target)
+        # The target is fixed for the whole solve; only the transformed source
+        # changes between iterations.
         distances, indices = tree.query(moved, k=1)
         inlier_mask = distances < max_distance
         if not np.any(inlier_mask):
@@ -99,19 +99,25 @@ def icp(
         target_center = pairs_target.mean(axis=0)
         cross = (pairs_source - source_center).T @ (pairs_target - target_center)
         u, _, vt = np.linalg.svd(cross)
-        d = np.eye(3)
-        d[2, 2] = np.sign(np.linalg.det(vt.T @ u.T))
-        delta_rotation = u @ d @ vt
-        if not np.isfinite(delta_rotation).all():
+        correction = np.eye(3)
+        correction[2, 2] = -1.0 if np.linalg.det(vt.T @ u.T) < 0.0 else 1.0
+        next_rotation = vt.T @ correction @ u.T
+        next_translation = target_center - next_rotation @ source_center
+        if not (
+            np.isfinite(next_rotation).all()
+            and np.isfinite(next_translation).all()
+        ):
             break
-        rotation = delta_rotation @ rotation
-        translation = (
-            target_center - rotation @ source_center
-        ) + rotation @ translation
-        if float(np.linalg.norm(delta_rotation - np.eye(3))) < tolerance:
+        change = float(
+            np.linalg.norm(next_rotation - rotation)
+            + np.linalg.norm(next_translation - translation)
+        )
+        rotation = next_rotation
+        translation = next_translation
+        if change < tolerance:
             break
     final = transform_points(source_home, translation, rotation)
-    distances, _ = _kd_tree(target).query(final, k=1)
+    distances, _ = tree.query(final, k=1)
     inlier_mask = distances < max_distance
     inlier_distances = distances[inlier_mask]
     residual = (
@@ -158,6 +164,14 @@ def estimate_scene_transform(
     """Coarse yaw search + ICP to estimate one scene's pandar->base transform."""
     source = filter_valid(pandar)
     target = filter_valid(builtin)
+    # A raw capture contains hundreds of thousands of points.  A fixed-seed
+    # sample keeps the search bounded and reproducible while retaining points
+    # throughout the scan rather than only the first azimuths.
+    rng = np.random.default_rng(0)
+    if len(source) > 6000:
+        source = source[np.sort(rng.choice(len(source), 6000, replace=False))]
+    if len(target) > 6000:
+        target = target[np.sort(rng.choice(len(target), 6000, replace=False))]
     best = None
     for step in range(yaw_search_steps):
         yaw = init_yaw_rad + yaw_search_range_rad * (
@@ -177,7 +191,9 @@ def estimate_scene_transform(
             )
         if best is None or metrics["final_residual_m"] < best["residual"]:
             best = {
-                "yaw_deg": math.degrees(yaw),
+                "yaw_deg": math.degrees(
+                    math.atan2(rotation_refined[1, 0], rotation_refined[0, 0])
+                ),
                 "residual": metrics["final_residual_m"],
                 "translation": translation.tolist(),
                 "rotation": rotation_refined.tolist(),
@@ -212,7 +228,13 @@ def calibrate_multi_scene(scene_roots: list[Path]) -> dict:
             builtin,
             pandar,
             init_translation=np.array([0.13, 0.015, 0.014], dtype=np.float64),
-            init_yaw_rad=math.radians(11.357),
+            # 必须是 90.0，不是旧的 11.357：那个值来自一次被 20260813 报告
+            # 自己否决的双雷达配准（median NN 0.3516 m）。而 yaw 搜索范围是
+            # ±15°（见 estimate_scene_transform 默认参数），从 11.357 出发只能
+            # 覆盖 [-3.6°, 26.4°]，**永远搜不到正确值 90°**。
+            # 90° 是确定性轴向约定（Hesai 驱动 x=d·cos(el)·sin(azi)、
+            # y=d·cos(el)·cos(azi)），不是标定出来的量。
+            init_yaw_rad=math.radians(90.0),
         )
         scene_results.append(
             {
@@ -234,11 +256,22 @@ def calibrate_multi_scene(scene_roots: list[Path]) -> dict:
     inlier_ratios = [result["transform"]["metrics"]["inlier_ratio"] for result in scene_results]
     normal_diversity = _plane_normal_diversity([result["plane"]["normal"] for result in scene_results])
 
+    # The mount candidate constrains the sensor to the body centre region and
+    # roughly the same height as base_link.  A low nearest-neighbour residual
+    # obtained by moving the sensor tens of centimetres upward is an overlap
+    # artefact, not a usable physical calibration.
+    physically_plausible = bool(
+        np.all((translations[:, 0] >= -0.05) & (translations[:, 0] <= 0.25))
+        and np.all(np.abs(translations[:, 1]) <= 0.12)
+        and np.all((translations[:, 2] >= -0.05) & (translations[:, 2] <= 0.10))
+    )
     passed = bool(
         len(scene_results) >= 3
-        and median_residual < 0.05
+        and max(residuals) < 0.05
         and yaw_consistency <= math.radians(3.0)
-        and normal_diversity >= 0.3
+        and translation_spread < 0.05
+        and min(inlier_ratios) >= 0.70
+        and physically_plausible
     )
     return {
         "schema": "go2w.pandarxt16.extrinsics.calibration.v1",
@@ -249,6 +282,8 @@ def calibrate_multi_scene(scene_roots: list[Path]) -> dict:
         "yaw_mean_deg": round(math.degrees(yaw_mean), 4),
         "yaw_consistency_deg": round(math.degrees(yaw_consistency), 4),
         "normal_diversity": round(normal_diversity, 4),
+        "physically_plausible": physically_plausible,
+        "minimum_inlier_ratio": round(min(inlier_ratios), 4),
         "inlier_ratio_median": round(float(np.median(inlier_ratios)), 4) if inlier_ratios else None,
         "passed": passed,
         "confirmed": False,
@@ -338,12 +373,16 @@ def _report_markdown(report: dict) -> str:
         f"- scene_count: {report['scene_count']}",
         f"- median_residual_m: {report['median_residual_m']}",
         f"- yaw_consistency_deg: {report['yaw_consistency_deg']}",
-        f"- normal_diversity: {report['normal_diversity']}",
+        f"- normal_diversity (diagnostic only): {report['normal_diversity']}",
         f"- translation_spread_m: {report['translation_spread_m']}",
+        f"- physically_plausible: {report['physically_plausible']}",
+        f"- minimum_inlier_ratio: {report['minimum_inlier_ratio']}",
         f"- passed: {report['passed']}",
         f"- confirmed: {report['confirmed']}",
         "",
-        "**Thresholds**: translation residual < 0.05 m; yaw consistency <= 3 deg.",
+        "**Thresholds**: every scene residual < 0.05 m; yaw consistency <= 3 deg;",
+        "translation spread < 0.05 m; every scene inlier ratio >= 0.70;",
+        "all transforms within the documented mount region.",
         "",
         "Until confirmed, this is a diagnostic candidate only and does not",
         "authorise a TF publication or motion.",

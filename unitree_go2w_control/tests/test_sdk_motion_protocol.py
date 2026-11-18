@@ -44,6 +44,17 @@ def test_move_uses_the_lease_owning_client() -> None:
     assert client.calls == [("move", 0.05, 0.0, -0.08)]
 
 
+def test_move_accepts_operator_calibration_ceiling() -> None:
+    client = FakeSportClient()
+    response = execute_request(
+        {"request_id": 70, "api_id": 1008,
+         "parameter": {"x": 0.30, "y": 0.0, "z": 0.0}},
+        client, lease_id=42,
+    )
+    assert response["status_code"] == 0
+    assert client.calls == [("move", 0.30, 0.0, 0.0)]
+
+
 def test_stop_uses_the_same_client() -> None:
     client = FakeSportClient()
     response = execute_request(
@@ -59,7 +70,7 @@ def test_stop_uses_the_same_client() -> None:
 @pytest.mark.parametrize(
     "parameter",
     [
-        {"x": 0.201, "y": 0.0, "z": 0.0},
+        {"x": 0.301, "y": 0.0, "z": 0.0},
         {"x": 0.0, "y": -0.101, "z": 0.0},
         {"x": 0.0, "y": 0.0, "z": 0.251},
         {"x": float("nan"), "y": 0.0, "z": 0.0},

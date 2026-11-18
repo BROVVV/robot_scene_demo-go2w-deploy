@@ -1,0 +1,510 @@
+--- foxy-0.4.7/nav2_controller/include/nav2_controller/nav2_controller.hpp
++++ compat/foxy_nav2/src/go2w_nav2_controller_compat/include/go2w_nav2_controller_compat/controller_server.hpp
+@@ -12,10 +12,11 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#ifndef NAV2_CONTROLLER__NAV2_CONTROLLER_HPP_
+-#define NAV2_CONTROLLER__NAV2_CONTROLLER_HPP_
++#ifndef GO2W_NAV2_CONTROLLER_COMPAT__CONTROLLER_SERVER_HPP_
++#define GO2W_NAV2_CONTROLLER_COMPAT__CONTROLLER_SERVER_HPP_
+ 
+ #include <memory>
++#include <mutex>
+ #include <string>
+ #include <thread>
+ #include <unordered_map>
+@@ -33,13 +34,30 @@
+ #include "nav2_util/robot_utils.hpp"
+ #include "pluginlib/class_loader.hpp"
+ #include "pluginlib/class_list_macros.hpp"
+-
+-namespace nav2_controller
++#include "rcl_interfaces/msg/set_parameters_result.hpp"
++#include "go2w_nav2_controller_compat/controller_patience.hpp"
++#include "go2w_nav2_controller_compat/controller_parameters.hpp"
++#include "go2w_nav2_controller_compat/controller_semantics.hpp"
++
++namespace go2w_foxy_controller
+ {
++
++// The Foxy subscriber locks writes but its public getter does not lock reads.
++// Reuse its configured subscription and protect the action thread's snapshot.
++class LockedOdomSubscriber : public nav_2d_utils::OdomSubscriber
++{
++public:
++  using nav_2d_utils::OdomSubscriber::OdomSubscriber;
++  nav_2d_msgs::msg::Twist2D getTwist()
++  {
++    std::lock_guard<std::mutex> lock(odom_mutex_);
++    return odom_vel_.velocity;
++  }
++};
+ 
+ class ProgressChecker;
+ /**
+- * @class nav2_controller::ControllerServer
++ * @class go2w_foxy_controller::ControllerServer
+  * @brief This class hosts variety of plugins of different algorithms to
+  * complete control tasks from the exposed FollowPath action server.
+  */
+@@ -49,11 +67,11 @@
+   using ControllerMap = std::unordered_map<std::string, nav2_core::Controller::Ptr>;
+ 
+   /**
+-   * @brief Constructor for nav2_controller::ControllerServer
++   * @brief Constructor for go2w_foxy_controller::ControllerServer
+    */
+   ControllerServer();
+   /**
+-   * @brief Destructor for nav2_controller::ControllerServer
++   * @brief Destructor for go2w_foxy_controller::ControllerServer
+    */
+   ~ControllerServer();
+ 
+@@ -163,6 +181,8 @@
+    * @return true if able to obtain current pose of the robot, else false
+    */
+   bool getRobotPose(geometry_msgs::msg::PoseStamped & pose);
++
++  void readControllerParameters();
+ 
+   /**
+    * @brief get the thresholded velocity
+@@ -192,9 +212,10 @@
+   // The controller needs a costmap node
+   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
+   std::unique_ptr<nav2_util::NodeThread> costmap_thread_;
++  bool costmap_configured_{false};
+ 
+   // Publishers and subscribers
+-  std::unique_ptr<nav_2d_utils::OdomSubscriber> odom_sub_;
++  std::unique_ptr<LockedOdomSubscriber> odom_sub_;
+   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr vel_publisher_;
+ 
+   // Progress Checker Plugin
+@@ -226,11 +247,17 @@
+   double min_x_velocity_threshold_;
+   double min_y_velocity_threshold_;
+   double min_theta_velocity_threshold_;
++  bool publish_zero_velocity_{true};
++
++  ControllerPatience patience_;
++  ControllerParameters controller_parameters_;
++  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_;
+ 
+   // Whether we've published the single controller warning yet
+-  geometry_msgs::msg::Pose end_pose_;
++  geometry_msgs::msg::PoseStamped end_pose_;
++  nav_msgs::msg::Path current_path_;
+ };
+ 
+-}  // namespace nav2_controller
+-
+-#endif  // NAV2_CONTROLLER__NAV2_CONTROLLER_HPP_
++}  // namespace go2w_foxy_controller
++
++#endif  // GO2W_NAV2_CONTROLLER_COMPAT__CONTROLLER_SERVER_HPP_
+--- foxy-0.4.7/nav2_controller/src/main.cpp
++++ compat/foxy_nav2/src/go2w_nav2_controller_compat/src/main.cpp
+@@ -14,13 +14,13 @@
+ 
+ #include <memory>
+ 
+-#include "nav2_controller/nav2_controller.hpp"
++#include "go2w_nav2_controller_compat/controller_server.hpp"
+ #include "rclcpp/rclcpp.hpp"
+ 
+ int main(int argc, char ** argv)
+ {
+   rclcpp::init(argc, argv);
+-  auto node = std::make_shared<nav2_controller::ControllerServer>();
++  auto node = std::make_shared<go2w_foxy_controller::ControllerServer>();
+   rclcpp::spin(node->get_node_base_interface());
+   rclcpp::shutdown();
+ 
+--- foxy-0.4.7/nav2_controller/src/nav2_controller.cpp
++++ compat/foxy_nav2/src/go2w_nav2_controller_compat/src/controller_server.cpp
+@@ -19,15 +19,16 @@
+ #include <utility>
+ 
+ #include "nav2_core/exceptions.hpp"
++#include "lifecycle_msgs/msg/state.hpp"
+ #include "nav_2d_utils/conversions.hpp"
+ #include "nav_2d_utils/tf_help.hpp"
+ #include "nav2_util/node_utils.hpp"
+ #include "nav2_util/geometry_utils.hpp"
+-#include "nav2_controller/nav2_controller.hpp"
++#include "go2w_nav2_controller_compat/controller_server.hpp"
+ 
+ using namespace std::chrono_literals;
+ 
+-namespace nav2_controller
++namespace go2w_foxy_controller
+ {
+ 
+ ControllerServer::ControllerServer()
+@@ -52,6 +53,12 @@
+   declare_parameter("min_x_velocity_threshold", rclcpp::ParameterValue(0.0001));
+   declare_parameter("min_y_velocity_threshold", rclcpp::ParameterValue(0.0001));
+   declare_parameter("min_theta_velocity_threshold", rclcpp::ParameterValue(0.0001));
++  declare_parameter("failure_tolerance", rclcpp::ParameterValue(0.0));
++  declare_parameter("publish_zero_velocity", rclcpp::ParameterValue(true));
++  parameter_callback_ = add_on_set_parameters_callback(
++    [this](const std::vector<rclcpp::Parameter> & parameters) {
++      return controller_parameters_.validate(parameters);
++    });
+ 
+   // The costmap node is used in the implementation of the controller
+   costmap_ros_ = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+@@ -63,6 +70,17 @@
+ 
+ ControllerServer::~ControllerServer()
+ {
++  parameter_callback_.reset();
++  if (action_server_) {
++    try {
++      action_server_->deactivate();
++    } catch (const std::exception & error) {
++      RCLCPP_ERROR(get_logger(), "Controller action cleanup: %s", error.what());
++    }
++    // Join the execution future before its mutex, plugins and odometry die.
++    action_server_.reset();
++  }
++  costmap_thread_.reset();
+   RCLCPP_INFO(get_logger(), "Destroying");
+ }
+ 
+@@ -72,6 +90,13 @@
+   auto node = shared_from_this();
+ 
+   RCLCPP_INFO(get_logger(), "Configuring controller interface");
++
++  try {
++    readControllerParameters();
++  } catch (const std::exception & error) {
++    RCLCPP_ERROR(get_logger(), "Invalid controller configuration: %s", error.what());
++    return nav2_util::CallbackReturn::FAILURE;
++  }
+ 
+   get_parameter("progress_checker_plugin", progress_checker_id_);
+   if (progress_checker_id_ == default_progress_checker_id_) {
+@@ -102,7 +127,10 @@
+   get_parameter("min_theta_velocity_threshold", min_theta_velocity_threshold_);
+   RCLCPP_INFO(get_logger(), "Controller frequency set to %.4fHz", controller_frequency_);
+ 
+-  costmap_ros_->on_configure(state);
++  if (costmap_ros_->on_configure(state) != nav2_util::CallbackReturn::SUCCESS) {
++    return nav2_util::CallbackReturn::FAILURE;
++  }
++  costmap_configured_ = true;
+ 
+   try {
+     progress_checker_type_ = nav2_util::get_plugin_type_param(node, progress_checker_id_);
+@@ -159,13 +187,13 @@
+     get_logger(),
+     "Controller Server has %s controllers available.", controller_ids_concat_.c_str());
+ 
+-  odom_sub_ = std::make_unique<nav_2d_utils::OdomSubscriber>(node);
++  odom_sub_ = std::make_unique<LockedOdomSubscriber>(node);
+   vel_publisher_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 1);
+ 
+   // Create the action server that we implement with our followPath method
+   action_server_ = std::make_unique<ActionServer>(
+     rclcpp_node_, "follow_path",
+-    std::bind(&ControllerServer::computeControl, this));
++    std::bind(&ControllerServer::computeControl, this), false);
+ 
+   return nav2_util::CallbackReturn::SUCCESS;
+ }
+@@ -209,28 +237,59 @@
+ {
+   RCLCPP_INFO(get_logger(), "Cleaning up");
+ 
++  // Join the action before releasing anything its execution callback uses.
++  if (action_server_) {
++    action_server_->deactivate();
++  }
++  action_server_.reset();
++
+   // Cleanup the helper classes
+   ControllerMap::iterator it;
+   for (it = controllers_.begin(); it != controllers_.end(); ++it) {
+     it->second->cleanup();
+   }
+   controllers_.clear();
+-  costmap_ros_->on_cleanup(state);
++  // Foxy's SimpleProgressChecker owns a strong LifecycleNode pointer. Merely
++  // resetting its progress baseline leaves a node -> plugin -> node cycle:
++  // the node and DDS participant then outlive the RMW library at process exit.
++  progress_checker_.reset();
++  goal_checker_.reset();
++  if (costmap_configured_) {
++    costmap_ros_->on_cleanup(state);
++    costmap_configured_ = false;
++  }
+ 
+   // Release any allocated resources
+-  action_server_.reset();
+   odom_sub_.reset();
+   vel_publisher_.reset();
+-  action_server_.reset();
+-  goal_checker_->reset();
++  controller_ids_concat_.clear();
+ 
+   return nav2_util::CallbackReturn::SUCCESS;
+ }
+ 
+ nav2_util::CallbackReturn
+-ControllerServer::on_shutdown(const rclcpp_lifecycle::State &)
++ControllerServer::on_shutdown(const rclcpp_lifecycle::State & state)
+ {
+   RCLCPP_INFO(get_logger(), "Shutting down");
++  // Shutdown is also legal directly from active or inactive. Release plugin
++  // ownership while ROS and the costmap executor are still available, just as
++  // in the manager's deactivate -> cleanup -> shutdown sequence.
++  if (state.id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
++    on_deactivate(state);
++  }
++  if (action_server_) {
++    action_server_->deactivate();
++  }
++  if (vel_publisher_ && rclcpp::ok()) {
++    publishZeroVelocity();
++  }
++  if (costmap_configured_) {
++    on_cleanup(state);
++  } else {
++    action_server_.reset();
++    progress_checker_.reset();
++    goal_checker_.reset();
++  }
+   return nav2_util::CallbackReturn::SUCCESS;
+ }
+ 
+@@ -262,20 +321,29 @@
+ 
+ void ControllerServer::computeControl()
+ {
++  std::lock_guard<std::mutex> lock(controller_parameters_.actionMutex());
+   RCLCPP_INFO(get_logger(), "Received a goal, begin computing control effort.");
+ 
+   try {
+-    std::string c_name = action_server_->get_current_goal()->controller_id;
++    readControllerParameters();
++    const auto goal = action_server_->get_current_goal();
++    if (!goal) {
++      publishZeroVelocity();
++      return;
++    }
++    std::string c_name = goal->controller_id;
+     std::string current_controller;
+     if (findControllerId(c_name, current_controller)) {
+       current_controller_ = current_controller;
+     } else {
++      publishZeroVelocity();
+       action_server_->terminate_current();
+       return;
+     }
+ 
+-    setPlannerPath(action_server_->get_current_goal()->path);
++    setPlannerPath(goal->path);
+     progress_checker_->reset();
++    patience_.reset(now().nanoseconds());
+ 
+     rclcpp::WallRate loop_rate(controller_frequency_);
+     while (rclcpp::ok()) {
+@@ -291,7 +359,29 @@
+         return;
+       }
+ 
++      rclcpp::WallRate costmap_rate(100.0);
++      const auto readiness = waitForCurrentCostmap(
++        [&]() {return costmap_ros_->isCurrent();},
++        [&]() {return rclcpp::ok() && action_server_ && action_server_->is_server_active();},
++        [&]() {return action_server_->is_cancel_requested();},
++        [&]() {if (rclcpp::ok()) {publishZeroVelocity();}},
++        [&]() {costmap_rate.sleep();});
++      if (readiness == CostmapWait::Unavailable) {
++        return;
++      }
++      if (readiness == CostmapWait::Canceled) {
++        action_server_->terminate_all();
++        return;
++      }
++
+       updateGlobalPath();
++      // A pending goal can already be canceling when it replaces the current
++      // handle. Do not compute one command for it before the next loop check.
++      if (action_server_->is_cancel_requested()) {
++        action_server_->terminate_all();
++        publishZeroVelocity();
++        return;
++      }
+ 
+       computeAndPublishVelocity();
+ 
+@@ -306,16 +396,26 @@
+           controller_frequency_);
+       }
+     }
++    if (!rclcpp::ok()) {
++      return;
++    }
+   } catch (nav2_core::PlannerException & e) {
+-    RCLCPP_ERROR(this->get_logger(), e.what());
++    RCLCPP_ERROR(this->get_logger(), "%s", e.what());
+     publishZeroVelocity();
+     action_server_->terminate_current();
+     return;
++  } catch (const std::exception & e) {
++    RCLCPP_ERROR(this->get_logger(), "%s", e.what());
++    publishZeroVelocity();
++    action_server_->terminate_current();
++    return;
+   }
+ 
+   RCLCPP_DEBUG(get_logger(), "Controller succeeded, setting result");
+ 
+-  publishZeroVelocity();
++  if (publish_zero_velocity_) {
++    publishZeroVelocity();
++  }
+ 
+   // TODO(orduno) #861 Handle a pending preemption and set controller name
+   action_server_->succeeded_current();
+@@ -331,18 +431,14 @@
+   }
+   controllers_[current_controller_]->setPlan(path);
+ 
+-  auto end_pose = path.poses.back();
+-  end_pose.header.frame_id = path.header.frame_id;
+-  rclcpp::Duration tolerance(costmap_ros_->getTransformTolerance() * 1e9);
+-  nav_2d_utils::transformPose(
+-    costmap_ros_->getTfBuffer(), costmap_ros_->getGlobalFrameID(),
+-    end_pose, end_pose, tolerance);
++  end_pose_ = path.poses.back();
++  end_pose_.header.frame_id = path.header.frame_id;
+   goal_checker_->reset();
+ 
+   RCLCPP_DEBUG(
+     get_logger(), "Path end point is (%.2f, %.2f)",
+-    end_pose.pose.position.x, end_pose.pose.position.y);
+-  end_pose_ = end_pose.pose;
++    end_pose_.pose.position.x, end_pose_.pose.position.y);
++  current_path_ = path;
+ }
+ 
+ void ControllerServer::computeAndPublishVelocity()
+@@ -359,14 +455,32 @@
+ 
+   nav_2d_msgs::msg::Twist2D twist = getThresholdedTwist(odom_sub_->getTwist());
+ 
+-  auto cmd_vel_2d =
+-    controllers_[current_controller_]->computeVelocityCommands(
+-    pose,
+-    nav_2d_utils::twist2Dto3D(twist));
++  auto cmd_vel_2d = patience_.compute<nav2_core::PlannerException>(
++    get_parameter("failure_tolerance").as_double(),
++    [&]() {
++      return controllers_[current_controller_]->computeVelocityCommands(
++        pose, nav_2d_utils::twist2Dto3D(twist));
++    },
++    [&]() {return now().nanoseconds();},
++    [&]() {
++      // Value initialization clears all six axes; never reuse the last command.
++      geometry_msgs::msg::TwistStamped zero;
++      zero.header.frame_id = costmap_ros_->getBaseFrameID();
++      zero.header.stamp = now();
++      return zero;
++    },
++    [&](const char * error) {RCLCPP_WARN(get_logger(), "%s", error);});
+ 
+   std::shared_ptr<Action::Feedback> feedback = std::make_shared<Action::Feedback>();
+   feedback->speed = std::hypot(cmd_vel_2d.twist.linear.x, cmd_vel_2d.twist.linear.y);
+-  feedback->distance_to_goal = nav2_util::geometry_utils::euclidean_distance(end_pose_, pose.pose);
++  geometry_msgs::msg::PoseStamped path_pose;
++  rclcpp::Duration tolerance(costmap_ros_->getTransformTolerance() * 1e9);
++  if (!nav_2d_utils::transformPose(
++      costmap_ros_->getTfBuffer(), current_path_.header.frame_id, pose, path_pose, tolerance))
++  {
++    throw nav2_core::PlannerException("Failed to transform pose for path feedback");
++  }
++  feedback->distance_to_goal = remainingPathLength(current_path_, path_pose);
+   action_server_->publish_feedback(feedback);
+ 
+   RCLCPP_DEBUG(get_logger(), "Publishing velocity at time %.2f", now().seconds());
+@@ -378,6 +492,9 @@
+   if (action_server_->is_preempt_requested()) {
+     RCLCPP_INFO(get_logger(), "Passing new path to controller.");
+     auto goal = action_server_->accept_pending_goal();
++    if (!goal) {
++      throw nav2_core::PlannerException("Pending path goal is no longer available");
++    }
+     std::string current_controller;
+     if (findControllerId(goal->controller_id, current_controller)) {
+       current_controller_ = current_controller;
+@@ -385,8 +502,7 @@
+       RCLCPP_INFO(
+         get_logger(), "Terminating action, invalid controller %s requested.",
+         goal->controller_id.c_str());
+-      action_server_->terminate_current();
+-      return;
++      throw nav2_core::PlannerException("Invalid controller requested during path update");
+     }
+     setPlannerPath(goal->path);
+   }
+@@ -394,6 +510,9 @@
+ 
+ void ControllerServer::publishVelocity(const geometry_msgs::msg::TwistStamped & velocity)
+ {
++  if (!rclcpp::ok() || !vel_publisher_) {
++    return;
++  }
+   auto cmd_vel = std::make_unique<geometry_msgs::msg::Twist>(velocity.twist);
+   if (
+     vel_publisher_->is_activated() &&
+@@ -427,7 +546,36 @@
+ 
+   nav_2d_msgs::msg::Twist2D twist = getThresholdedTwist(odom_sub_->getTwist());
+   geometry_msgs::msg::Twist velocity = nav_2d_utils::twist2Dto3D(twist);
+-  return goal_checker_->isGoalReached(pose.pose, end_pose_, velocity);
++  geometry_msgs::msg::PoseStamped transformed_end_pose;
++  const auto current_endpoint = endpointAtPoseTime(end_pose_, pose);
++  rclcpp::Duration tolerance(costmap_ros_->getTransformTolerance() * 1e9);
++  if (!nav_2d_utils::transformPose(
++      costmap_ros_->getTfBuffer(), costmap_ros_->getGlobalFrameID(),
++      current_endpoint, transformed_end_pose, tolerance))
++  {
++    throw nav2_core::PlannerException("Failed to transform path endpoint for goal check");
++  }
++  return goal_checker_->isGoalReached(pose.pose, transformed_end_pose.pose, velocity);
++}
++
++void ControllerServer::readControllerParameters()
++{
++  const std::vector<rclcpp::Parameter> parameters{
++    get_parameter("controller_frequency"), get_parameter("min_x_velocity_threshold"),
++    get_parameter("min_y_velocity_threshold"), get_parameter("min_theta_velocity_threshold"),
++    get_parameter("failure_tolerance"), get_parameter("publish_zero_velocity")};
++  // Initial overrides bypass set-parameter callbacks. Validate them as well;
++  // the caller already owns the action mutex, so use a separate validator.
++  ControllerParameters validator;
++  const auto result = validator.validate(parameters);
++  if (!result.successful) {
++    throw std::invalid_argument(result.reason);
++  }
++  controller_frequency_ = parameters[0].as_double();
++  min_x_velocity_threshold_ = parameters[1].as_double();
++  min_y_velocity_threshold_ = parameters[2].as_double();
++  min_theta_velocity_threshold_ = parameters[3].as_double();
++  publish_zero_velocity_ = parameters[5].as_bool();
+ }
+ 
+ bool ControllerServer::getRobotPose(geometry_msgs::msg::PoseStamped & pose)
+@@ -440,4 +588,4 @@
+   return true;
+ }
+ 
+-}  // namespace nav2_controller
++}  // namespace go2w_foxy_controller

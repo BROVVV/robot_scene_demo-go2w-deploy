@@ -1,5 +1,6 @@
 uint8 MODE_TIMED_VELOCITY=0
 uint8 MODE_RELATIVE_YAW=1
+uint8 MODE_STREAMING_VELOCITY=2
 
 uint8 mode
 
@@ -12,6 +13,9 @@ float32 relative_yaw_deg
 float32 max_yaw_rate
 
 float32 timeout_sec
+# Streaming only: fresh, matching-token velocity updates renew duration_sec
+# (<=0.25 s); timeout_sec bounds one stream. Other modes leave this empty.
+string velocity_stream_token
 
 ---
 bool success

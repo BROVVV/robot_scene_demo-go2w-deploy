@@ -4,6 +4,8 @@
 !.env.go2w
 
 .venv/
+/.yoloe_env/
+/mobileclip2_b.ts
 venv/
 env/
 
@@ -93,3 +95,19 @@ unitree_go2w_control/ros2_ws/install/
 unitree_go2w_control/ros2_ws/log/
 unitree_go2w_control/**/__pycache__/
 unitree_go2w_control/**/*.pyc
+
+# Local cc-switch provider setup notes/scripts: they embed third-party relay API
+# keys in plain text (CODEX_DEPLOY.md forbids committing API keys), so keep the
+# whole directories out of Git.
+ccswitch-justwoker/
+ccswitch-agentrouter/
+
+# 2026-09-10：真机验证产物与无关目录，避免误推大文件
+# artifacts/ 单目录即有 ~73 GB 的 rosbag 与点云；它们是实验数据，不属于源码。
+artifacts/
+cc-switch-*/
+claude-sessions-backup-*/
+codex-diag/
+*.tar.gz
+outputs/**/*.log
+ccswitch-deepseek/

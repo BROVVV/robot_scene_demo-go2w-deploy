@@ -1,6 +1,7 @@
 python-dotenv
 PyYAML
 numpy
+scipy
 openai
 pydantic
 networkx

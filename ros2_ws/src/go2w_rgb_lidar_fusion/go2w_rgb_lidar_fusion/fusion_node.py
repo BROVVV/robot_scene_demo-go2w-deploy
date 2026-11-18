@@ -83,10 +83,15 @@ def cloud_xyz(message: PointCloud2) -> np.ndarray:
     raw = point_cloud2.read_points(
         message, field_names=("x", "y", "z"), skip_nans=True
     )
-    if getattr(raw.dtype, "names", None):
+    # 两个发行版的 read_points 契约相反：Humble 给结构化数组（raw["x"] 可用），
+    # Foxy 给生成器。这里的守卫原先写成 `raw.dtype`，生成器上没有这个属性，
+    # 属性访问先于 getattr 的默认值抛 AttributeError —— 守卫本身就会崩。
+    if getattr(getattr(raw, "dtype", None), "names", None):
         points = np.column_stack([raw[name] for name in ("x", "y", "z")])
     else:
-        points = np.asarray(raw).reshape(-1, 3)
+        # Foxy 分支：np.asarray(生成器) 得到 0 维 object 数组，reshape(-1, 3) 必失败，
+        # 必须先物化成逐点元组列表。
+        points = np.asarray(list(raw), dtype=np.float64).reshape(-1, 3)
     return np.asarray(points, dtype=np.float64)
 
 

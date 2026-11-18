@@ -1,0 +1,70 @@
+# Go2-W 自主搜索回放（只读录制 + 二维地图/轨迹视频）
+#
+# 计划书：docs/GO2W_自主搜索二维地图与轨迹回放视频_实施与验收计划_20261021.md
+#
+# 这里只放"录制/渲染"的取值，不涉及任何运动授权、导航阈值或安全闸门。
+# 启动脚本里的 GO2W_SEARCH_REPLAY_* 环境变量优先于本文件。
+#
+# 采集器是独立的只读 ROS 进程（scripts/go2w/record_search_replay_ros.py）：
+# 只订阅话题、只查 TF、只通过 HTTP 收相机帧，不发布任何消息。
+
+enabled: true
+
+# 原始录制包（poses/frames/maps/events）与成品都落在会话目录里的 replay/，
+# 这个 root 只保存全局编码锁 encoder.lock。
+root: outputs/search_replay
+
+# 成品规格：1920x1080 / 30 fps / H.264 / yuv420p / +faststart。
+width: 1920
+height: 1080
+fps: 30
+
+# 默认回放倍速与历史页可切换的倍速。
+default_speed: 10
+speeds: [1, 5, 10, 20]
+# 关键事件前后回到 1x 的窗口（秒）。只影响观感，不影响录制内容。
+key_speed: 1.0
+key_pad_seconds: 6.0
+end_hold_seconds: 3.0
+chapter_seconds: 1800.0
+
+# 采样率
+pose_hz: 10.0
+camera_fps: 5.0
+# 地图只在内容变化时落盘；每条 /map 消息的接收时间都会记进 timeline，
+# 用来区分"图没变"与"地图源断流"。
+map_max_hz: 1.0
+
+# ROS 话题（只读订阅）
+map_topic: /map
+map_frame: map
+base_frame: base_link
+odom_topic: /go2w/odom/fused
+localization_topic: /go2w/nav/localization_status
+
+# D435 MJPEG 直连（宿主代理必须绕过，采集器内部已禁用代理）。
+camera_url: http://192.168.123.18:8080/color
+
+# 预算：单会话原始素材软上限 8 GiB，全部回放目录软上限 30 GiB，
+# 剩余磁盘低于 2 GiB 时先关相机、再停止新地图落盘；绝不因磁盘动搜索。
+session_soft_bytes: 8589934592
+global_soft_bytes: 32212254720
+min_free_bytes: 2147483648
+
+# 编码器（只用一个全局编码锁；线程数受 x264 自身限制）
+encoder_threads: 2
+encoder_crf: 20
+encoder_preset: veryfast
+
+# 采集器启动最多等 2 秒就绪；搜索照常进行，缺头由 status 的 start_gap 说明。
+capture_ready_timeout: 2.0
+capture_stop_timeout: 8.0
+render_queue_capacity: 16
+event_queue_capacity: 4096
+
+# 轨迹连续性判据：位姿跳变/里程速度越界的点不连线，另起一段。
+max_pose_jump_m: 0.6
+max_pose_jump_window_s: 0.5
+max_odom_speed_mps: 1.5
+
+font_path: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc

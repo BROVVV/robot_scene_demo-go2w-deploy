@@ -46,19 +46,29 @@ class FakeWorker:
     def shutdown(self): pass
 
 
-def make_app(tmp_path: Path, **factory_kwargs) -> tuple[TestClient, FakeWorker]:
+def make_app(tmp_path: Path, *, executor_factory=None,
+             **factory_kwargs) -> tuple[TestClient, FakeWorker]:
     config = replace(
         ManualDemoSettings(),
         runtime_dir=str(tmp_path / "runtime"),
         logs_dir=str(tmp_path / "logs"),
         analysis_frames_dir=str(tmp_path / "frames"),
+        # 绝对路径：config.slam_map_snapshot_path 对相对路径会拼 _PROJECT_ROOT，
+        # 那会把测试指到仓库里那份真机会话留下的 runtime/slam_map_3d.json 上。
+        # 它一旦被判成"发散/冻结"，/api/search/start 会先以 409 MAPPING_FROZEN
+        # 返回，executor 根本不会启动 —— 本文件所有"等状态变成 X"的用例就集体
+        # 超时，看着像代码回归，其实是测试读了别人的运行态。
+        # 同 tests/test_slam_map_snapshot_health_contract.py 的写法。
+        slam_map_snapshot=str(tmp_path / "runtime" / "slam_map_3d.json"),
     )
     worker = FakeWorker()
     runtime = DemoRuntime(
         config,
         worker=worker,
         camera_fresh=lambda: True,
-        search_executor_factory=make_mock_executor_factory(**factory_kwargs),
+        search_executor_factory=(
+            executor_factory or make_mock_executor_factory(**factory_kwargs)
+        ),
         search_session_dir=str(tmp_path / "sessions"),
     )
     app = create_app(config=config, runtime=runtime)
@@ -76,17 +86,53 @@ def _wait_status(client: TestClient, statuses: set[str], timeout: float = 60.0) 
     raise AssertionError(f"timed out waiting for {statuses}, last={last}")
 
 
-def test_idle_state_map_objects_events(tmp_path) -> None:
+def _wait_event(client: TestClient, event_type: str, timeout: float = 30.0) -> list[str]:
+    """等到 `event_type` 出现在归档事件流里，返回当时全部事件类型。
+
+    §2.2 删掉了 `/api/search/events`（它是 state 的第二份投影）。事件仍然完整地
+    落在会话归档里，历史详情 API 是唯一的读口 —— 这条路径同时也把"归档里的事件
+    和 live 事件是同一批"钉住了。
+
+    ⚠ **不能**在 `_wait_status(TARGET_FOUND)` 之后直接取事件：状态机置位与事件
+    落盘不是同一个原子步骤。实测（2026-09-16，12 次）**4 次**会读到"状态已是
+    TARGET_FOUND、`SEARCH_FINISHED` 还没追加"的中间窗口，通过率只有 8/12。
+
+    这不是产品漏发：同一进程里再等 1 秒 `SEARCH_FINISHED` 就出现了（而且出现两次）。
+    是**测试没等**。所以这里加等待，**断言一个字不改**——超时返回最后一次读到的
+    列表，断言照样会因为缺事件而红。
+    """
+    deadline = time.time() + timeout
+    types: list[str] = []
+    while time.time() < deadline:
+        session_id = client.get("/api/search/state").json().get("session_id") or ""
+        if session_id:
+            record = client.get(f"/api/search/history/{session_id}").json()
+            types = [item["event_type"] for item in (record.get("events") or [])]
+            if event_type in types:
+                return types
+        time.sleep(0.05)
+    return types
+
+
+def test_idle_state_has_one_empty_graph(tmp_path) -> None:
+    """空闲态：一份 `graph`（`null`）+ 空的小状态，没有第二张图、没有旧路由。
+
+    §2.2 之后 `/api/search/map`、`/objects`、`/events` 都不存在了 —— 这条同时
+    钉住"它们真的没了"（404 而不是返回一份影子数据）。
+    """
     client, _ = make_app(tmp_path)
     with client:
         state = client.get("/api/search/state").json()
         assert state["status"] == "IDLE"
-        assert client.get("/api/search/map").json()["map_mode"] == "topological"
-        assert client.get("/api/search/objects").json() == {
+        assert state["graph"] is None
+        assert state["graph_revision"] == 0
+        assert state["objects"] == {
             "current": [], "session_seen": [], "target_evidence": {},
         }
-        events = client.get("/api/search/events").json()["events"]
-        assert isinstance(events, list)
+        for stale in ("/api/search/map", "/api/search/objects", "/api/search/events",
+                      "/api/search/decisions", "/api/search/frontiers",
+                      "/api/search/place-graph", "/api/search/semantic-map"):
+            assert client.get(stale).status_code == 404, f"{stale} 应当已删除"
         assert client.get("/api/search/history").json()["sessions"] == []
         assert client.get("/api/search/readiness").json()["ready"] is True
 
@@ -104,6 +150,51 @@ def test_start_returns_immediately(tmp_path) -> None:
         # The HTTP call must not block until completion: it already returned.
         status = client.get("/api/search/state").json()["status"]
         assert status in {"STARTING", "RUNNING", "TARGET_FOUND"}
+
+
+def test_exhausted_bounded_trial_blocks_web_search_start(tmp_path, monkeypatch) -> None:
+    ledger=tmp_path/'trial.json'
+    ledger.write_text('{"version":6,"maximum_steps":1,"steps":[{}],"active_token":null}')
+    monkeypatch.setenv('GO2W_NAV2_TRIAL_LEDGER',str(ledger))
+    client,_=make_app(tmp_path)
+    with client:
+        readiness=client.get('/api/search/readiness').json()
+        assert readiness['ready'] is False
+        assert readiness['checks']['navigation_trial_available'] is False
+        assert 'navigation_trial_available' in readiness['blocking']
+        response=client.post('/api/search/start',json={'target':'蓝色垃圾桶','backend':'mock'})
+        assert response.status_code==409
+        assert 'trial' in response.json()['error'].lower()
+
+
+def test_start_params_carry_the_detector(tmp_path) -> None:
+    """物体识别后端必须活着走到 worker 的 params 上。
+
+    2026-09-17 断的就是这一环：``search_session_service.start_search`` 里那份
+    params 是逐个字段手写的，而 ``detector`` 当时根本不在其中 —— 于是请求里
+    就算带了它，worker 也永远收不到，``--detector`` 恒定落到 argparse 默认值。
+    """
+    captured: dict[str, Any] = {}
+    inner = make_mock_executor_factory()
+
+    def factory():
+        executor = inner()
+        original_start = executor.start
+
+        def start(params):
+            captured.update(params)
+            return original_start(params)
+
+        executor.start = start
+        return executor
+
+    factory.is_mock_factory = True
+    client, _ = make_app(tmp_path, executor_factory=factory)
+    with client:
+        client.post("/api/search/start",
+                    json={"target": "蓝色垃圾桶", "backend": "mock",
+                          "detector": "grounded_sam"})
+        assert captured.get("detector") == "grounded_sam"
 
 
 def test_duplicate_start_409_while_running(tmp_path) -> None:
@@ -131,18 +222,21 @@ def test_search_end_to_end_state_and_summary(tmp_path) -> None:
     )
     with client:
         client.post("/api/search/start", json={
-            "target": "蓝色垃圾桶", "backend": "mock", "reasoner": "semantic_navigation",
+            "target": "蓝色垃圾桶", "backend": "mock",
+            # 本用例查的是 WebUI 会话骨架（state/summary/map/objects/events/
+            # history），不是目标接近闭环，所以走计划书 §18.2 允许保留的 legacy
+            # 分支：看见即收工。接近闭环由 test_autonomous_explorer_target_approach
+            # 与 E2E 用例负责（同 test_search_session_service.py:52-55 的理由）。
+            "finish_on_visual_confirmation": True,
         })
         _wait_status(client, {"TARGET_FOUND"})
         state = client.get("/api/search/state").json()
         assert state["result"] == "TARGET_FOUND"
         assert state["target"] == "蓝色垃圾桶"
         assert state["summary"]["planning_cycles"] == 0
-        map_data = client.get("/api/search/map").json()
-        assert map_data["revision"] >= 1
-        assert client.get("/api/search/objects").json()["session_seen"]
-        events = client.get("/api/search/events?limit=100").json()["events"]
-        types = [item["event_type"] for item in events]
+        assert state["graph"]["revision"] >= 1
+        assert state["objects"]["session_seen"]
+        types = _wait_event(client, "SEARCH_FINISHED")
         assert "TARGET_CONFIRMED" in types
         assert "SEARCH_FINISHED" in types
         history = client.get("/api/search/history?limit=50").json()
@@ -152,7 +246,7 @@ def test_search_end_to_end_state_and_summary(tmp_path) -> None:
         archived = client.get(f"/api/search/history/{session_id}").json()
         assert archived["ok"] is True
         assert archived["state"]["status"] == "TARGET_FOUND"
-        assert archived["state"]["map"]["revision"] >= 1
+        assert archived["state"]["graph"]["revision"] >= 1
         assert archived["events"]
 
 

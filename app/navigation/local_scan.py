@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
+from typing import Callable
 from typing import Any
 
 from app.navigation.models import GOAL_ROTATE_VIEW
@@ -51,6 +53,8 @@ def select_local_scan_goal(
     sector_deg: float = 30.0,
     sectors: int = 12,
     new_information: bool = False,
+    max_turn_deg: float | None = None,
+    goal_is_allowed: Callable[[float], bool] | None = None,
 ) -> tuple[dict[str, Any] | None, LocalScanState]:
     """返回 (goal_fields, updated_state)。
 
@@ -61,6 +65,8 @@ def select_local_scan_goal(
     sectors = max(1, int(sectors))
     sector_deg = max(1.0, float(sector_deg))
     max_local_rotations = max(0, int(max_local_rotations))
+    if max_turn_deg is not None and (not math.isfinite(max_turn_deg) or max_turn_deg <= 0):
+        return None, state
     if max_local_rotations <= 0 or state.steps >= max_local_rotations:
         return None, state
 
@@ -69,10 +75,21 @@ def select_local_scan_goal(
     # 左右对称候选（计划书 §7.3）：+30 / -30 / +60 / -60。
     deltas = (1, -1, 2, -2)
     scored: list[tuple[float, int, int]] = []
+    angles = {}
+    seen_angles = set()
     for delta in deltas:
-        sector = (current_sector + delta) % sectors
+        angle = delta*sector_deg
+        if max_turn_deg is not None:
+            angle = math.copysign(min(abs(angle),max_turn_deg),angle)
+        if angle in seen_angles:
+            continue
+        seen_angles.add(angle)
+        sector = (current_sector + delta) % sectors if max_turn_deg is None else int(round((current_yaw_deg+angle)/sector_deg)) % sectors
         if sector in covered:
             continue
+        if goal_is_allowed is not None and not goal_is_allowed(float(angle)):
+            continue
+        angles[delta] = angle
         score = 1.0
         if state.last_direction is not None:
             same_direction = (delta > 0) == (state.last_direction > 0)
@@ -119,7 +136,7 @@ def select_local_scan_goal(
     goal_fields: dict[str, Any] = {
         "goal_id": f"local_scan_{next_state.steps:03d}",
         "goal_type": GOAL_ROTATE_VIEW,
-        "relative_dyaw": float(delta * sector_deg),
+        "relative_dyaw": float(angles[delta]),
         "heading_sector": sector,
         "semantic_reason": (
             f"bounded local scan sector {sector} "
@@ -129,8 +146,8 @@ def select_local_scan_goal(
         "provenance": {
             "source": "local_scan",
             "sector": sector,
-            "delta_sector": delta,
-            "delta_deg": float(delta * sector_deg),
+            "delta_sector": angles[delta]/sector_deg,
+            "delta_deg": float(angles[delta]),
             "same_direction_count": next_state.same_direction_count,
         },
     }

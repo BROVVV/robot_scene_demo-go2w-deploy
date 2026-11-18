@@ -11,8 +11,10 @@ from typing import Any
 MOVE_API_ID = 1008
 STOP_API_ID = 1003
 MAX_REQUEST_BYTES = 64 * 1024
-MAX_ABS_VX = 0.20
+MAX_ABS_VX = 0.30
 MAX_ABS_VY = 0.10
+# The socket executor is a final hardware boundary.  Keep its yaw ceiling at
+# the controller's conservative default even if a launch file is widened.
 MAX_ABS_YAW_RATE = 0.25
 
 

@@ -1,0 +1,41 @@
+{
+  "scope": "independent read-only floor validation; no physical navigation acceptance",
+  "boot_id": "3e6700dd-5afe-4822-945c-bf729c80a909",
+  "fit_replay": {
+    "rear_occupancy_geometry": {
+      "passed": 93,
+      "rejected": 0,
+      "max_residual": [
+        0.006377790011676828,
+        0.00277262342712592
+      ]
+    },
+    "rear_occupancy_after_move_raw": {
+      "passed": 92,
+      "rejected": 0,
+      "max_residual": [
+        0.008143246605937649,
+        0.011331238818720779
+      ]
+    }
+  },
+  "heldout_frames_passed": 46,
+  "heldout_frames_total": 46,
+  "heldout_max_angle_residual_rad": 0.010139141326657155,
+  "heldout_max_height_residual_m": 0.012056297209067757,
+  "raw_floor_plane": {
+    "normal": [
+      -0.12487264645701439,
+      0.21219255319433444,
+      0.9692167675683758
+    ],
+    "distance_m": 0.4492548023875247,
+    "tolerance_m": 0.02
+  },
+  "unchanged_joint_deviation_rad": 0.08,
+  "unchanged_floor_angle_residual_limit_rad": 0.015,
+  "new_mode": "IMU and pinned FK prediction, independently checked against each cloud; missing floor rejects",
+  "obstacle_minimum_height_m": 0.08,
+  "no_self_mask_expansion": true,
+  "no_navigation_gate_change": true
+}

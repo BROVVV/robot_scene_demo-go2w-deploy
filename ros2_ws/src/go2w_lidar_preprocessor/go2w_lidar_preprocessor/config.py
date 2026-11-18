@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 from go2w_description.description_config import load_official_reference
+from go2w_description.sensor_profile import load_sensor_profile
 
 from .preprocess_core import PreprocessParameters
 
@@ -19,7 +20,7 @@ _ROTATION_VALIDATION_CHECKS = (
 )
 
 
-def load_safety_ready_config(lidar_path: str, geometry_path: str):
+def load_safety_ready_config(lidar_path: str, geometry_path: str, sensor_profile_path: str = ''):
     lidar = yaml.safe_load(Path(lidar_path).read_text(encoding="utf-8")) or {}
     geometry = yaml.safe_load(Path(geometry_path).read_text(encoding="utf-8")) or {}
     if lidar.get("validation_status") != "validated" or not lidar.get("confirmed"):
@@ -128,6 +129,20 @@ def load_safety_ready_config(lidar_path: str, geometry_path: str):
     _validate_rotation_clearance_claim(
         lidar, parameters, lidar_path=Path(lidar_path)
     )
+    if sensor_profile_path:
+        profile=load_sensor_profile(sensor_profile_path)
+        values=dict(profile['preprocess']);values.pop('self_regions',None)
+        # The recorded profile replaces the calibrated numeric geometry, but
+        # it must not silently disable the reviewed base-frame self regions
+        # from lidar_preprocess.yaml.  Those regions cover the head, sensor
+        # guard and measured wheel clusters and remain valid in base_link.
+        # Profile-specific raw-surface filtering is an additional stage, not
+        # a replacement for these fixed masks.
+        parameters=PreprocessParameters(**values,self_regions=tuple(self_regions))
+        lidar['sensor_profile']=profile
+        lidar['validation_status']='recorded_geometry_estimate'
+        lidar['confirmed']=False
+        lidar['rotation_clearance_validation']={'valid':False}
     return lidar, parameters
 
 

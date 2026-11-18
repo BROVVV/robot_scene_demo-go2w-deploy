@@ -8,8 +8,8 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument("wheel_radius_m", default_value="0.089"),
-            DeclareLaunchArgument("publish_tf", default_value="false"),
-            DeclareLaunchArgument("lio_enabled", default_value="true"),
+            DeclareLaunchArgument("publish_tf", default_value="true"),
+            DeclareLaunchArgument("lio_enabled", default_value="false"),
             DeclareLaunchArgument("lio_yaw_weight", default_value="0.35"),
             DeclareLaunchArgument(
                 "lio_max_position_m", default_value="5.0"

@@ -9,6 +9,8 @@ implemented by HTTP, ROS2 bridge, replay files or a mock.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import hashlib
+import json
 from typing import Any, Protocol
 
 
@@ -45,6 +47,34 @@ class RGBDFrame:
 
     health: dict[str, Any] = field(default_factory=dict)
     provenance: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def evidence_id(self) -> str:
+        """Stable acquisition key for semantics; frame_id stays the sensor counter.
+
+        HTTP capture tokens/nonces survive materialization and serialization.
+        Older HTTP producers can use their raw host capture timestamp; a
+        legacy/replay frame with no acquisition identity keeps its old ID.
+        Local aligned time and image paths deliberately do not identify frames.
+        """
+        provenance = self.provenance or {}
+        if provenance.get('capture_id'):
+            identity = ['capture', str(provenance['capture_id'])]
+        elif provenance.get('cache_nonce'):
+            identity = ['nonce', str(provenance['cache_nonce'])]
+        else:
+            if provenance.get('source') != 'realsense_http_atomic':
+                return str(self.frame_id)
+            try:
+                host_stamp = float(self.host_timestamp)
+            except (TypeError, ValueError, OverflowError):
+                host_stamp = 0.
+            if not 1.4e9 <= host_stamp <= 2.2e9:
+                return str(self.frame_id)
+            identity = ['host_timestamp', host_stamp, str(self.device_timestamp_ms)]
+        payload = [str(provenance.get('base_url') or ''), str(self.frame_id), identity]
+        return 'rgbd_' + hashlib.sha256(json.dumps(payload,
+            separators=(',', ':')).encode('utf-8')).hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

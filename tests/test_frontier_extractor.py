@@ -48,3 +48,13 @@ def test_extract_small_component_filtered():
     )
     frontiers = FrontierExtractor(min_component_size=5).extract(map_snapshot)
     assert frontiers == []
+
+
+def test_metric_bearing_is_absolute_and_frame_is_not_a_source_name():
+    import math
+    grid=_room_map();grid.source='slam_toolbox_2d';grid.provenance={'frame_id':'map'}
+    first=FrontierExtractor(min_component_size=5).extract(grid,SpatialPose(.5,1.,yaw=0.,frame_id='map'))
+    turned=FrontierExtractor(min_component_size=5).extract(grid,SpatialPose(.5,1.,yaw=math.pi/2,frame_id='map'))
+    assert [(f.position,f.bearing_deg) for f in first]==[(f.position,f.bearing_deg) for f in turned]
+    assert all(f.frame=='map' for f in turned)
+    assert FrontierExtractor().extract(grid,SpatialPose(.5,1.,frame_id='odom_fused'))==[]

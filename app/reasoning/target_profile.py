@@ -27,6 +27,11 @@ class TargetProfile:
     materials: list[str] = field(default_factory=list)
     affordances: list[str] = field(default_factory=list)
     relation_constraints: list[str] = field(default_factory=list)
+    # 关系约束里挂在目标身上的那个物体（「挂着书包的椅子」的「书包」）。
+    # 单独成字段是因为它必须被找到：§15.3 的裁剪框要靠它并集，
+    # 混在通用的 context_labels 里时上游 LLM 会时给时不给（实测 3 次里错 2 次）。
+    relation_anchor_labels_en: list[str] = field(default_factory=list)
+    relation_anchor_labels_zh: list[str] = field(default_factory=list)
     context_labels_en: list[str] = field(default_factory=list)
     context_labels_zh: list[str] = field(default_factory=list)
     likely_regions_zh: list[str] = field(default_factory=list)
@@ -104,7 +109,14 @@ class TargetProfile:
         return _dedupe([_clean_detector_term(item) for item in terms if item])[:max_terms]
 
     def context_terms(self) -> list[str]:
-        return _dedupe([*self.context_labels_en, *self.context_labels_zh])
+        return _dedupe(
+            [
+                *self.context_labels_en,
+                *self.context_labels_zh,
+                *self.relation_anchor_labels_en,
+                *self.relation_anchor_labels_zh,
+            ]
+        )
 
     def prompt_context(self) -> str:
         return (
@@ -185,6 +197,8 @@ def _target_profile_user_prompt(query: str) -> str:
   "materials": ["材质"],
   "affordances": ["用途或可供性"],
   "relation_constraints": ["on table、next to door 等关系约束"],
+  "relation_anchor_labels_en": ["关系里挂在/靠在/贴在目标身上的那个物体的英文类别；没有关系时为 []"],
+  "relation_anchor_labels_zh": ["上面那个物体的中文类别；没有关系时为 []"],
   "context_labels_en": ["可能提示目标位置但不能证明目标存在的英文物体类别"],
   "context_labels_zh": ["对应中文上下文物体"],
   "likely_regions_zh": ["适合继续检查的语义区域"],
@@ -198,6 +212,11 @@ def _target_profile_user_prompt(query: str) -> str:
 - “红色把手的白色柜门”不能退化成“门”，要保留颜色、部件和所属关系。
 - “能打印 A3 的设备”核心类别应包含 printer，属性保留 A3。
 - 地点目标要给出直接标识类别和入口类别，同时把普通门/走廊放入 context，而非 direct。
+- 有 relation_constraints 时，关系里那个“挂/靠/贴/放”在目标身上的物体必须填进
+  relation_anchor_labels_en / relation_anchor_labels_zh，不能只写进 context。
+  例：“挂着书包的椅子” → relation_constraints=["backpack hanging on chair"]，
+  relation_anchor_labels_en=["backpack"]，relation_anchor_labels_zh=["书包"]。
+  漏掉关系物体（只给 desk/table/room 这类“目标可能在哪”）会让下游裁不出关系证据。
 - 不限于示例类别，可生成任何合理的开放词表英文短语。"""
 
 
@@ -219,6 +238,12 @@ def _profile_from_payload(query: str, payload: dict[str, Any]) -> TargetProfile:
         materials=_string_list(payload.get("materials")),
         affordances=_string_list(payload.get("affordances")),
         relation_constraints=_string_list(payload.get("relation_constraints")),
+        relation_anchor_labels_en=_string_list(
+            payload.get("relation_anchor_labels_en")
+        ),
+        relation_anchor_labels_zh=_string_list(
+            payload.get("relation_anchor_labels_zh")
+        ),
         context_labels_en=_string_list(payload.get("context_labels_en")),
         context_labels_zh=_string_list(payload.get("context_labels_zh")),
         likely_regions_zh=_string_list(payload.get("likely_regions_zh")),
@@ -376,6 +401,9 @@ def build_grounding_prompt(profile: TargetProfile, max_terms: int = 40) -> str:
     """Build an English-first, period-delimited open-vocabulary prompt."""
     terms = profile.detector_terms(max_terms=max_terms)
     terms.extend(profile.context_labels_en)
+    # §15：关系锚点也必须进搜索词，否则 RAM++ 恰好没吐 backpack 时，
+    # GroundingDINO 就永远找不到关系的另一半。
+    terms.extend(profile.relation_anchor_labels_en)
     cleaned = _dedupe([_clean_detector_term(item) for item in terms if item])
     return ". ".join(cleaned[:max_terms]) + ("." if cleaned else "")
 

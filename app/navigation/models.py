@@ -146,6 +146,28 @@ class LiveObservation:
     scene_graph: dict[str, Any] | None = None
     scene_objects: list[dict[str, Any]] = field(default_factory=list)
     scene_relations: list[dict[str, Any]] = field(default_factory=list)
+    # 计划书 §5.1.2：把一次检测的产物按**职责**拆成三份视图，替代此前
+    # "`target_present = bool(detections)`"那种把目标与场景物体混为一谈的做法。
+    # 三份视图的元素共用 `entity_id`（见 app/perception/entity_roles.py），
+    # 所以"复核的是不是同一个实体"可以按 ID 核对，而不是靠 bbox 近似。
+    # 默认空表 = 旧行为（消费方按空表回退到 `detections`）。
+    #
+    # **共同 ID 只在 `views_source_frame_id` 这一帧内成立**：`detections` 与
+    # 两份候选视图是**同一次**前景检测的产物（同一批 dict），而 `scene_objects`
+    # 来自另一次后台全量检测（见 `scene_objects_source_frame_id`）。跨帧比 ID
+    # 只说明"同标签的东西又出现在同一位置"，不构成同一实体 —— 要判同一必须用
+    # `entity_roles.entities_are_the_same()`（它连源帧一起比）。
+    target_candidates: list[dict[str, Any]] = field(default_factory=list)
+    relation_anchors: list[dict[str, Any]] = field(default_factory=list)
+    # 上面那批视图来自哪一帧。空串 = 不知道（旧调用方），此时**不许**按 ID 认同一。
+    views_source_frame_id: str = ""
+    # `scene_objects` 来自哪一帧。与 `views_source_frame_id` 不同 ⇒ 它是另一次
+    # 检测的产物，两条链上的实体**不能**按 ID 直接对齐。
+    scene_objects_source_frame_id: str = ""
+    # In-process result from the observer's sole persistent-object update.
+    # It is intentionally absent from to_dict(): Web events carry the graph
+    # snapshot, not another copy of the association table.
+    object_update_result: Any | None = None
     target_match: dict[str, Any] | None = None
 
     pose: dict[str, Any] | None = None
@@ -210,6 +232,10 @@ class LiveObservation:
             "scene_graph": self.scene_graph,
             "scene_objects": self.scene_objects,
             "scene_relations": self.scene_relations,
+            "target_candidates": self.target_candidates,
+            "relation_anchors": self.relation_anchors,
+            "views_source_frame_id": self.views_source_frame_id,
+            "scene_objects_source_frame_id": self.scene_objects_source_frame_id,
             "target_match": self.target_match,
             "target_state": self.target_state,
             "pose": self.pose,
@@ -247,6 +273,12 @@ class LiveObservation:
             scene_graph=value.get("scene_graph"),
             scene_objects=list(value.get("scene_objects") or []),
             scene_relations=list(value.get("scene_relations") or []),
+            target_candidates=list(value.get("target_candidates") or []),
+            relation_anchors=list(value.get("relation_anchors") or []),
+            views_source_frame_id=str(value.get("views_source_frame_id") or ""),
+            scene_objects_source_frame_id=str(
+                value.get("scene_objects_source_frame_id") or ""
+            ),
             target_match=value.get("target_match"),
             pose=value.get("pose"),
             heading_sector=value.get("heading_sector"),

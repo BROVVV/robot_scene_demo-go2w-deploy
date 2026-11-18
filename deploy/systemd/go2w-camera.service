@@ -1,0 +1,16 @@
+[Unit]
+Description=GO2-W D435 RGB-D stream (candidate release)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=unitree
+WorkingDirectory=/home/unitree/robotscene_releases/20261103_01
+Environment=PYTHONNOUSERSITE=1
+ExecStart=/usr/bin/python3 /home/unitree/robotscene_releases/20261103_01/scripts/go2w/realsense_stream.py --width 1280 --height 720 --fps 30 --port 8080
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

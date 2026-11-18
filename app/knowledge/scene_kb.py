@@ -50,7 +50,14 @@ class SceneKnowledgeBase:
                         content_zh=_object_prior_to_zh(prior),
                         source=str(self.kb_dir / "object_location_priors.json"),
                         confidence=prior.confidence,
-                        metadata={"object_name": prior.object_name},
+                        # `related_objects` 是任务 Agent 判断"这条知识能不能落到
+                        # 本轮可见实体上"的唯一依据（计划书 §4.4）。原先只透出
+                        # object_name，相关性只能靠 content_zh 里那串中文去猜。
+                        # 置信度原样透出，不重算、不创造知识。
+                        metadata={
+                            "object_name": prior.object_name,
+                            "related_objects": list(prior.related_objects or []),
+                        },
                     )
                 )
         return items

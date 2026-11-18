@@ -10,6 +10,9 @@ triple STOP plus disarm. No user commands are required while it runs.
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
+from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import math
@@ -29,6 +32,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from cmd_vel_gate import (  # noqa: E402
+    COMMAND_AGE_SECONDS,
+    GATE_DT_SECONDS,
+    GATE_ENV_VAR,
+    GATE_SOURCE,
+    MODE_ENFORCE,
+    MODE_OFF,
+    SafetyState as GateSafetyState,
+    Velocity as GateVelocity,
+    evaluate as evaluate_cmd_vel_gate,
+    requested_velocity_for_step,
+    resolve_mode as resolve_cmd_vel_gate_mode,
+)
+
 from app.live_robot.search_state_machine import SensorSnapshot
 from app.live_robot.step_search_runner import (
     Detection,
@@ -37,15 +58,25 @@ from app.live_robot.step_search_runner import (
     VerificationResult,
 )
 from app.live_robot.autonomous_explorer import PerceptionFailure
+from app.live_robot.vlm_budget import bounded_vlm_timeout
 from app.detectors.siliconflow_vision_protocol import (
     SiliconFlowDaemonClient,
     VLMRequest,
 )
 from app.live_robot.semantic_observer import (
+    SEMANTIC_STATUS_FRESH_QUICK,
     LiveSemanticObserver,
     semantic_payload_from_quick_target_absence,
 )
+from app.live_robot.target_sweep import decide_target_sweep
 from app.config import get_settings
+from app.detectors.grounded_sam_subprocess import (
+    GroundedSAMSubprocessDetector,
+    detection_cache_key,
+    diagnostics_event_payload,
+)
+from app.detectors.backend import detector_capabilities
+from app.detectors.factory import create_local_detector
 from app.memory.observation_memory_store import ObservationMemoryStore
 from app.live_robot.motion_bounds import (
     MotionBoundaryDecision,
@@ -88,7 +119,10 @@ from app.reasoning.semantic_navigation.auxiliary_hints import (
     build_precomputed_situated_prior_hints,
     build_psg_auxiliary_hints,
 )
-from app.reasoning.target_profile import TargetProfileResolver
+from app.reasoning.target_profile import TargetProfile, TargetProfileResolver
+# §15.2/§15.3 的 2D 关系几何（bbox 重叠 / 最近 context 物体 / 并集）在生产
+# video 链路里已经有了，这里直接复用，不重写一份。
+from app.video.semantic_verifier import _verification_region
 
 import rclpy
 from go2w_motion_interfaces.action import MotionCommand
@@ -126,6 +160,23 @@ PROMPT_MAP = {
 }
 
 
+def target_prompt(target: str) -> str:
+    """把搜索目标转成 GroundingDINO 用的英文点分词表。
+
+    原先这里的兜底是 f"{target}. {target} object"。对不在 PROMPT_MAP 里的中文
+    目标会拼出"垃圾桶. 垃圾桶 object"这种中英混搭：其中 "object" 会被词表子串
+    匹配到（TERM_ZH["object"] == "物体"），于是一大批无关物体被统一标成"物体"，
+    标签雷同又让关联阶段的 semantic 分数恒为 1.0，不同物体被错误合并。改用目标
+    画像解析器给出的英文标签，中文目标都能落到视觉检测器认识的词上。
+    """
+    mapped = PROMPT_MAP.get(target.strip())
+    if mapped:
+        return mapped
+    terms = TargetProfileResolver().resolve(target.strip(), use_llm=False).detector_terms()
+    # 解析不出英文标签（生僻中文词）时退回原词，空 prompt 会被 GroundingDINO 拒绝。
+    return ". ".join(terms) if terms else target.strip()
+
+
 def strict_json_value(value):
     """Recursively replace non-finite telemetry with JSON ``null``."""
 
@@ -136,6 +187,68 @@ def strict_json_value(value):
     if isinstance(value, (list, tuple)):
         return [strict_json_value(item) for item in value]
     return value
+
+
+def _detection_frame_objects(objects: list[dict]) -> list[dict]:
+    """把检测结果转成 _verification_region 认识的形状（它要 bbox / object_id）。"""
+    return [
+        {
+            "object_id": f"det_{index:03d}",
+            "label": item.get("label"),
+            "label_zh": item.get("label_zh"),
+            "bbox": item.get("bbox_2d"),
+        }
+        for index, item in enumerate(objects)
+    ]
+
+
+def _has_target_like(objects: list[dict], profile: TargetProfile) -> bool:
+    """检测结果里有没有「像目标」的候选 —— 只看 label 是否命中目标画像的词。
+
+    只用来决定「要不要启动 VLM 兜底扫描」，不参与任何目标判定。
+    """
+    terms = [str(term).lower() for term in profile.direct_terms() if str(term).strip()]
+    for item in objects:
+        label = str(item.get("label") or "").lower()
+        if any(term in label for term in terms):
+            return True
+    return False
+
+
+def _gsam_to_dict(obj) -> dict:
+    """把 DetectedObject 转回 _detect 消费方期望的 dict。
+
+    消费方只用 label/score/bbox_2d；mask_rle/mask_size 是 §44 目标 2 让 SAM2
+    真实 mask 透传出去，供后续 DepthObjectLocalizer / 语义标注使用。
+
+    2026-09-17 补齐 category / source_prompt_term / mask_area_ratio：它们此前
+    在检测器里算好了、到这一层被丢掉，于是下游只剩一个 label 可用 ——
+    「这个框是不是独立物体」「原始 prompt term 是什么」都无从判断
+    （计划书 §6 阶段 B）。**原始英文 label 不许覆盖 label_zh**：两个字段各有
+    各的用途，中文那条是显示契约。
+
+    2026-10-14 补 `detection_slots`（第四次补充复审·必修）：检测器现在会记
+    「这个框由哪些槽问出来」，「分频」路径的组装层与 `classify_roles` 靠它把旧帧
+    的**目标槽上下文词**（如「打印机」画像的 `paper tray`）挡在选框之外。这一层
+    是检测器到下游的唯一通道，漏了它就等于上游白记。
+    """
+    return {
+        "label": obj.label,
+        "label_zh": obj.label_zh,
+        "category": obj.category,
+        "source_prompt_term": obj.source_prompt_term,
+        "detection_slots": list(getattr(obj, "detection_slots", None) or ()),
+        "score": obj.score,
+        "text_score": obj.text_score,
+        "color": obj.color,
+        "attributes": list(obj.attributes or []),
+        "bbox_2d": list(obj.bbox_2d),
+        "mask_rle": obj.mask_rle,
+        "mask_size": list(obj.mask_size) if obj.mask_size else None,
+        "mask_area_ratio": obj.mask_area_ratio,
+        "mask_source": obj.mask_source,
+        "source": obj.source,
+    }
 
 
 class BundleVideoRecorder:
@@ -441,6 +554,28 @@ class AutonomousLoop(Node):
         self._boundary_tolerance_m = 0.05
         self._max_motion_steps = 0
         self._min_rotation_clearance_m = 0.0
+        self._local_detector = None
+        # Compatibility alias retained for diagnostics/tests that inspect the
+        # old Grounded-SAM lifecycle name.  Runtime ownership is generic now.
+        self._gsam_detector: GroundedSAMSubprocessDetector | None = None
+        # 常驻 worker 只有一条 stdin/stdout 管道；quick 快路径与后台 semantic
+        # 线程会并发调用 _detect，必须串行化，否则竞态创建两个 worker。
+        self._detect_lock = threading.Lock()
+        # Quick 与后台语义会请求同一张稳定图像。保存最近几帧的原始检测结果，
+        # 避免在单 worker 的锁内把 Grounded-SAM 对同帧重复运行一遍。
+        # 键的**形态**由 `grounded_sam_subprocess.detection_cache_key` 决定
+        # （路径 + mtime + size + prompt + **词槽集**），不在这里复述一遍：
+        # 注解写死成旧的 4 元组（没有词槽）会让"同一 prompt 在两个槽集下是两次
+        # 不同的检测"这件事在类型上看着就不成立 —— 而那正是 §5.1.4 的判据。
+        self._detect_cache: OrderedDict[tuple, list[dict]] = OrderedDict()
+        # RAM++ 场景词缓存。RAM++ 回答的是「当前视野大致有哪些类别」，
+        # 不是 tracking，所以按 ram_scene_tag_interval_seconds 限频，不每帧跑。
+        self._cached_ram_terms: list[str] = []
+        self._last_ram_tag_time: float = 0.0
+        # §20 VLM 目标扫描兜底的触发计数：连续多少次检测没出现 target-like 候选，
+        # 以及上一次整帧扫描的时刻。
+        self._target_sweep_empty_cycles = 0
+        self._last_target_sweep_time: float = 0.0
 
         self._client = ActionClient(self, MotionCommand, "/go2w/motion")
         self._arm_client = self.create_client(SetBool, "/go2w/arm")
@@ -477,6 +612,21 @@ class AutonomousLoop(Node):
         self._rotation_lease_path = ""
         self._rotation_lease_error = ""
         self._armed_by_runner = False
+        # In-process wiring of the cmd_vel safety gate (see cmd_vel_gate.py).
+        # Defaults to off, which makes this byte-for-byte the previous
+        # behaviour; "audit" records a verdict per command without blocking,
+        # "enforce" refuses the command.  Read from the environment so a single
+        # run can be switched without touching the WebUI's parameter plumbing.
+        raw_gate_mode = os.environ.get(GATE_ENV_VAR)
+        self._cmd_vel_gate_mode = resolve_cmd_vel_gate_mode(raw_gate_mode)
+        if raw_gate_mode and self._cmd_vel_gate_mode == MODE_OFF:
+            self.get_logger().warning(
+                f"unknown {GATE_ENV_VAR}={raw_gate_mode!r}; gate disabled"
+            )
+        elif self._cmd_vel_gate_mode != MODE_OFF:
+            self.get_logger().warning(
+                f"cmd_vel gate wired in-process in {self._cmd_vel_gate_mode!r} mode"
+            )
         # Breadcrumb-safe backward recovery: the most recently confirmed
         # forward corridor is the only autonomous reverse evidence available.
         self._breadcrumb: dict[str, Any] | None = None
@@ -643,7 +793,7 @@ class AutonomousLoop(Node):
         self.get_logger().error(f"timeout waiting for {label}")
         return False
 
-    def _safety_ok(self, step: str | None = None) -> tuple[bool, str]:
+    def _safety_ok(self, step: str | None = None, *, require_front_clearance: bool = True) -> tuple[bool, str]:
         if (
             self._odom_discontinuity_monotonic is not None
             and time.monotonic() - self._odom_discontinuity_monotonic < 5.0
@@ -654,6 +804,13 @@ class AutonomousLoop(Node):
         if int(self._sport.mode) != 1 or int(self._sport.error_code) != 0:
             return False, (f"robot mode={self._sport.mode} "
                            f"error={self._sport.error_code}")
+        if not require_front_clearance:
+            # Nav2 chooses a map path (possibly a turn away from a nearby
+            # obstacle). Its backend checks that path before authorizing any
+            # motion; the collision monitor checks the resulting velocities.
+            # A scalar straight-ahead test cannot judge that path, and must
+            # not prevent a read-only observation/planning session either.
+            return (True, "") if self._lidar_fresh is True else (False, "LiDAR is stale")
         if step is not None and step.startswith("b"):
             backward = self._backward_safety_ok()
             if not backward.allowed:
@@ -667,6 +824,54 @@ class AutonomousLoop(Node):
         if not lidar.allowed:
             return False, lidar.reason
         return True, ""
+
+    def _run_cmd_vel_gate(self, step, goal, index, rotation_inputs) -> dict:
+        """Judge one about-to-be-sent command with bridge_core, and record it.
+
+        Called from _execute_step after the goal is built and before it is sent,
+        which is the only point where the exact command exists.  The record is
+        written in both audit and enforce mode, so the verdict on the real path
+        is observable either way; only enforce's caller acts on it.
+        """
+        sport = self._sport
+        safety = GateSafetyState(
+            # The gate is only reached when the operator turned it on, so its
+            # own master switch is on by construction.  The other five fields
+            # keep their fail-closed defaults: this robot has no honest source
+            # for them (see cmd_vel_gate.py).
+            execution_enabled=True,
+            lidar_fresh=bool(self._lidar_fresh),
+            rotation_clearance_valid=bool(rotation_inputs.valid),
+            robot_error_zero=bool(
+                sport is not None
+                and int(sport.mode) == 1
+                and int(sport.error_code) == 0
+            ),
+        )
+        gate = evaluate_cmd_vel_gate(
+            requested=requested_velocity_for_step(step, goal, self._max_yaw_rate),
+            # No command history exists in-process, so the shaping starts from
+            # rest.  The blockers -- which is what the gate decides on -- do not
+            # depend on this; only the shaped velocity does.
+            previous=GateVelocity(),
+            command_age_seconds=COMMAND_AGE_SECONDS,
+            dt_seconds=GATE_DT_SECONDS,
+            source=GATE_SOURCE,
+            safety=safety,
+        )
+        self._write({
+            "event": "cmd_vel_gate",
+            "index": index,
+            "step": step,
+            "mode": self._cmd_vel_gate_mode,
+            "allowed": gate["allowed"],
+            "reason": gate["reason"],
+            "blockers": gate["blockers"],
+            "shaped": gate["shaped"],
+            "cancel_active_action": gate["cancel_active_action"],
+            "host_s": self._host_s(),
+        })
+        return gate
 
     def _backward_safety_ok(self):
         """Breadcrumb-only reverse safety gate (fail closed)."""
@@ -758,7 +963,7 @@ class AutonomousLoop(Node):
         trigger (front too close / forward not confirmed).  It never retries
         the failed forward step and never executes without a valid breadcrumb.
         """
-        if not step.startswith("f"):
+        if getattr(self, "_disable_autonomous_reverse", False) or not step.startswith("f"):
             return
         upper = str(failure_reason or "").upper()
         if "MOTION_TIMEOUT" in upper or "EMERGENCY" in upper:
@@ -1149,6 +1354,22 @@ class AutonomousLoop(Node):
             else:
                 self.get_logger().error(f"unknown step {step}")
                 return False, f"unknown step {step}"
+            if self._cmd_vel_gate_mode != MODE_OFF:
+                gate = self._run_cmd_vel_gate(step, goal, index, rotation_inputs)
+                if not gate["allowed"] and self._cmd_vel_gate_mode == MODE_ENFORCE:
+                    reason = f"cmd_vel gate refused: {gate['reason']}"
+                    self._write({
+                        "event": "cmd_vel_gate_reject",
+                        "index": index,
+                        "step": step,
+                        "reason": reason,
+                        "blockers": gate["blockers"],
+                        "host_s": self._host_s(),
+                    })
+                    self.get_logger().error(
+                        f"cmd_vel gate refused step {step}: {gate['reason']}"
+                    )
+                    return False, reason
             try:
                 result = self._send_goal(goal)
             except MotionGoalTimeout as exc:
@@ -1294,7 +1515,7 @@ class AutonomousLoop(Node):
         reach_area_ratio: float,
     ) -> None:
         env = self._load_detector_env()
-        prompt = PROMPT_MAP.get(target.strip(), f"{target.strip()}. {target.strip()} object")
+        prompt = target_prompt(target)
         self._write({"event": "camera_guided_start", "host_s": self._host_s(),
                      "target": target, "prompt": prompt})
         started = time.monotonic()
@@ -1310,7 +1531,7 @@ class AutonomousLoop(Node):
                 image_path, frame_id = self._latest_bundle_image(spool_root)
                 self._write({"event": "camera_bundle", "index": index,
                              "frame_id": frame_id, "host_s": self._host_s()})
-                objects = self._detect(image_path, prompt, env)
+                objects = self._detect(image_path, prompt, env, frame_id=frame_id)
             except (RuntimeError, OSError, ValueError) as exc:
                 self._write({"event": "detection_error", "index": index,
                              "error": str(exc), "host_s": self._host_s()})
@@ -1418,9 +1639,7 @@ class AutonomousLoop(Node):
         reach_area_ratio: float,
     ) -> None:
         env = self._load_detector_env()
-        prompt = PROMPT_MAP.get(
-            target.strip(), f"{target.strip()}. {target.strip()} object"
-        )
+        prompt = target_prompt(target)
         origin = self._odom_snapshot()
         scan = self._scan_sequence()
         scan_index = 0
@@ -1473,7 +1692,7 @@ class AutonomousLoop(Node):
                 image_path, frame_id = self._latest_bundle_image(spool_root)
                 self._write({"event": "camera_bundle", "index": index,
                              "frame_id": frame_id, "host_s": self._host_s()})
-                objects = self._detect(image_path, prompt, env)
+                objects = self._detect(image_path, prompt, env, frame_id=frame_id)
             except (RuntimeError, OSError, ValueError) as exc:
                 self._write({"event": "detection_error", "index": index,
                              "error": str(exc), "host_s": self._host_s()})
@@ -1552,7 +1771,9 @@ class AutonomousLoop(Node):
             )
             if area_ratio >= reach_area_ratio:
                 try:
-                    verification = self._verify_target(image_path, bbox, env)
+                    verification = self._verify_target(
+                        image_path, bbox, env, frame_id=frame_id
+                    )
                 except (RuntimeError, OSError, ValueError) as exc:
                     verification = {
                         "object_name_zh": "复核失败",
@@ -1637,9 +1858,7 @@ class AutonomousLoop(Node):
         reach_area_ratio: float,
     ) -> None:
         env = self._load_detector_env()
-        prompt = PROMPT_MAP.get(
-            target.strip(), f"{target.strip()}. {target.strip()} object"
-        )
+        prompt = target_prompt(target)
         origin = self._odom_snapshot()
         start_yaw = origin[2]
         started = time.monotonic()
@@ -1668,7 +1887,7 @@ class AutonomousLoop(Node):
                 break
             try:
                 image_path, frame_id = self._latest_bundle_image(spool_root)
-                objects = self._detect(image_path, prompt, env)
+                objects = self._detect(image_path, prompt, env, frame_id=frame_id)
             except (RuntimeError, OSError, ValueError) as exc:
                 self._write({"event": "detection_error", "index": index,
                              "error": str(exc), "host_s": self._host_s()})
@@ -1800,7 +2019,7 @@ class AutonomousLoop(Node):
                 break
             try:
                 image_path, frame_id = self._latest_bundle_image(spool_root)
-                objects = self._detect(image_path, prompt, env)
+                objects = self._detect(image_path, prompt, env, frame_id=frame_id)
             except (RuntimeError, OSError, ValueError) as exc:
                 self._write({"event": "detection_error", "index": index,
                              "error": str(exc), "host_s": self._host_s()})
@@ -1853,7 +2072,9 @@ class AutonomousLoop(Node):
             )
             if area_ratio >= reach_area_ratio:
                 try:
-                    verification = self._verify_target(image_path, bbox, env)
+                    verification = self._verify_target(
+                        image_path, bbox, env, frame_id=frame_id
+                    )
                 except (RuntimeError, OSError, ValueError) as exc:
                     verification = {
                         "object_name_zh": "复核失败",
@@ -1936,9 +2157,7 @@ class AutonomousLoop(Node):
     ) -> None:
         """Run the formal app-layer state machine with the LLM workers."""
         env = self._load_detector_env()
-        prompt = PROMPT_MAP.get(
-            target.strip(), f"{target.strip()}. {target.strip()} object"
-        )
+        prompt = target_prompt(target)
         state: dict[str, object] = {"image_path": None}
         step_index = [0]
         settings = get_settings()
@@ -1955,9 +2174,16 @@ class AutonomousLoop(Node):
         )
         observation_memory: list[dict] = []
         semantic_observer = None
+        # 目标画像：语义观察、VLM 目标扫描兜底（§18）、以及关系裁剪（§15.3）都要用，
+        # 所以提到 semantic_enabled 分支外面。
+        # 必须走 LLM 解析：§14/§15 要求画像里有颜色/上下文/关系（「挂着书包的椅子」
+        # → base=chair + context=backpack），确定性兜底解析不出这些词，
+        # GroundingDINO 就只会搜 chair、搜不到 backpack。解析失败时
+        # resolve() 内部自动退回确定性画像，等于维持原行为。
+        profile = TargetProfileResolver(settings=settings).resolve(target, use_llm=True)
+        self._target_profile = profile
 
         if semantic_enabled:
-            profile = TargetProfileResolver().resolve(target, use_llm=False)
             semantic_controller = SemanticSearchController(
                 profile,
                 backend=str(getattr(self, "_search_reasoner", "hybrid")),
@@ -1992,6 +2218,9 @@ class AutonomousLoop(Node):
                 )
                 if quick_reuse is not None:
                     return quick_reuse
+                scene_reuse = self._ram_scene_payload(image_path, state)
+                if scene_reuse is not None:
+                    return scene_reuse
                 python = env.get(
                     "SILICONFLOW_PYTHON",
                     env.get(
@@ -2037,7 +2266,14 @@ class AutonomousLoop(Node):
             state["frame_id"] = frame_id
             self._write({"event": "camera_bundle", "frame_id": frame_id,
                          "host_s": self._host_s()})
-            objects = self._detect(image_path, prompt, env)
+            objects = self._detect(image_path, prompt, env, frame_id=frame_id)
+            # §17：这一帧的检测结果就是普通场景物体来源，留给语义观察复用。
+            state["detected_objects"] = objects
+            state["detected_image_path"] = image_path
+            # §18：GroundingDINO 连续空手时，低频问一次整帧 VLM 兜底。
+            objects = [*objects, *self._vlm_target_sweep(
+                image_path, objects, profile, frame_id=frame_id
+            )]
             detections = []
             for item in objects:
                 bbox = [
@@ -2063,7 +2299,32 @@ class AutonomousLoop(Node):
             image_path = state["image_path"]
             if not isinstance(image_path, str):
                 raise RuntimeError("no image available for verification")
-            result = self._verify_target(image_path, list(bbox), env)
+            # §15.3：关系目标（如「挂着书包的椅子」）不能只裁椅子紧边界，
+            # 要把同帧邻近的 context 物体（背包）并进裁剪框，VLM 才看得到关系证据。
+            # 非关系目标 _verification_region 原样返回，等于没变。
+            # 注意 object_id 必须给：_verification_region 靠
+            # `obj.object_id == candidate.object_id` 跳过候选自己，
+            # 两边都缺这个键就是 None == None，会把所有物体全跳过。
+            frame_objects = _detection_frame_objects(
+                state.get("detected_objects") or []
+            )
+            candidate_id = next(
+                (
+                    item["object_id"]
+                    for item in frame_objects
+                    if item["bbox"] == list(bbox)
+                ),
+                "",
+            )
+            verify_bbox, _context = _verification_region(
+                {"object_id": candidate_id, "bbox": list(bbox)},
+                frame_objects,
+                profile,
+            )
+            result = self._verify_target(
+                image_path, list(verify_bbox or bbox), env,
+                frame_id=state.get("frame_id", ""),
+            )
             return VerificationResult(
                 object_name_zh=result.get("object_name_zh", ""),
                 is_target=bool(result.get("is_target", False)),
@@ -2297,67 +2558,253 @@ class AutonomousLoop(Node):
     def _is_stale_error(exc: Exception) -> bool:
         return "stale" in str(exc).lower()
 
-    def _detect(self, image_path: str, prompt: str, env: dict[str, str]) -> list[dict]:
+    def _detect(self, image_path: str, prompt: str, env: dict[str, str],
+                *, frame_id: Any = "", slots: Any = None) -> list[dict]:
+        # 帧号由**调用点显式带进来**（每个调用点手里本来就有），再顺着
+        # `_detect_grounded_sam` → `detect_with_dynamic_terms` → 请求体 →
+        # worker diagnostics 走一趟。
+        #
+        # 以前这里还顺手写过一个 `self._latest_frame_id` 给下游读。那个字段已经
+        # **撤销**（独立复审 F1）：它是跨线程共享的可变状态，而赋值发生在
+        # `_detect_lock` **之前**，所以并发的 quick / 后台 semantic 抢起来时，
+        # 读到的未必是本次调用的帧 —— 拿它当"本次源帧"是错的。凡是要帧号的地方
+        # （`_detect_llm` / `_vlm_target_sweep` / `_verify_target`）现在都由调用点
+        # 把帧号一路传下去，谁也不读全局。
         if getattr(self, "_detector", "grounded_sam") == "llm":
-            return self._detect_llm(image_path, env)
-        root = env["GROUNDED_SAM_ROOT"]
-        python = env.get(
-            "GROUNDED_SAM_PYTHON",
-            sys.executable,
+            return self._detect_llm(image_path, env, frame_id=frame_id)
+        # 常驻 GroundedSAM worker 只有一条 stdin/stdout 管道，而 quick 快路径与
+        # 后台 semantic 线程会并发调用这里；不串行化会竞态创建两个 worker 并
+        # 互相抢管道，表现为 pipe 写满死锁。
+        backend = getattr(self, "_detector", "grounded_sam")
+        settings = get_settings()
+        model_id = (
+            settings.yoloe_model if backend == "yoloe_seg"
+            else settings.grounding_dino_checkpoint
         )
-        worker = PROJECT_ROOT / "app/detectors/grounded_sam_worker.py"
-        command = [
-            python,
-            str(worker),
-            "--image", image_path,
-            "--output", str(PROJECT_ROOT / "runtime/go2w/detection_result.json"),
-            "--root", root,
-            "--text-prompt", prompt,
-            "--grounding-config",
-            env.get("GROUNDING_DINO_CONFIG",
-                    "grounding_dino/groundingdino/config/"
-                    "GroundingDINO_SwinT_OGC_local.py"),
-            "--grounding-checkpoint",
-            env.get("GROUNDING_DINO_CHECKPOINT",
-                    "gdino_checkpoints/groundingdino_swint_ogc.pth"),
-            "--box-threshold",
-            env.get("GROUNDING_DINO_BOX_THRESHOLD", "0.12"),
-            "--text-threshold",
-            env.get("GROUNDING_DINO_TEXT_THRESHOLD", "0.10"),
-            "--sam2-config", "configs/sam2.1/sam2.1_hiera_t.yaml",
-            "--sam2-checkpoint", "checkpoints/sam2.1_hiera_tiny.pt",
-            "--max-objects", "20",
-            "--device", "auto",
-            "--disable-sam2",
-        ]
+        cache_key = detection_cache_key(
+            image_path, prompt, slots, backend=backend, model_id=model_id
+        )
+        with self._detect_lock:
+            if cache_key is not None and cache_key in self._detect_cache:
+                self._detect_cache.move_to_end(cache_key)
+                return deepcopy(self._detect_cache[cache_key])
+            objects = self._detect_local_structured(
+                image_path, prompt, env, frame_id=frame_id, slots=slots
+            )
+            if cache_key is not None:
+                self._detect_cache[cache_key] = deepcopy(objects)
+                if len(self._detect_cache) > 3:
+                    self._detect_cache.popitem(last=False)
+            return objects
+
+    def _detect_local_structured(
+        self, image_path: str, prompt: str, env: dict[str, str],
+        *, frame_id: Any = "", slots: Any = None,
+    ) -> list[dict]:
+        detector = self._ensure_local_detector(env)
+        # prompt 是 PROMPT_MAP 的点分英文词表（如 "phone. cellphone. mobile
+        # phone"）。拆成词表作为 dynamic_terms 传入，让常驻 worker 用同一份
+        # 词表做 grounding（§44 目标 1：模型常驻，不再每次 subprocess 重载）。
+        terms = [t.strip() for t in prompt.replace("。", ".").split(".") if t.strip()]
+        objects = detector.detect_with_dynamic_terms(
+            image_path, prompt, terms, self._ram_scene_terms(detector, image_path),
+            frame_id=str(frame_id),
+            slots=None if slots is None else frozenset(slots),
+        )
+        self._write_detector_diagnostics(detector, frame_id=frame_id)
+        return [_gsam_to_dict(obj) for obj in objects]
+
+    def _write_detector_diagnostics(self, detector, *, frame_id: Any = "") -> None:
+        """把 worker 回填的**生效值**与计数落进事件流（计划书 §4.1.5）。
+
+        为什么要有这一条：`DETECTION_*` 那几个开关的生效值要经过
+        settings → 请求体 → worker argparse 默认值 → 请求覆盖 四层，任何一层
+        写错都表现为"看着配了、其实没生效"，而且**不报错**（本仓库的老毛病）。
+        只有 worker 自己回填的数字是可信的。分项耗时（`stage_ms`）只在
+        `DETECTION_PROFILE_ENABLED=true` 时才有 —— 它会给每个阶段插 CUDA 同步。
+
+        三条绑定规则（独立审查 R2）：帧号由调用点显式传入（不读"最近一帧"的
+        全局状态）；一帧的**全部** worker 请求都记下来（高召回重试各算一次），
+        不是只留 `last_diagnostics`；某次响应没带诊断时明确标成"没有"，不拿
+        上一条的历史值冒充这一次的生效值。实现与逐条测试都在
+        `app/detectors/grounded_sam_subprocess.diagnostics_event_payload()` ——
+        放那个模块是因为它只读 detector 的状态，而本文件依赖 rclpy，在宿主
+        .venv 里 import 不进来，判据留在这里就只能靠读源码"验证"。
+        """
+        payload = diagnostics_event_payload(detector, frame_id=frame_id)
+        if payload is None:
+            return
+        payload["host_s"] = self._host_s()
+        self._write(payload)
+
+    def _ram_scene_terms(
+        self, detector, image_path: str
+    ) -> list[str]:
+        """低频问一次 RAM++「这一帧有哪些类别」，给 GroundingDINO 扩词。
+
+        目标词（PROMPT_MAP）走 dynamic_terms，RAM 词走独立槽位，两者不抢名额。
+        """
+        settings = get_settings()
+        backend = getattr(self, "_detector", "grounded_sam")
+        if not detector_capabilities(backend).ram_scene_terms:
+            return []
+        if not settings.enable_ram_plus:
+            return []
+        now = time.monotonic()
+        if now - self._last_ram_tag_time < settings.ram_scene_tag_interval_seconds:
+            return self._cached_ram_terms
+        self._cached_ram_terms = detector.discover_scene_terms(image_path)
+        self._last_ram_tag_time = now
+        return self._cached_ram_terms
+
+    def _ram_scene_payload(self, image_path: str, state: dict) -> dict | None:
+        """§17：Grounded-SAM + RAM++ 模式下，普通场景物体由检测结果提供。
+
+        RAM++ 扩词 + GroundingDINO 已经在每一帧列出可见物体了，再花一次 VLM
+        去「列出画面所有东西」是白跑（§16 也要求普通物体不进 VLM）。
+        只要这一帧真的跑过检测就接管 —— 检测结果为空就是空场景，那也是
+        检测器的结论，不该再去问 VLM 一遍（§64：full-scene VLM enumeration = 0）。
+        只有「这一帧还没跑过检测」才返回 None 走原路径。
+        """
+        if getattr(self, "_detector", "grounded_sam") != "grounded_sam":
+            return None
+        if not get_settings().enable_ram_plus:
+            return None
+        if state.get("detected_image_path") != image_path:
+            return None
+        objects = state.get("detected_objects") or []
+        frame_id = str(state.get("frame_id", "semantic_live"))
+        return {
+            "scene_objects": objects,
+            "scene_relations": [],
+            "scene_summary_zh": (
+                "场景物体：" + "、".join(
+                    str(item.get("label_zh") or item.get("label") or "object")
+                    for item in objects[:12]
+                )
+            ) if objects else "本帧检测未发现物体。",
+            "image_path": image_path,
+            "frame_id": frame_id,
+            "source": "grounded_sam_ram_scene_objects",
+            "semantic_status": SEMANTIC_STATUS_FRESH_QUICK,
+            "semantic_quality": "grounded_sam_scene_objects",
+            "semantic_source_frame_id": frame_id,
+            "semantic_capture_timestamp": time.time(),
+            "semantic_completed_timestamp": time.time(),
+            "semantic_age_ms": 0.0,
+        }
+
+    def _vlm_target_sweep(
+        self, image_path: str, objects: list[dict], profile: TargetProfile,
+        *, frame_id: Any = "",
+    ) -> list[dict]:
+        """§18–§22：RAM++/GroundingDINO 连续空手时，低频问一次整帧 VLM 兜底。
+
+        问的不是「列出画面所有东西」，而是「整张图里有没有符合 TargetProfile
+        的目标（含稀有类别、颜色、属性、关系），有就指出候选区域」。
+        复用现有 quick 模式（§19 不新增 daemon、不新增 mode），VLM 只产生候选，
+        不宣布任务完成；候选带 bbox 回到现有 crop verification 链路。
+        """
+        settings = get_settings()
+        if getattr(self, "_detector", "grounded_sam") != "grounded_sam":
+            return []  # llm 模式每帧本来就在问 VLM，再扫一遍是重复
+        if not settings.enable_ram_plus:
+            return []  # §17 的降级只在 Grounded-SAM + RAM++ 模式下生效
+        run_sweep, self._target_sweep_empty_cycles, self._last_target_sweep_time = (
+            decide_target_sweep(
+                has_target_like=_has_target_like(objects, profile),
+                empty_cycles=self._target_sweep_empty_cycles,
+                last_sweep_time=self._last_target_sweep_time,
+                now=time.monotonic(),
+                empty_cycles_threshold=settings.vlm_target_sweep_empty_cycles,
+                interval_seconds=settings.vlm_target_sweep_interval_seconds,
+            )
+        )
+        if not run_sweep:
+            return []
         try:
-            completed = subprocess.run(
-                command,
-                cwd=root,
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=150.0,
-                check=False,
+            sweep_timeout = bounded_vlm_timeout(
+                float(settings.vlm_runtime_quick_timeout_seconds),
+                getattr(self, "_semantic_session_deadline_monotonic", None),
             )
-        except subprocess.TimeoutExpired as exc:
-            raise PerceptionFailure(
-                "grounded_sam detector timed out",
-                code="GROUNDED_SAM_TIMEOUT",
-                recoverable=True,
-                detail=str(exc),
-            ) from exc
-        if completed.returncode != 0:
-            raise PerceptionFailure(
-                f"detector failed rc={completed.returncode}: "
-                f"{completed.stderr[-400:]}",
-                code="DETECTOR_ERROR",
-                recoverable=True,
+        except TimeoutError:
+            return []
+        payload = self._daemon_vlm_request(
+            "quick",
+            image_path,
+            self._target,
+            extra_instructions=(
+                profile.prompt_context()
+                + " 这是整帧兜底扫描：请特别留意稀有类别、颜色、属性与关系，"
+                "若可能存在目标，指出候选区域与可见证据；不要因为类别罕见就判不存在。"
+            ),
+            model=getattr(self, "_llm_model", ""),
+            frame_id=str(frame_id),
+            timeout=sweep_timeout,
+        )
+        if not payload:
+            return []
+        candidates = [
+            item
+            for item in payload.get("objects") or []
+            if isinstance(item, dict) and item.get("bbox_2d")
+        ]
+        if candidates:
+            self._write({
+                "event": "vlm_target_sweep_candidate",
+                "count": len(candidates),
+                "frame_id": str(frame_id),
+                "host_s": self._host_s(),
+            })
+        return candidates
+
+    def _ensure_gsam_detector(self, env: dict[str, str]) -> GroundedSAMSubprocessDetector:
+        # 注意：方法名不能叫 _gsam_detector —— __init__ 里的同名实例属性会遮蔽
+        # 它，调用 self._gsam_detector(env) 会变成调用 None。
+        if self._gsam_detector is None:
+            settings = get_settings()
+            # 真机上复制的 .env 可能让 GROUNDED_SAM_PYTHON/GROUNDED_SAM_ROOT
+            # 指向不存在的宿主路径。复用 _load_detector_env 已清理的值兜底。
+            if env.get("GROUNDED_SAM_PYTHON"):
+                settings = replace(
+                    settings, grounded_sam_python=env["GROUNDED_SAM_PYTHON"]
+                )
+            if env.get("GROUNDED_SAM_ROOT"):
+                settings = replace(
+                    settings, grounded_sam_root=env["GROUNDED_SAM_ROOT"]
+                )
+            self._gsam_detector = GroundedSAMSubprocessDetector(
+                settings=settings,
+                # §2.2/§15：目标词表必须由 TargetProfile 决定（base + 颜色 + 上下文），
+                # 否则「挂着书包的椅子」只会搜 chair，backpack 永远进不了 prompt。
+                target_profile=getattr(self, "_target_profile", None),
             )
-        output_path = PROJECT_ROOT / "runtime/go2w/detection_result.json"
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
-        return list(payload.get("objects", []))
+        return self._gsam_detector
+
+    def _ensure_local_detector(self, env: dict[str, str]):
+        backend = getattr(self, "_detector", "grounded_sam")
+        if self._local_detector is None:
+            settings = get_settings()
+            if backend == "grounded_sam":
+                if env.get("GROUNDED_SAM_PYTHON"):
+                    settings = replace(settings, grounded_sam_python=env["GROUNDED_SAM_PYTHON"])
+                if env.get("GROUNDED_SAM_ROOT"):
+                    settings = replace(settings, grounded_sam_root=env["GROUNDED_SAM_ROOT"])
+            self._local_detector = create_local_detector(
+                backend,
+                settings,
+                target_profile=getattr(self, "_target_profile", None),
+            )
+            if backend == "grounded_sam":
+                self._gsam_detector = self._local_detector
+        return self._local_detector
+
+    def _close_detector(self) -> None:
+        detector = self._local_detector or self._gsam_detector
+        self._local_detector = None
+        self._gsam_detector = None
+        if detector is not None:
+            detector.close()
 
     @staticmethod
     def _daemon_vlm_request(
@@ -2370,6 +2817,7 @@ class AutonomousLoop(Node):
         model: str = "",
         frame_id: str = "",
         timeout: float = 120.0,
+        raise_timeout: bool = False,
     ) -> dict | None:
         """Try the long-running VLM daemon; return None if unavailable/failed."""
         try:
@@ -2399,10 +2847,15 @@ class AutonomousLoop(Node):
             if not response.ok:
                 return None
             return response.payload
+        except TimeoutError:
+            if raise_timeout:
+                raise
+            return None
         except Exception:
             return None
 
-    def _detect_llm(self, image_path: str, env: dict[str, str]) -> list[dict]:
+    def _detect_llm(self, image_path: str, env: dict[str, str],
+                    *, frame_id: Any = "") -> list[dict]:
         # 验收 D 注入开关（默认关闭）：GO2W_QUICK_TIMEOUT_INJECT_ONCE=1 时
         # 第一次 Quick 调用模拟一次可恢复超时，验证 explorer retry 后继续。
         if os.environ.get("GO2W_QUICK_TIMEOUT_INJECT_ONCE", "") == "1" \
@@ -2417,15 +2870,30 @@ class AutonomousLoop(Node):
                 recoverable=True,
                 detail="GO2W_QUICK_TIMEOUT_INJECT_ONCE=1",
             )
-        quick_timeout = float(get_settings().vlm_runtime_quick_timeout_seconds)
-        daemon_payload = self._daemon_vlm_request(
-            "quick",
-            image_path,
-            self._target,
-            model=getattr(self, "_llm_model", ""),
-            frame_id=str(getattr(self, "_latest_frame_id", "")),
-            timeout=quick_timeout,
-        )
+        try:
+            quick_timeout = bounded_vlm_timeout(
+                float(get_settings().vlm_runtime_quick_timeout_seconds),
+                getattr(self, "_semantic_session_deadline_monotonic", None),
+            )
+            daemon_payload = self._daemon_vlm_request(
+                "quick",
+                image_path,
+                self._target,
+                model=getattr(self, "_llm_model", ""),
+                frame_id=str(frame_id),
+                timeout=quick_timeout,
+                raise_timeout=True,
+            )
+        except TimeoutError as exc:
+            # A daemon timeout is already a completed provider attempt.  Do
+            # not start a second subprocess with another full timeout: that
+            # used to let one observation exceed the whole search budget.
+            raise PerceptionFailure(
+                "SiliconFlow vision API timed out",
+                code="QUICK_VLM_TIMEOUT",
+                recoverable=True,
+                detail=str(exc),
+            ) from exc
         if daemon_payload is not None:
             self._last_llm_detection_payload = daemon_payload
             return list(daemon_payload.get("objects", []))
@@ -2484,23 +2952,42 @@ class AutonomousLoop(Node):
         return list(payload.get("objects", []))
 
     def _verify_target(self, image_path: str, bbox: list[float],
-                       env: dict[str, str]) -> dict:
+                       env: dict[str, str], *, frame_id: Any = "") -> dict:
         """Ask the vision LLM whether the object inside bbox is the target."""
-        daemon_payload = self._daemon_vlm_request(
-            "verify",
-            image_path,
-            self._target,
-            bbox=list(bbox),
-            model=getattr(self, "_llm_model", ""),
-            frame_id=str(getattr(self, "_latest_frame_id", "")),
-            timeout=20.0,
+        verify_timeout = bounded_vlm_timeout(
+            float(get_settings().vlm_runtime_verify_timeout_seconds),
+            getattr(self, "_semantic_session_deadline_monotonic", None),
         )
+        try:
+            daemon_payload = self._daemon_vlm_request(
+                "verify",
+                image_path,
+                self._target,
+                bbox=list(bbox),
+                model=getattr(self, "_llm_model", ""),
+                frame_id=str(frame_id),
+                timeout=verify_timeout,
+                raise_timeout=True,
+            )
+        except TimeoutError as exc:
+            # The daemon may still be processing this request. Starting an
+            # independent subprocess here would duplicate the provider call.
+            raise PerceptionFailure(
+                "SiliconFlow verification timed out",
+                code="VERIFY_TIMEOUT",
+                recoverable=True,
+                detail=str(exc),
+            ) from exc
         if daemon_payload is not None:
             return {
                 "object_name_zh": str(daemon_payload.get("object_name_zh") or ""),
                 "is_target": bool(daemon_payload.get("is_target", False)),
                 "confidence": float(daemon_payload.get("confidence", 0.0)),
                 "reason_zh": str(daemon_payload.get("reason_zh") or ""),
+                # 判定来源（local / cloud / cloud-after-local-failure）。本地复核
+                # 带云端回落之后，一次 run 里可能混着两套 provider 判的帧，而两者
+                # 精度不同 —— 不记下来，结果就没法追溯，也没法解释。
+                "provider": str(daemon_payload.get("_provider") or ""),
             }
         python = env.get(
             "SILICONFLOW_PYTHON",
@@ -2530,7 +3017,7 @@ class AutonomousLoop(Node):
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=float(get_settings().vlm_runtime_verify_timeout_seconds),
+                timeout=verify_timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
@@ -2553,6 +3040,7 @@ class AutonomousLoop(Node):
             "is_target": bool(payload.get("is_target", False)),
             "confidence": float(payload.get("confidence", 0.0)),
             "reason_zh": str(payload.get("reason_zh") or ""),
+            "provider": str(payload.get("_provider") or "cloud-subprocess"),
         }
 
     def run(self) -> int:
@@ -2844,10 +3332,10 @@ def main() -> None:
     parser.add_argument("--max-seconds", type=float, default=120.0)
     parser.add_argument(
         "--detector",
-        choices=("llm", "grounded_sam"),
+        choices=("llm", "grounded_sam", "yoloe_seg"),
         default="llm",
         help="detection backend: llm uses the SiliconFlow vision API "
-             "(default); grounded_sam uses local GroundingDINO",
+             "(default); grounded_sam and yoloe_seg use local structured detectors",
     )
     parser.add_argument(
         "--llm-model",
@@ -3184,6 +3672,10 @@ def main() -> None:
         # Foxy ActionClient is not owned by Node.destroy_node(); explicitly
         # destroy it before the node handle to avoid a late InvalidHandle
         # destructor and to release all Action graph entities deterministically.
+        try:
+            node._close_detector()
+        except Exception:
+            pass
         try:
             node._client.destroy()
         except Exception:

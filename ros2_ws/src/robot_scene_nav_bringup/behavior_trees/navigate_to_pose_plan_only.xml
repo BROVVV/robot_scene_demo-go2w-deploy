@@ -1,0 +1,22 @@
+<!-- 只规划模式（execution_enabled:=false）专用的行为树。
+
+     这棵树存在的唯一理由是**绕开一个 configure 阶段的死锁**：Foxy 的
+     nav2_behavior_tree::BtActionNode 在构造时就无条件调用
+     action_client_->wait_for_action_server()，而树是 bt_navigator 在 on_configure
+     里一次性构造出来的。带 FollowPath 的那棵树因此会去等 controller_server 的
+     follow_path —— 只规划模式下 controller_server 根本没起 —— 于是永久阻塞：
+
+       [bt_navigator] Waiting for "follow_path" action server      <- 日志到此为止
+       lifecycle_manager_plan_only 卡在 "Configuring bt_navigator"
+       planner_server 永远停在 inactive
+       global_costmap 的三层永不 activate，代价地图整张全 0（§3.2 的占据判定形同虚设）
+
+     症状是「一切都起来了、就绪检查也过了」，因为 ros2 lifecycle get 返回
+     `inactive [2]` 而就绪门当时写的是 `grep -q active` —— 子串匹配。
+
+     只规划模式下没有任何东西会发 NavigateToPose（执行链路是关的），所以这棵树
+     不需要可执行，只需要**能被构造出来**。执行模式仍然用
+     navigate_to_pose_robot_scene.xml。 -->
+<root main_tree_to_execute="MainTree"><BehaviorTree ID="MainTree">
+  <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased" server_timeout="20"/>
+</BehaviorTree></root>

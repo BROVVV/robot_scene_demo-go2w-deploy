@@ -1,7 +1,13 @@
 <!-- Humble-compatible behavior tree: prefer Nav2's packaged default unless customized. -->
 <root main_tree_to_execute="MainTree"><BehaviorTree ID="MainTree">
-  <RecoveryNode number_of_retries="6" name="NavigateRecovery">
-    <PipelineSequence><RateController hz="1.0"><ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/></RateController><FollowPath path="{path}" controller_id="FollowPath"/></PipelineSequence>
-    <ReactiveFallback><GoalUpdated/><RoundRobin><ClearEntireCostmap service_name="local_costmap/clear_entirely_local_costmap"/><ClearEntireCostmap service_name="global_costmap/clear_entirely_global_costmap"/><Wait wait_duration="5"/></RoundRobin></ReactiveFallback>
+  <!-- One local-costmap clear is enough for a transient observation.  Further
+       retries belong to the semantic planner, which can select another
+       frontier; repeating the same short goal allowed 0.15 m requests to
+       accumulate 0.40 m of controller hunting in the 2026-10-23 field run. -->
+  <RecoveryNode number_of_retries="1" name="NavigateRecovery">
+    <!-- Native Foxy ignores Humble default_server_timeout; explicit ports
+         preserve the configured project timeout on both distributions. -->
+    <PipelineSequence><RateController hz="1.0"><ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased" server_timeout="20"/></RateController><FollowPath path="{path}" controller_id="FollowPath" server_timeout="20"/></PipelineSequence>
+    <ReactiveFallback><GoalUpdated/><RoundRobin><ClearEntireCostmap service_name="local_costmap/clear_entirely_local_costmap" server_timeout="20"/><ClearEntireCostmap service_name="global_costmap/clear_entirely_global_costmap" server_timeout="20"/><Wait wait_duration="5" server_timeout="20"/></RoundRobin></ReactiveFallback>
   </RecoveryNode>
 </BehaviorTree></root>

@@ -1,0 +1,191 @@
+mapping:
+  mode: 2d
+mobility:
+  # Grounded-SAM takes roughly 2-3 s per frame on the live machine.  Requiring
+  # three observations plus a 15 cm radius made almost every object encountered
+  # while walking remain pending.  Two consistent observations still reject a
+  # one-frame hallucination while allowing passive mapping to make progress.
+  stable_observations: 2
+  stable_span_s: 1.0
+  stable_radius_m: 0.35
+  moving_distance_m: 0.25
+  moving_speed_mps: 0.15
+  moving_evidence: 2
+  map_jump_m: 0.15
+  map_jump_yaw_rad: 0.08
+  restable_span_s: 3.0
+  stale_after_s: 300
+scene_profile: industrial_park
+# The detector has a finite prompt budget.  Priority terms are present every
+# round; one landmark group rotates into the remaining slots.  No group is
+# silently truncated forever.
+detection_schedule:
+  max_terms_per_round: 16
+  rotate_every_rounds: 1
+  priority_terms: [pipe, pipeline, industrial pipe, green slime, slime, liquid leak, fluid spill]
+  profiles:
+    indoor:
+      groups:
+        - [person, dog, cat, chair, office chair, table, desk, sofa]
+        - [door frame, pillar, trash bin, fire extinguisher, cabinet]
+    industrial_park:
+      groups:
+        - [lamp post, fire hydrant, sign, electrical cabinet, pillar]
+        - [building entrance, door frame, building corner, fixed equipment]
+        - [tree trunk, tree]
+        - [storage tank, pipe support, valve, pump, equipment cabinet]
+        - [parked car, truck, trash bin, pallet, container, traffic cone]
+        - [person, dog, cat]
+# Compatibility fallback for older launch/config readers.
+detection_terms: [pipe, pipeline, industrial pipe, lamp post, fire hydrant, sign, electrical cabinet, pillar, building entrance, door frame, building corner, tree trunk, storage tank, pipe support, valve, pump, equipment cabinet, parked car, truck, trash bin, pallet, container, traffic cone, person, dog, cat]
+perception:
+  # 可通过启动器 --detector 或 REMOTE_MAPPING_DETECTOR 覆盖。
+  detector: grounded_sam
+  # Grounded-SAM uses RAM++ to discover the current frame's object vocabulary.
+  # Safety prompts remain resident; rotating profile terms are only fallback.
+  # The persistent-object filters below reject background/oversized regions.
+  use_ram_scene_terms: true
+  # The shared search detector intentionally runs at high recall (0.12).  A
+  # persistent map needs credible observations; use the same threshold as the
+  # semantic object gate before motion tracking and hazard confirmation.
+  min_detection_confidence: 0.35
+  # Near full-frame boxes in the robot run were floor/background regions
+  # labelled as "table".  Objects larger than this remain detector evidence
+  # in its own logs but are not accepted by the mapping sidecar.
+  max_bbox_area_ratio: 0.65
+target_watch:
+  enabled: true
+  # 与输入框中的人工目标并行：只要史莱姆/漏液增强分支产出候选，
+  # 就自动进入实时 VLM 复核；清空人工目标不会关闭这条安全通路。
+  auto_hazard:
+    enabled: true
+  max_target_terms: 6
+  max_anchor_terms: 4
+  reserve_scene_terms: 3
+  candidate:
+    min_score:
+      yoloe_seg: 0.20
+      grounded_sam: 0.12
+    max_bbox_area_ratio: 0.80
+    max_per_frame: 2
+    same_candidate_cooldown_s: 20
+    relation_max_center_distance_ratio: 0.65
+    relation_crop_margin_ratio: 0.08
+  verify:
+    enabled: true
+    socket_path: runtime/go2w/siliconflow_vlm.sock
+    max_inflight: 1
+    max_pending: 1
+    client_timeout_s: 12
+    max_calls_per_minute: 3
+    confirmation_min_confidence: 0.70
+    cache_ttl_s: 120
+    stop_after_first_object_confirmation: true
+    continue_after_hazard_confirmation: true
+  evidence:
+    max_files: 30
+    jpeg_quality: 92
+# YOLOE prompt-free 的 4585 类中，静态中文表不可能预先覆盖全部类别。未知类别
+# 先照常定位和建图，再把目标框异步送到 VLM 后台通道补中文名；推理主通路不等
+# VLM。成功名称只回写当前地图中的对应持久节点，并留下审计记录；不按 raw label
+# 跨节点或跨场景套用，避免一次 YOLOE 误分类污染后续真实物体。
+unknown_object_vlm:
+  enabled: true
+  socket_path: runtime/go2w/siliconflow_vlm.sock
+  cache_path: runtime/go2w/unknown_object_vlm_labels.json
+  evidence_dir: outputs/remote_control_mapping/runtime/unknown_object_vlm_evidence
+  max_pending: 16
+  max_calls_per_minute: 3
+  retry_cooldown_s: 120
+  client_timeout_s: 120
+  min_confidence: 0.65
+  evidence_max_files: 50
+topology:
+  near_distance_m: 3.0
+  near_exit_distance_m: 3.4
+  spatial_neighbor_distance_m: 4.5
+  max_near_edges: 4
+  bridge_extra_edges_per_node: 2
+  max_co_visible_edges: 4
+  show_view_relative_by_default: false
+  # 同帧相机关系阈值：二维框中心用于左右/上下，RGB-D 深度用于前后。
+  min_horizontal_separation: 0.10
+  min_vertical_separation: 0.10
+  min_depth_separation_m: 0.25
+  camera_near_distance_m: 0.90
+  integrated_place_view: true
+  place_sample_distance_m: 8.0
+  place_turn_sample_deg: 35.0
+  place_merge_distance_m: 2.0
+  place_max_continuity_gap_s: 20.0
+revisit:
+  semi_static_stale_after_s: 300
+  negative_min_interval_s: 1.0
+  semi_static_missing_observations: 3
+  semi_static_missing_span_s: 2.0
+  fixed_missing_observations: 5
+  fixed_missing_min_viewpoints: 2
+  background_clearance_m: 0.25
+  max_detection_distance_m: 8.0
+hazard:
+  enabled: true
+  demo_mode: true
+  allow_indoor_demo: true
+  confirm_observations: 2
+  evidence_window_frames: 3
+  evidence_window_s: 12
+  stale_review_after_s: 12
+  repeat_sound_cooldown_s: 30
+  track_rebind_window_s: 60
+  map_rebind_distance_m: 0.40
+  host_anchor_distance: 0.18
+  depth_localization:
+    pipe_surface_radius_px: 18
+    pipe_surface_min_points: 8
+    pipe_surface_max_mad_m: 0.12
+  # 史莱姆没有稳定外形。开放词汇模型负责语义召回，下面的轻量 HSV 分支
+  # 对荧光绿色块补漏并输出精确 mask；只接受管道附近色块。
+  # 如果现场换成其它颜色，只需调整 hsv_ranges，不需要改代码或训练模型。
+  visual_enhancement:
+    enabled: true
+    min_area_ratio: 0.0008
+    min_roi_area_ratio: 0.0015
+    min_valid_pixels: 12
+    min_standalone_area_ratio: 0.0015
+    max_area_ratio: 0.10
+    min_dimension_px: 6
+    small_morphology_kernel_px: 3
+    morphology_kernel_px: 5
+    max_candidates: 3
+    max_candidates_per_pipe: 2
+    pipe_context_margin_ratio: 0.03
+    pipe_roi_expand_px: 6
+    pipe_roi_expand_width_ratio: 0.20
+    min_pipe_surface_overlap: 0.25
+    min_local_colour_contrast: 18.0
+    pipe_context_max_age_s: 8.0
+    pipe_tracking_min_quality: 0.65
+    require_pipe_context_when_visible: true
+    # 实时回放中黄色墙面曾被模型误判成 fluid spill，因此报警必须同时有管道框。
+    require_pipe_context: true
+    require_semantic_context: true
+    # YOLOE-PF occasionally names a front-facing circular outlet "pipe bowl".
+    # Low-score aliases below are accepted only as mask-backed review context;
+    # they are not promoted into the persistent semantic object map.
+    pipe_labels: [pipe, pipeline, industrial pipe, water pipe, pipe bowl, 管道]
+    min_pipe_context_confidence: 0.10
+    max_pipe_context_bbox_area_ratio: 0.25
+    leak_prompt_labels: [green slime, slime, liquid leak, fluid spill]
+    hsv_ranges:
+      - name: fluorescent_green
+        lower: [32, 105, 70]
+        upper: [92, 255, 255]
+  rules:
+    - id: demo_slime_leak
+      enabled: true
+      # 只有 HSV 分支视觉核验后才会生成此标签；普通管道、绿色物体或模型
+      # 单独猜出的 leaking pipe 不会直接报警。
+      labels: [simulated liquid leak, simulated liquid leak candidate, 疑似管道液体泄漏]
+      prompt_labels: [green slime, slime, liquid leak, fluid spill]
+      display_name: 模拟泄漏危险信号
+      color: null

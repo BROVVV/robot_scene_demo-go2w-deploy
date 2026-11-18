@@ -13,10 +13,10 @@
 
 // Unit tests for the manufacturer-geometry transform derivation (plan §10).
 
+#include <gtest/gtest.h>
+
 #include <cmath>
 #include <string>
-
-#include <gtest/gtest.h>
 
 #include <go2w_plain_slam_bridge/transform_utils.hpp>
 

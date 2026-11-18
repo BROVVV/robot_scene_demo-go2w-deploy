@@ -13,9 +13,8 @@ lidar:
         device_ip_address: 192.168.123.20
         udp_port: 2368
         ptc_port: 9347
-        # The sensor sends unicast to this workstation; the official driver
-        # requires this field to be empty when no multicast group is used.
-        multicast_ip_address: ""
+        # The sensor sends to this group; both hosts join on their own wired IP.
+        multicast_ip_address: 239.192.0.20
         use_ptc_connected: true
         host_ptc_port: 0
         correction_file_path: ""

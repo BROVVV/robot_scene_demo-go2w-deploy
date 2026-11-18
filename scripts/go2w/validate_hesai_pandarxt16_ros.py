@@ -19,12 +19,42 @@ from rclpy.qos import (
     QoSProfile,
     ReliabilityPolicy,
 )
-from sensor_msgs.msg import PointCloud2
-from sensor_msgs_py import point_cloud2
+from sensor_msgs.msg import PointCloud2, PointField
 
 
 REQUIRED_FIELDS = {"x", "y", "z", "intensity", "ring", "timestamp"}
 EXPECTED_RINGS = set(range(16))
+POINT_FIELD_DTYPES = {
+    PointField.INT8: "i1",
+    PointField.UINT8: "u1",
+    PointField.INT16: "i2",
+    PointField.UINT16: "u2",
+    PointField.INT32: "i4",
+    PointField.UINT32: "u4",
+    PointField.FLOAT32: "f4",
+    PointField.FLOAT64: "f8",
+}
+
+
+def point_records(message: PointCloud2) -> np.ndarray:
+    """View ROS point bytes directly; Foxy lacks Humble's NumPy read_points API."""
+    selected = [
+        field for field in message.fields
+        if field.name in {"x", "y", "z", "ring", "timestamp"}
+    ]
+    byte_order = ">" if message.is_bigendian else "<"
+    dtype = np.dtype({
+        "names": [field.name for field in selected],
+        "formats": [byte_order + POINT_FIELD_DTYPES[field.datatype] for field in selected],
+        "offsets": [field.offset for field in selected],
+        "itemsize": message.point_step,
+    })
+    return np.ndarray(
+        shape=(message.height, message.width),
+        dtype=dtype,
+        buffer=message.data,
+        strides=(message.row_step, message.point_step),
+    ).reshape(-1)
 
 
 class PandarAudit(Node):
@@ -67,19 +97,15 @@ class PandarAudit(Node):
             )
             return
 
-        records = point_cloud2.read_points(
-            message,
-            field_names=("x", "y", "z", "intensity", "ring", "timestamp"),
-            skip_nans=False,
-        )
+        records = point_records(message)
         x = np.asarray(records["x"], dtype=np.float64)
         y = np.asarray(records["y"], dtype=np.float64)
         z = np.asarray(records["z"], dtype=np.float64)
+        rings = np.asarray(records["ring"], dtype=np.int64)
+        point_times = np.asarray(records["timestamp"], dtype=np.float64)
         ranges = np.sqrt(x * x + y * y + z * z)
         finite = np.isfinite(ranges)
         valid = finite & (ranges > 0.05)
-        rings = np.asarray(records["ring"], dtype=np.int64)
-        point_times = np.asarray(records["timestamp"], dtype=np.float64)
         valid_ranges = ranges[valid]
         self.frames.append(
             {

@@ -23,6 +23,16 @@ from pathlib import Path
 STOP_REQUESTED = False
 
 
+def _execute_required():
+    """`EXECUTE_REQUIRED`，按需导入以免给本 worker 增加启动期依赖。"""
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from app.live_robot.navigation_gate import EXECUTE_REQUIRED
+
+    return EXECUTE_REQUIRED
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -103,15 +113,10 @@ def safety_check(request):
         raise RuntimeError("NAV2_CAPABILITY_GATE_MISSING: execution gate result is required")
     if gate.get("schema_version") != "1.0" or gate.get("mode") != "nav2_execute":
         raise RuntimeError("NAV2_CAPABILITY_GATE_INVALID: invalid execution gate result")
-    required_gate = (
-        "level_d_passed", "physical_geometry_confirmed", "footprint_confirmed",
-        "scan_frame_valid", "lidar_fresh", "lio_fresh", "map_valid", "tf_valid",
-        "compute_path_to_pose_ready", "nav2_allow_execute", "collision_monitor_active",
-        "velocity_smoother_active", "lease_valid", "arbiter_active",
-        "cmd_vel_bridge_active", "cmd_vel_watchdog_active", "operator_armed",
-        "second_confirmation", "emergency_stop_confirmed", "remote_override_clear",
-        "robot_error_zero",
-    )
+    # 清单只有一处真源。以前这里手抄了一份，§6.5 把 lio_fresh 改名成
+    # navigation_localization_valid 之后两边就对不上了：app 侧会拒掉本文件
+    # 刚放行的那份证据。navigation_gate 是纯标准库模块，不会把 app 依赖拉进来。
+    required_gate = _execute_required()
     if gate.get("required_conditions") != list(required_gate):
         raise RuntimeError("NAV2_CAPABILITY_GATE_INVALID: execution requirements mismatch")
     evidence = gate.get("evidence")

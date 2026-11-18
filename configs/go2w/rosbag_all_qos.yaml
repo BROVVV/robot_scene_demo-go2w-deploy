@@ -1,0 +1,95 @@
+# QoS overrides for raw GO2-W sensor streams.
+#
+# A best-effort subscription is compatible with both best-effort and reliable
+# publishers.  This is important for Unitree's DDS sensor topics: forcing the
+# rosbag default reliable subscription can silently record zero messages from
+# a best-effort publisher.
+/lf/sportmodestate:
+  history: keep_last
+  depth: 100
+  reliability: best_effort
+  durability: volatile
+/lf/lowstate:
+  history: keep_last
+  depth: 200
+  reliability: best_effort
+  durability: volatile
+/sportmodestate:
+  history: keep_last
+  depth: 100
+  reliability: best_effort
+  durability: volatile
+/lowstate:
+  history: keep_last
+  depth: 200
+  reliability: best_effort
+  durability: volatile
+/wirelesscontroller:
+  history: keep_last
+  depth: 100
+  reliability: best_effort
+  durability: volatile
+/wirelesscontroller_unprocessed:
+  history: keep_last
+  depth: 100
+  reliability: best_effort
+  durability: volatile
+/utlidar/imu:
+  history: keep_last
+  depth: 1000
+  reliability: best_effort
+  durability: volatile
+/utlidar/cloud:
+  history: keep_last
+  depth: 100
+  reliability: best_effort
+  durability: volatile
+/utlidar/cloud_base:
+  history: keep_last
+  depth: 100
+  reliability: best_effort
+  durability: volatile
+/utlidar/cloud_deskewed:
+  history: keep_last
+  depth: 100
+  reliability: best_effort
+  durability: volatile
+/hesai/pandarxt16/points_raw:
+  history: keep_last
+  depth: 100
+  reliability: best_effort
+  durability: volatile
+/go2w/d435/color/image_raw:
+  history: keep_last
+  depth: 20
+  # The HTTP RGB-D bridge publishes these multi-megabyte images RELIABLE.
+  # BEST_EFFORT appeared compatible in the graph but lost almost every
+  # fragmented image (1 RGB + 1 depth frame in a 434 s bag), while small
+  # CameraInfo messages survived.  Match the publisher so DDS retransmits
+  # missing fragments during recording.
+  reliability: reliable
+  durability: volatile
+/go2w/d435/depth/image_rect_raw:
+  history: keep_last
+  depth: 20
+  reliability: reliable
+  durability: volatile
+/camera/front/image_raw:
+  history: keep_last
+  depth: 20
+  reliability: reliable
+  durability: volatile
+/camera/front/image_raw/compressed:
+  history: keep_last
+  depth: 20
+  reliability: reliable
+  durability: volatile
+/tf:
+  history: keep_last
+  depth: 500
+  reliability: best_effort
+  durability: volatile
+/tf_static:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local
