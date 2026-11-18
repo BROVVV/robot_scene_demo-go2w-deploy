@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "github_snapshot": "robot_scene_demo-go2w-deploy",
+  "source_host": "unitree@192.168.3.62",
+  "source_path": "/home/unitree/robotscene_releases/20261117_24",
+  "source_release": "20261117_24",
+  "source_release_manifest_sha256": "08dd9c81ca286431fdf29b464bbff95cedb06ddfc3e307eb65d17614304cba6e",
+  "source_readme_sha256": "e628b1752088433d1284a8a4f0cf6d29acfc0aef50af9f90aadd6238cfc6b7ee",
+  "github_overlay_files": [
+    "README.md",
+    "GITHUB_SNAPSHOT_PROVENANCE.json"
+  ],
+  "excluded_runtime_artifacts": [
+    ".env",
+    "__pycache__",
+    ".pytest_cache",
+    "nested .git metadata"
+  ],
+  "note": "Runtime source was mirrored from the immutable robot release and sanitized for GitHub. Ignored private/runtime artifacts and nested VCS metadata are excluded. README.md is a GitHub-facing identity and operations guide and is not part of the runtime manifest."
+}
+
